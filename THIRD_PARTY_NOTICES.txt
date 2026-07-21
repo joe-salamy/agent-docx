@@ -1,0 +1,7 @@
+Liberation Fonts 2.1.5
+Copyright (c) Red Hat, Inc. and contributors.
+Licensed under the SIL Open Font License, Version 1.1.
+The complete license is included at assets/fonts/liberation-serif-2.1.5/OFL-1.1.txt.
+Upstream: https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5
+
+Runtime dependency license notices are available in each dependency's published package.

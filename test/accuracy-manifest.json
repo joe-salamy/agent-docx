@@ -1,0 +1,365 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "plain-wrap-01",
+      "category": "plain-wrap",
+      "targetPages": 1,
+      "variant": 0
+    },
+    {
+      "id": "plain-wrap-02",
+      "category": "plain-wrap",
+      "targetPages": 2,
+      "variant": 1
+    },
+    {
+      "id": "plain-wrap-03",
+      "category": "plain-wrap",
+      "targetPages": 5,
+      "variant": 2
+    },
+    {
+      "id": "plain-wrap-04",
+      "category": "plain-wrap",
+      "targetPages": 15,
+      "variant": 3
+    },
+    {
+      "id": "plain-wrap-05",
+      "category": "plain-wrap",
+      "targetPages": 30,
+      "variant": 4
+    },
+    {
+      "id": "plain-wrap-06",
+      "category": "plain-wrap",
+      "targetPages": 1,
+      "variant": 5
+    },
+    {
+      "id": "plain-wrap-07",
+      "category": "plain-wrap",
+      "targetPages": 2,
+      "variant": 6
+    },
+    {
+      "id": "plain-wrap-08",
+      "category": "plain-wrap",
+      "targetPages": 5,
+      "variant": 7
+    },
+    {
+      "id": "plain-wrap-09",
+      "category": "plain-wrap",
+      "targetPages": 15,
+      "variant": 8
+    },
+    {
+      "id": "plain-wrap-10",
+      "category": "plain-wrap",
+      "targetPages": 30,
+      "variant": 9
+    },
+    {
+      "id": "plain-wrap-11",
+      "category": "plain-wrap",
+      "targetPages": 1,
+      "variant": 10
+    },
+    {
+      "id": "plain-wrap-12",
+      "category": "plain-wrap",
+      "targetPages": 2,
+      "variant": 11
+    },
+    {
+      "id": "plain-wrap-13",
+      "category": "plain-wrap",
+      "targetPages": 5,
+      "variant": 12
+    },
+    {
+      "id": "plain-wrap-14",
+      "category": "plain-wrap",
+      "targetPages": 15,
+      "variant": 13
+    },
+    {
+      "id": "plain-wrap-15",
+      "category": "plain-wrap",
+      "targetPages": 30,
+      "variant": 14
+    },
+    {
+      "id": "emphasis-heading-list-01",
+      "category": "emphasis-heading-list",
+      "targetPages": 1,
+      "variant": 0
+    },
+    {
+      "id": "emphasis-heading-list-02",
+      "category": "emphasis-heading-list",
+      "targetPages": 2,
+      "variant": 1
+    },
+    {
+      "id": "emphasis-heading-list-03",
+      "category": "emphasis-heading-list",
+      "targetPages": 5,
+      "variant": 2
+    },
+    {
+      "id": "emphasis-heading-list-04",
+      "category": "emphasis-heading-list",
+      "targetPages": 15,
+      "variant": 3
+    },
+    {
+      "id": "emphasis-heading-list-05",
+      "category": "emphasis-heading-list",
+      "targetPages": 30,
+      "variant": 4
+    },
+    {
+      "id": "emphasis-heading-list-06",
+      "category": "emphasis-heading-list",
+      "targetPages": 1,
+      "variant": 5
+    },
+    {
+      "id": "emphasis-heading-list-07",
+      "category": "emphasis-heading-list",
+      "targetPages": 2,
+      "variant": 6
+    },
+    {
+      "id": "emphasis-heading-list-08",
+      "category": "emphasis-heading-list",
+      "targetPages": 5,
+      "variant": 7
+    },
+    {
+      "id": "emphasis-heading-list-09",
+      "category": "emphasis-heading-list",
+      "targetPages": 15,
+      "variant": 8
+    },
+    {
+      "id": "emphasis-heading-list-10",
+      "category": "emphasis-heading-list",
+      "targetPages": 30,
+      "variant": 9
+    },
+    {
+      "id": "quote-hard-page-break-01",
+      "category": "quote-hard-page-break",
+      "targetPages": 1,
+      "variant": 0
+    },
+    {
+      "id": "quote-hard-page-break-02",
+      "category": "quote-hard-page-break",
+      "targetPages": 2,
+      "variant": 1
+    },
+    {
+      "id": "quote-hard-page-break-03",
+      "category": "quote-hard-page-break",
+      "targetPages": 5,
+      "variant": 2
+    },
+    {
+      "id": "quote-hard-page-break-04",
+      "category": "quote-hard-page-break",
+      "targetPages": 15,
+      "variant": 3
+    },
+    {
+      "id": "quote-hard-page-break-05",
+      "category": "quote-hard-page-break",
+      "targetPages": 30,
+      "variant": 4
+    },
+    {
+      "id": "quote-hard-page-break-06",
+      "category": "quote-hard-page-break",
+      "targetPages": 1,
+      "variant": 5
+    },
+    {
+      "id": "quote-hard-page-break-07",
+      "category": "quote-hard-page-break",
+      "targetPages": 2,
+      "variant": 6
+    },
+    {
+      "id": "quote-hard-page-break-08",
+      "category": "quote-hard-page-break",
+      "targetPages": 5,
+      "variant": 7
+    },
+    {
+      "id": "quote-hard-page-break-09",
+      "category": "quote-hard-page-break",
+      "targetPages": 15,
+      "variant": 8
+    },
+    {
+      "id": "quote-hard-page-break-10",
+      "category": "quote-hard-page-break",
+      "targetPages": 30,
+      "variant": 9
+    },
+    {
+      "id": "widow-orphan-keep-01",
+      "category": "widow-orphan-keep",
+      "targetPages": 1,
+      "variant": 0
+    },
+    {
+      "id": "widow-orphan-keep-02",
+      "category": "widow-orphan-keep",
+      "targetPages": 2,
+      "variant": 1
+    },
+    {
+      "id": "widow-orphan-keep-03",
+      "category": "widow-orphan-keep",
+      "targetPages": 5,
+      "variant": 2
+    },
+    {
+      "id": "widow-orphan-keep-04",
+      "category": "widow-orphan-keep",
+      "targetPages": 15,
+      "variant": 3
+    },
+    {
+      "id": "widow-orphan-keep-05",
+      "category": "widow-orphan-keep",
+      "targetPages": 30,
+      "variant": 4
+    },
+    {
+      "id": "widow-orphan-keep-06",
+      "category": "widow-orphan-keep",
+      "targetPages": 1,
+      "variant": 5
+    },
+    {
+      "id": "widow-orphan-keep-07",
+      "category": "widow-orphan-keep",
+      "targetPages": 2,
+      "variant": 6
+    },
+    {
+      "id": "widow-orphan-keep-08",
+      "category": "widow-orphan-keep",
+      "targetPages": 5,
+      "variant": 7
+    },
+    {
+      "id": "widow-orphan-keep-09",
+      "category": "widow-orphan-keep",
+      "targetPages": 15,
+      "variant": 8
+    },
+    {
+      "id": "widow-orphan-keep-10",
+      "category": "widow-orphan-keep",
+      "targetPages": 30,
+      "variant": 9
+    },
+    {
+      "id": "footnotes-01",
+      "category": "footnotes",
+      "targetPages": 1,
+      "variant": 0
+    },
+    {
+      "id": "footnotes-02",
+      "category": "footnotes",
+      "targetPages": 2,
+      "variant": 1
+    },
+    {
+      "id": "footnotes-03",
+      "category": "footnotes",
+      "targetPages": 5,
+      "variant": 2
+    },
+    {
+      "id": "footnotes-04",
+      "category": "footnotes",
+      "targetPages": 15,
+      "variant": 3
+    },
+    {
+      "id": "footnotes-05",
+      "category": "footnotes",
+      "targetPages": 30,
+      "variant": 4
+    },
+    {
+      "id": "footnotes-06",
+      "category": "footnotes",
+      "targetPages": 1,
+      "variant": 5
+    },
+    {
+      "id": "footnotes-07",
+      "category": "footnotes",
+      "targetPages": 2,
+      "variant": 6
+    },
+    {
+      "id": "footnotes-08",
+      "category": "footnotes",
+      "targetPages": 5,
+      "variant": 7
+    },
+    {
+      "id": "footnotes-09",
+      "category": "footnotes",
+      "targetPages": 15,
+      "variant": 8
+    },
+    {
+      "id": "footnotes-10",
+      "category": "footnotes",
+      "targetPages": 30,
+      "variant": 9
+    },
+    {
+      "id": "template-geometry-style-01",
+      "category": "template-geometry-style",
+      "targetPages": 1,
+      "variant": 0
+    },
+    {
+      "id": "template-geometry-style-02",
+      "category": "template-geometry-style",
+      "targetPages": 2,
+      "variant": 1
+    },
+    {
+      "id": "template-geometry-style-03",
+      "category": "template-geometry-style",
+      "targetPages": 5,
+      "variant": 2
+    },
+    {
+      "id": "template-geometry-style-04",
+      "category": "template-geometry-style",
+      "targetPages": 15,
+      "variant": 3
+    },
+    {
+      "id": "template-geometry-style-05",
+      "category": "template-geometry-style",
+      "targetPages": 30,
+      "variant": 4
+    }
+  ]
+}

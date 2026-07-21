@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-docx.dev/config.schema.json",
+  "title": "agent-docx configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {"type":"string"},
+    "profile": {"enum":["us-district-conventional","frap-32","cand-civil"]},
+    "templatePath": {"type":"string","minLength":1},
+    "layout": {"$ref":"#/$defs/layout"},
+    "fontSet": {"type":"object","additionalProperties":false,"required":["family","regularPath"],"properties":{"family":{"type":"string","minLength":1},"regularPath":{"type":"string","minLength":1},"boldPath":{"type":"string","minLength":1},"italicPath":{"type":"string","minLength":1},"boldItalicPath":{"type":"string","minLength":1}}},
+    "filingKind": {"enum":["principal-brief","reply-brief","motion-document","opposition-text","reply-text"]},
+    "pageLimit": {"type":"integer","minimum":1},
+    "paragraphDiagnostics": {"type":"boolean"},
+    "trim": {"oneOf":[{"const":false},{"type":"object","additionalProperties":false,"properties":{"maxCandidates":{"type":"integer","minimum":1,"maximum":100},"maxLastLineRatio":{"type":"number","minimum":0,"maximum":1}}}]},
+    "renderer": {"enum":["deterministic","word","libreoffice","compare"]},
+    "officeTimeoutMs": {"type":"integer","minimum":1000,"maximum":600000},
+    "word": {"type":"object","additionalProperties":false,"properties":{"powerShellPath":{"type":"string","minLength":1}}},
+    "libreoffice": {"type":"object","additionalProperties":false,"properties":{"executablePath":{"type":"string","minLength":1},"installedFonts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["family","path"],"properties":{"family":{"type":"string","minLength":1},"path":{"type":"string","minLength":1}}}}}}
+  },
+  "$defs": {
+    "spacing": {"oneOf":[{"type":"object","additionalProperties":false,"required":["rule","numerator","denominator"],"properties":{"rule":{"const":"auto"},"numerator":{"type":"number","exclusiveMinimum":0},"denominator":{"const":240}}},{"type":"object","additionalProperties":false,"required":["rule","twips"],"properties":{"rule":{"enum":["exact","atLeast"]},"twips":{"type":"number","exclusiveMinimum":0}}}]},
+    "style": {"type":"object","additionalProperties":false,"properties":{"fontSizeTwips":{"type":"number","exclusiveMinimum":0},"bold":{"type":"boolean"},"italic":{"type":"boolean"},"lineSpacing":{"$ref":"#/$defs/spacing"},"beforeTwips":{"type":"number","minimum":0},"afterTwips":{"type":"number","minimum":0},"leftIndentTwips":{"type":"number","minimum":0},"rightIndentTwips":{"type":"number","minimum":0},"firstLineIndentTwips":{"type":"number","minimum":0},"hangingIndentTwips":{"type":"number","minimum":0},"keepWithNext":{"type":"boolean"},"keepLines":{"type":"boolean"}}},
+    "layout": {"type":"object","additionalProperties":false,"properties":{"page":{"type":"object","additionalProperties":false,"properties":{"widthTwips":{"type":"number","exclusiveMinimum":0},"heightTwips":{"type":"number","exclusiveMinimum":0},"marginsTwips":{"type":"object","additionalProperties":false,"properties":{"top":{"type":"number","minimum":0},"right":{"type":"number","minimum":0},"bottom":{"type":"number","minimum":0},"left":{"type":"number","minimum":0}}},"headerTwips":{"type":"number","minimum":0},"footerTwips":{"type":"number","minimum":0},"gutterTwips":{"type":"number","minimum":0}}},"requestedFontFamily":{"type":"string","minLength":1},"body":{"$ref":"#/$defs/style"},"headings":{"type":"object","additionalProperties":false,"properties":{"1":{"$ref":"#/$defs/style"},"2":{"$ref":"#/$defs/style"},"3":{"$ref":"#/$defs/style"},"4":{"$ref":"#/$defs/style"},"5":{"$ref":"#/$defs/style"},"6":{"$ref":"#/$defs/style"}}},"blockquote":{"$ref":"#/$defs/style"},"list":{"$ref":"#/$defs/style"},"footnote":{"$ref":"#/$defs/style"},"pagination":{"type":"object","additionalProperties":false,"properties":{"widowLines":{"type":"integer","minimum":1},"orphanLines":{"type":"integer","minimum":1},"maxCountedLinesPerPage":{"type":["integer","null"],"minimum":1},"lineCapExclusions":{"type":"array","uniqueItems":true,"items":{"enum":["footnote","blockquote"]}}}}}}
+  }
+}

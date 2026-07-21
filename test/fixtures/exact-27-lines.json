@@ -1,0 +1,17 @@
+{
+  "layout": {
+    "body": {
+      "lineSpacing": {
+        "rule": "exact",
+        "twips": 480
+      },
+      "beforeTwips": 0,
+      "afterTwips": 0,
+      "keepLines": false
+    },
+    "pagination": {
+      "widowLines": 1,
+      "orphanLines": 1
+    }
+  }
+}
