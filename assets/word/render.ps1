@@ -26,13 +26,28 @@ try {
   $doc = $word.Documents.Open($path, $false, $true, $false)
   $doc.Repaginate()
   $pages = $doc.ComputeStatistics(2)
+  $totalLines = $doc.ComputeStatistics(1)
+  $pageLines = @()
+  for ($page = 1; $page -le $pages; $page++) {
+    $pageStart = $doc.GoTo(1, 1, $page)
+    if ($page -lt $pages) {
+      $nextPage = $doc.GoTo(1, 1, $page + 1)
+      $pageRange = $doc.Range($pageStart.Start, $nextPage.Start)
+      [Runtime.InteropServices.Marshal]::FinalReleaseComObject($nextPage) | Out-Null
+    } else {
+      $pageRange = $doc.Range($pageStart.Start, $doc.Content.End)
+    }
+    $pageLines += $pageRange.ComputeStatistics(1)
+    [Runtime.InteropServices.Marshal]::FinalReleaseComObject($pageRange) | Out-Null
+    [Runtime.InteropServices.Marshal]::FinalReleaseComObject($pageStart) | Out-Null
+  }
   $docEnd = $doc.Content.End
   $last = $doc.GoTo(1, 1, $pages)
   $range = $doc.Range($last.Start, $docEnd)
   $lines = $range.ComputeStatistics(1)
   [Runtime.InteropServices.Marshal]::FinalReleaseComObject($range) | Out-Null
   [Runtime.InteropServices.Marshal]::FinalReleaseComObject($last) | Out-Null
-  [Console]::Out.WriteLine((@{kind='result'; pageCount=$pages; bodyLinesOnLastPage=$lines; version=$word.Version; build=$word.Build; activePrinter=$word.ActivePrinter} | ConvertTo-Json -Compress))
+  [Console]::Out.WriteLine((@{kind='result'; pageCount=$pages; totalBodyLines=$totalLines; bodyLinesByPage=$pageLines; bodyLinesOnLastPage=$lines; version=$word.Version; build=$word.Build; activePrinter=$word.ActivePrinter} | ConvertTo-Json -Compress))
 } catch {
   [Console]::Out.WriteLine((@{kind='error'; message=$_.Exception.Message} | ConvertTo-Json -Compress))
   exit 1

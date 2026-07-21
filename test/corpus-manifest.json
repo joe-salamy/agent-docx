@@ -12,15 +12,19 @@
       "markdownSha256": "11a2bf407d701311e844013ffa4874a9838360bc0b40dcf1d8d953f2980ee38e",
       "expected": {
         "pageCount": 20,
-        "equivalentPages": 19.04259259259259,
-        "totalVisualLines": 436,
-        "paragraphCount": 19,
+        "equivalentPages": 19.383333333333333,
+        "totalVisualLines": 435,
+        "visualLinesByPage": [
+          22, 23, 23, 22, 22, 22, 21, 23, 23, 23, 22, 23, 23, 22, 23, 22, 22,
+          23, 22, 9
+        ],
+        "paragraphCount": 250,
         "lastPage": {
           "source": "deterministic",
-          "visualLines": 1,
-          "usedTwips": 552,
+          "visualLines": 9,
+          "usedTwips": 4968,
           "usableTwips": 12960,
-          "bodyLineEquivalentsUsed": 1,
+          "bodyLineEquivalentsUsed": 9,
           "bodyLineCapacity": 23
         },
         "warningCodes": ["CONVENTIONAL_PROFILE_ONLY"]
@@ -33,15 +37,19 @@
       "markdownSha256": "7ea162bc2f2d0a5eb887e4eb8e57cbcf82c9f26b86ce451ea5a976a717f1cb70",
       "expected": {
         "pageCount": 19,
-        "equivalentPages": 18.63888888888889,
-        "totalVisualLines": 425,
-        "paragraphCount": 15,
+        "equivalentPages": 18.766666666666666,
+        "totalVisualLines": 424,
+        "visualLinesByPage": [
+          23, 21, 22, 23, 23, 23, 23, 22, 23, 22, 21, 23, 23, 22, 23, 23, 23,
+          23, 18
+        ],
+        "paragraphCount": 261,
         "lastPage": {
           "source": "deterministic",
-          "visualLines": 15,
-          "usedTwips": 8280,
+          "visualLines": 18,
+          "usedTwips": 9936,
           "usableTwips": 12960,
-          "bodyLineEquivalentsUsed": 15,
+          "bodyLineEquivalentsUsed": 18,
           "bodyLineCapacity": 23
         },
         "warningCodes": ["CONVENTIONAL_PROFILE_ONLY"]
@@ -54,15 +62,19 @@
       "markdownSha256": "28ea5f48f15925e455b8c8544e53e0c7952bfa251fdb0b13cc95cd9ff1809052",
       "expected": {
         "pageCount": 21,
-        "equivalentPages": 20.255555555555556,
+        "equivalentPages": 20.46851851851852,
         "totalVisualLines": 462,
-        "paragraphCount": 18,
+        "visualLinesByPage": [
+          23, 23, 22, 22, 21, 23, 23, 23, 23, 22, 23, 22, 23, 23, 23, 22, 23,
+          23, 22, 22, 11
+        ],
+        "paragraphCount": 280,
         "lastPage": {
           "source": "deterministic",
-          "visualLines": 6,
-          "usedTwips": 3312,
+          "visualLines": 11,
+          "usedTwips": 6072,
           "usableTwips": 12960,
-          "bodyLineEquivalentsUsed": 6,
+          "bodyLineEquivalentsUsed": 11,
           "bodyLineCapacity": 23
         },
         "warningCodes": ["CONVENTIONAL_PROFILE_ONLY"]

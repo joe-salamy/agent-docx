@@ -335,6 +335,8 @@ export async function renderWord(
     );
   const value = result as {
     pageCount: number;
+    totalBodyLines: number;
+    bodyLinesByPage: number[];
     bodyLinesOnLastPage: number;
     version: string;
     build: string;
@@ -342,6 +344,8 @@ export async function renderWord(
   };
   return {
     pageCount: value.pageCount,
+    totalBodyLines: value.totalBodyLines,
+    bodyLinesByPage: value.bodyLinesByPage,
     bodyLinesOnLastPage: value.bodyLinesOnLastPage,
     version: value.version,
     build: value.build,

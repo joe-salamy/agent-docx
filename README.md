@@ -36,7 +36,7 @@ const measured = await measureMarkdown(markdown, {
 });
 ```
 
-`estimateMarkdown` runs only the portable deterministic paginator. `measureMarkdown` always computes that estimate and optionally invokes an Office renderer. Both return structured provenance, warnings, physical page count, fractional equivalent-page usage, and last-page metrics; page-limit options also add budget information. Exported TypeScript types describe the complete result.
+`estimateMarkdown` runs only the portable deterministic paginator. `measureMarkdown` always computes that estimate and optionally invokes an Office renderer. Both return structured provenance, warnings, physical page count, fractional equivalent-page usage, total and per-page visual-line counts, and last-page metrics; page-limit options also add budget information. Exported TypeScript types describe the complete result.
 
 ## Profiles, fonts, and templates
 
@@ -97,10 +97,10 @@ The adapter:
 1. sends the generated DOCX to a bundled noninteractive PowerShell script;
 2. serializes concurrent runs with a local mutex and starts a hidden Word COM instance with macros disabled;
 3. verifies that each requested font family appears in Word's installed-font list;
-4. opens the DOCX read-only, forces repagination, and reads Word's page and last-page line statistics; and
+4. opens the DOCX read-only, forces repagination, and reads Word's page count plus total, per-page, and last-page body-line statistics; and
 5. closes Word and deletes the temporary document.
 
-The result includes Word version/build, active printer, requested fonts, generated-DOCX SHA-256, duration, and cleanup state. Word pagination can vary with the installed Word build, fonts, and active printer, which is why that provenance is retained. The default timeout is 120 seconds. Generated DOCX input to this adapter is limited to 25 MiB.
+The result includes Word's line statistics, Word version/build, active printer, requested fonts, generated-DOCX SHA-256, duration, and cleanup state. Word pagination can vary with the installed Word build, fonts, and active printer, which is why that provenance is retained. The default timeout is 120 seconds. Generated DOCX input to this adapter is limited to 25 MiB.
 
 ### LibreOffice Writer
 
@@ -114,9 +114,9 @@ LibreOffice does not guarantee the requested font is installed and may substitut
 
 ## Accuracy testing
 
-`pnpm test` includes unit and boundary coverage plus deterministic golden tests over three committed, real-world Markdown lecture-note documents. The corpus manifest pins each input hash and checks physical pages, equivalent pages, visual lines, last-page usage, paragraph diagnostics, and warning codes.
+`pnpm test` includes unit and boundary coverage plus deterministic golden tests over six committed, real-world Markdown lecture-note documents. All corpus cases invoke the CLI with `--paragraphs`. Three documents were used while correcting pagination; three distinct documents were selected and hash-locked without reading their contents before a one-shot Word comparison. When desktop Word is available, `pnpm test` also invokes `--renderer word` and requires exact physical-page and last-page-line agreement across all six documents; hosts without Word report that live test as skipped.
 
-`pnpm accuracy` runs those documents together with the synthetic boundary matrix. Pass `--renderer word` or `--renderer libreoffice` with the corresponding `MD_PAGE_COUNT_TEST_WORD=1` or `MD_PAGE_COUNT_TEST_LIBREOFFICE=1` opt-in to compare the same inputs with a native renderer. The release gate evaluates exact-match rate, mean absolute page error, and worst page error across the corpus; native output is not a portable per-document golden because Office versions, fonts, and printer state can change pagination.
+`pnpm accuracy` runs all six documents together with the synthetic boundary matrix. Pass `--renderer word` or `--renderer libreoffice` with the corresponding `MD_PAGE_COUNT_TEST_WORD=1` or `MD_PAGE_COUNT_TEST_LIBREOFFICE=1` opt-in to compare the same inputs with a native renderer. The release gate evaluates exact-match rate, mean absolute page error, and worst page error across the corpus; native output is not a portable per-document golden because Office versions, fonts, and printer state can change pagination.
 
 ## Supported Markdown
 

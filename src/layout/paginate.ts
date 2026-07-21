@@ -13,6 +13,7 @@ export type PaginationOutput = {
   pageCount: number;
   equivalentPages: number;
   totalVisualLines: number;
+  visualLinesByPage: number[];
   lastPage: {
     visualLines: number;
     usedTwips: number;
@@ -250,9 +251,19 @@ function wrap(
         opportunities.push(start + nextBreak.position);
       }
       if (opportunities.at(-1) !== segmentEnd) opportunities.push(segmentEnd);
+      const measuredEnd = (end: number) => {
+        while (end > start && text[end - 1] === " ") end--;
+        return end;
+      };
       let chosen = start;
       for (const end of opportunities) {
-        const used = candidateWidth(block, start, end, fonts, style);
+        const used = candidateWidth(
+          block,
+          start,
+          measuredEnd(end),
+          fonts,
+          style,
+        );
         if (used <= lineAvailable) chosen = end;
         else break;
       }
@@ -265,8 +276,9 @@ function wrap(
           position: block.position,
         });
       }
-      const used = candidateWidth(block, start, chosen, fonts, style);
-      const natural = naturalHeight(fonts, block, style, start, chosen);
+      const contentEnd = measuredEnd(chosen);
+      const used = candidateWidth(block, start, contentEnd, fonts, style);
+      const natural = naturalHeight(fonts, block, style, start, contentEnd);
       lines.push({
         used,
         available: lineAvailable,
@@ -339,6 +351,7 @@ export function paginate(
       pageCount: 0,
       equivalentPages: 0,
       totalVisualLines: 0,
+      visualLinesByPage: [],
       lastPage: null,
       paragraphs: [],
       warnings: [],
@@ -756,6 +769,31 @@ export function paginate(
       }
     }
 
+    if (
+      !record.style.keepLines &&
+      record.lines.length > 1 &&
+      hasContent(page)
+    ) {
+      const firstLine = unitFromBlocks(
+        [blockIndex],
+        1,
+        priorAfter,
+        page.bodyLines.length > 0,
+      );
+      const orphanLines = unitFromBlocks(
+        [blockIndex],
+        Math.min(profile.pagination.orphanLines, record.lines.length),
+        priorAfter,
+        page.bodyLines.length > 0,
+      );
+      if (
+        simulateUnit(firstLine, page, footnotes) &&
+        !simulateUnit(orphanLines, page, footnotes)
+      ) {
+        commitPage();
+      }
+    }
+
     const beforeLine: Snapshot[] = [];
     let lineIndex = 0;
     while (lineIndex < record.lines.length) {
@@ -796,7 +834,8 @@ export function paginate(
   if (hasContent(page) || pages.length === 0) pages.push(page);
   const paragraphResults: ParagraphDiagnostic[] = [];
   let paragraphIndex = 0;
-  for (const block of document.paragraphs) {
+  for (const block of document.blocks) {
+    if (block.kind === "pagebreak") continue;
     const occurrences: { page: number; line: WrappedLine }[] = [];
     pages.forEach((placedPage, pageIndex) =>
       placedPage.bodyLines.forEach((line) => {
@@ -850,6 +889,7 @@ export function paginate(
       (total, placedPage) => total + placedPage.visual,
       0,
     ),
+    visualLinesByPage: pages.map((placedPage) => placedPage.visual),
     lastPage: {
       visualLines: last.visual,
       usedTwips: occupied(last),
