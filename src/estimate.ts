@@ -59,6 +59,7 @@ export async function estimateMarkdown(
     pageCount: layout.pageCount,
     equivalentPages: layout.equivalentPages,
     totalVisualLines: layout.totalVisualLines,
+    visualLinesByPage: layout.visualLinesByPage,
     lastPage: layout.lastPage
       ? { source: "deterministic", ...layout.lastPage }
       : null,

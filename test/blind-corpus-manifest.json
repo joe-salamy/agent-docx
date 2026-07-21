@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "protocol": "locked-random-holdout",
+  "source": {
+    "repository": "open-law-notes",
+    "description": "Distinct real lecture-note documents selected and hashed without inspecting their contents before the one-shot Word comparison."
+  },
+  "documents": [
+    {
+      "id": "property-1-15",
+      "file": "property-1-15.md",
+      "sourcePath": "logs/experiments/lecture-notes-single-omp-20260720/outputs/property/Property 1-15/revised-prompt__omp-codex-single.md",
+      "markdownSha256": "3307fb1bb9b71cc47029a5d18d02f9fd776ef634b3152087fc6384c4c445edae",
+      "expected": {
+        "pageCount": 18,
+        "equivalentPages": 17.127777777777776,
+        "totalVisualLines": 388,
+        "visualLinesByPage": [
+          22, 23, 23, 22, 23, 23, 23, 23, 22, 22, 23, 23, 23, 22, 22, 23, 23, 3
+        ],
+        "paragraphCount": 239,
+        "lastPage": {
+          "source": "deterministic",
+          "visualLines": 3,
+          "usedTwips": 1656,
+          "usableTwips": 12960,
+          "bodyLineEquivalentsUsed": 3,
+          "bodyLineCapacity": 23
+        },
+        "warningCodes": ["CONVENTIONAL_PROFILE_ONLY"]
+      }
+    },
+    {
+      "id": "con-law-4-6",
+      "file": "con-law-4-6.md",
+      "sourcePath": "logs/experiments/lecture-notes-single-omp-20260720/outputs/con-law/Con Law 4-6/revised-prompt__omp-codex-single.md",
+      "markdownSha256": "7dbcd5a200cf10bb228041750b0f756634ec85e05c0d03ee567d411a1695ae9c",
+      "expected": {
+        "pageCount": 22,
+        "equivalentPages": 21.724074074074075,
+        "totalVisualLines": 488,
+        "visualLinesByPage": [
+          23, 22, 22, 23, 22, 22, 23, 23, 22, 23, 21, 22, 23, 22, 22, 23, 23,
+          23, 22, 22, 23, 17
+        ],
+        "paragraphCount": 243,
+        "lastPage": {
+          "source": "deterministic",
+          "visualLines": 17,
+          "usedTwips": 9384,
+          "usableTwips": 12960,
+          "bodyLineEquivalentsUsed": 17,
+          "bodyLineCapacity": 23
+        },
+        "warningCodes": ["CONVENTIONAL_PROFILE_ONLY"]
+      }
+    },
+    {
+      "id": "con-law-3-16",
+      "file": "con-law-3-16.md",
+      "sourcePath": "logs/experiments/lecture-notes-single-omp-20260720/outputs/con-law/Con Law 3-16/revised-prompt__omp-codex-single.md",
+      "markdownSha256": "8405a2b0a25b5a7e3d111ecad24d9faa97296905e91c48f3b4dada319211ae3e",
+      "expected": {
+        "pageCount": 23,
+        "equivalentPages": 22.298148148148147,
+        "totalVisualLines": 502,
+        "visualLinesByPage": [
+          22, 23, 23, 23, 23, 23, 23, 23, 23, 22, 21, 22, 23, 23, 22, 22, 22,
+          22, 23, 22, 22, 23, 7
+        ],
+        "paragraphCount": 291,
+        "lastPage": {
+          "source": "deterministic",
+          "visualLines": 7,
+          "usedTwips": 3864,
+          "usableTwips": 12960,
+          "bodyLineEquivalentsUsed": 7,
+          "bodyLineCapacity": 23
+        },
+        "warningCodes": ["CONVENTIONAL_PROFILE_ONLY"]
+      }
+    }
+  ]
+}

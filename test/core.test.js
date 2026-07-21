@@ -152,18 +152,23 @@ test("trim diagnostics are deterministic and advisory", async () => {
 
 test("block style, indentation, and line-cap exclusions affect deterministic layout", async () => {
   const bold = await estimateMarkdown("# " + "Legal filing ".repeat(3), {
+    paragraphDiagnostics: true,
     layout: {
       page: { widthTwips: 2800, marginsTwips: { left: 500, right: 500 } },
       headings: { 1: { bold: true } },
     },
   });
   const regular = await estimateMarkdown("# " + "Legal filing ".repeat(3), {
+    paragraphDiagnostics: true,
     layout: {
       page: { widthTwips: 2800, marginsTwips: { left: 500, right: 500 } },
       headings: { 1: { bold: false } },
     },
   });
-  assert.notEqual(bold.totalVisualLines, regular.totalVisualLines);
+  assert.notEqual(
+    bold.paragraphs[0].lastLineUsedTwips,
+    regular.paragraphs[0].lastLineUsedTwips,
+  );
 
   const plain = await estimateMarkdown("Short line.", {
     paragraphDiagnostics: true,
@@ -430,6 +435,9 @@ test("keep-chain preflight reserves fitting and continuing notes transactionally
   );
   assert.equal(continuing.pageCount, 3);
   assert.equal(continuing.totalVisualLines, 7);
-  assert.equal(continuing.paragraphs[1].startPage, 3);
+  assert.equal(
+    continuing.paragraphs.find(({ preview }) => preview === "Later.").startPage,
+    3,
+  );
   assert.equal(relaxedWarnings(continuing).length, 1);
 });

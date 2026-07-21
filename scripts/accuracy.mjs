@@ -15,15 +15,24 @@ const corpusManifest = JSON.parse(
     "utf8",
   ),
 );
-const cases = [
-  ...syntheticManifest.cases,
-  ...corpusManifest.documents.map((document) => ({
+const blindCorpusManifest = JSON.parse(
+  await readFile(
+    new URL("../test/blind-corpus-manifest.json", import.meta.url),
+    "utf8",
+  ),
+);
+const realCases = (manifest, directory) =>
+  manifest.documents.map((document) => ({
     id: document.id,
     category: "real-document",
     targetPages: document.expected.pageCount,
-    fixture: document.file,
+    fixture: `${directory}/${document.file}`,
     markdownSha256: document.markdownSha256,
-  })),
+  }));
+const cases = [
+  ...syntheticManifest.cases,
+  ...realCases(corpusManifest, "corpus"),
+  ...realCases(blindCorpusManifest, "blind-corpus"),
 ];
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 function makeCase(entry) {
@@ -115,7 +124,7 @@ function makeCase(entry) {
 async function loadCase(entry) {
   if (!entry.fixture) return makeCase(entry);
   const markdown = await readFile(
-    new URL(`../test/fixtures/corpus/${entry.fixture}`, import.meta.url),
+    new URL(`../test/fixtures/${entry.fixture}`, import.meta.url),
     "utf8",
   );
   if (sha(markdown) !== entry.markdownSha256)

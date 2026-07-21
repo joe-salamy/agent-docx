@@ -236,6 +236,7 @@ export type DeterministicResult = {
   pageCount: number;
   equivalentPages: number;
   totalVisualLines: number;
+  visualLinesByPage: readonly number[];
   lastPage: LastPageMetrics | null;
   profile: ResolvedLayoutProfile;
   warnings: readonly Diagnostic[];
@@ -275,6 +276,8 @@ export type RendererStatus<T> =
   | { status: "unavailable" | "error"; error: RendererError };
 export type WordRendering = {
   pageCount: number;
+  totalBodyLines: number;
+  bodyLinesByPage: readonly number[];
   bodyLinesOnLastPage: number | null;
   version: string;
   build: string;
