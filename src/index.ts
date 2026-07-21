@@ -1,0 +1,6 @@
+export { estimateMarkdown } from "./estimate.js";
+export { measureMarkdown } from "./renderers/index.js";
+export { inspectDocxTemplate, DOCX_LIMITS } from "./docx/inspect.js";
+export { builtInProfiles } from "./profiles.js";
+export { MdPageCountError } from "./types.js";
+export type { Budget, BuiltInProfileId, DeterministicResult, Diagnostic, DiagnosticCode, DocxTemplateInspection, ErrorCode, EstimateOptions, FilingKind, FontSetInput, InspectTemplateOptions, InspectedSection, InspectedStyle, JsonValue, LastPageMetrics, LayoutOverrides, LayoutProfile, LibreOfficeRendererOptions, LibreOfficeRendering, LineSpacing, MeasureOptions, MeasurementResult, MetricFont, PageCountSource, PageGeometry, PaginationRules, ParagraphDiagnostic, ProvenanceSource, RendererError, RendererMode, RendererStatus, ResolvedLayoutProfile, SourcePosition, TextStyle, TrimOpportunity, WordRendererOptions, WordRendering } from "./types.js";

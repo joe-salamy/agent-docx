@@ -1,0 +1,44 @@
+{
+  "name": "md-page-count",
+  "version": "0.1.0",
+  "description": "Deterministic DOCX-equivalent pagination for legal Markdown",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "packageManager": "pnpm@11.15.1",
+  "bin": { "md-page-count": "./dist/cli.js" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./config.schema.json": "./config.schema.json",
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "assets", "config.schema.json", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.txt"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm run build && node --test",
+    "prepack": "pnpm run build",
+    "verify:pack": "node scripts/verify-pack.mjs",
+    "accuracy": "node scripts/accuracy.mjs",
+    "calibrate": "node scripts/accuracy.mjs"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "chokidar": "^5.0.0",
+    "docx": "^9.7.1",
+    "fontkit": "^2.0.4",
+    "linebreak": "^1.1.0",
+    "pdf-lib": "1.17.1",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "saxes": "^6.0.0",
+    "unified": "^11.0.5",
+    "yauzl": "3.4.0"
+  },
+  "devDependencies": {
+    "@types/fontkit": "^2.0.8",
+    "@types/node": "^24.0.0",
+    "@types/yauzl": "3.4.0",
+    "typescript": "7.0.2"
+  }
+}

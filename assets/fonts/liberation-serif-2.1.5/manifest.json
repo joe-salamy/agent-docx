@@ -1,0 +1,30 @@
+{
+  "upstreamUrl": "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz",
+  "version": "2.1.5",
+  "fonts": [
+    {
+      "file": "LiberationSerif-Regular.ttf",
+      "postScriptName": "LiberationSerif-Regular",
+      "size": 393576,
+      "sha256": "058ea80864aef09a23f45cbec2bb5400bc3dfbdea01c3f10538a21fcb497fb74"
+    },
+    {
+      "file": "LiberationSerif-Bold.ttf",
+      "postScriptName": "LiberationSerif-Bold",
+      "size": 370096,
+      "sha256": "d754ba427cfe0bca54ae052384baa8f842da5bd6550ad4da024ac441e7a7d5ce"
+    },
+    {
+      "file": "LiberationSerif-Italic.ttf",
+      "postScriptName": "LiberationSerif-Italic",
+      "size": 375632,
+      "sha256": "0e3dea9f8d613e006ccfa62201f33e265d19167bd0907725c3e145368b04fc2e"
+    },
+    {
+      "file": "LiberationSerif-BoldItalic.ttf",
+      "postScriptName": "LiberationSerif-BoldItalic",
+      "size": 376772,
+      "sha256": "f17db8af71e24d2066b587546021d4f0b296be389512b658dec3c09affeb11a7"
+    }
+  ]
+}
