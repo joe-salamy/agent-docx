@@ -27,11 +27,11 @@ function spacing(style: TextStyle): ISpacingProperties {
       };
 }
 
-function paragraphOptions(style: TextStyle) {
+function paragraphOptions(style: TextStyle, widowControl: boolean) {
   return {
     keepNext: style.keepWithNext,
     keepLines: style.keepLines,
-    widowControl: true,
+    widowControl,
     spacing: spacing(style),
     indent: {
       left: style.leftIndentTwips,
@@ -75,7 +75,10 @@ export async function generateDocx(
     footnotes[String(numeric)] = {
       children: [
         new Paragraph({
-          ...paragraphOptions(profile.footnote),
+          ...paragraphOptions(
+            profile.footnote,
+            profile.pagination.widowOrphanControl,
+          ),
           children: textChildren(
             block,
             profile.footnote,
@@ -102,7 +105,7 @@ export async function generateDocx(
             : profile.body;
     children.push(
       new Paragraph({
-        ...paragraphOptions(style),
+        ...paragraphOptions(style, profile.pagination.widowOrphanControl),
         children: textChildren(
           block,
           style,

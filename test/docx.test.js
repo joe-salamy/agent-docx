@@ -121,3 +121,27 @@ test("main and footnote paragraphs share native pagination properties", async ()
     hanging: 133,
   });
 });
+
+test("DOCX paragraphs can disable native widow and orphan control", async () => {
+  const profile = structuredClone(builtInProfiles["us-district-conventional"]);
+  profile.pagination.widowOrphanControl = false;
+
+  const bytes = await generateDocx(
+    normalizeMarkdown("Main.[^1]\n\n[^1]: Footnote."),
+    profile,
+  );
+  const entries = await zipEntries(bytes, [
+    "word/document.xml",
+    "word/footnotes.xml",
+  ]);
+
+  for (const [xml, text] of [
+    [entries["word/document.xml"], "Main."],
+    [entries["word/footnotes.xml"], "Footnote."],
+  ]) {
+    assert.doesNotMatch(
+      paragraphProperties(xml, text),
+      /<w:widowControl(?:\/>| w:val="true"\/>)/,
+    );
+  }
+});

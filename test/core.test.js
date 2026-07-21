@@ -17,6 +17,10 @@ test("root API and immutable profiles", () => {
     "cand-civil",
   ]);
   assert.equal(Object.isFrozen(builtInProfiles), true);
+  assert.equal(
+    builtInProfiles["us-district-conventional"].pagination.widowOrphanControl,
+    true,
+  );
   assert.equal(typeof estimateMarkdown, "function");
   assert.equal(typeof measureMarkdown, "function");
   assert.equal(typeof inspectDocxTemplate, "function");
@@ -268,6 +272,7 @@ function tinyLayout(heightTwips = 960, overrides = {}) {
     pagination: {
       widowLines: 1,
       orphanLines: 1,
+      widowOrphanControl: true,
       maxCountedLinesPerPage: null,
       lineCapExclusions: ["footnote"],
       ...overrides.pagination,
@@ -405,6 +410,22 @@ test("footnote line caps and split constraints honor configured semantics", asyn
   });
   assert.equal(feasible.pageCount, 2);
   assert.equal(relaxedWarnings(feasible).length, 0);
+  const controlledSplit = await estimateMarkdown(note, {
+    layout: tinyLayout(1440, {
+      pagination: { widowLines: 2, orphanLines: 1 },
+    }),
+  });
+  const disabledSplit = await estimateMarkdown(note, {
+    layout: tinyLayout(1440, {
+      pagination: {
+        widowOrphanControl: false,
+        widowLines: 2,
+        orphanLines: 1,
+      },
+    }),
+  });
+  assert.equal(controlledSplit.lastPage.visualLines, 3);
+  assert.equal(disabledSplit.lastPage.visualLines, 2);
 
   const relaxed = await estimateMarkdown(note, {
     layout: tinyLayout(960, { pagination: { widowLines: 2, orphanLines: 2 } }),
@@ -417,6 +438,41 @@ test("footnote line caps and split constraints honor configured semantics", asyn
   });
   assert.equal(kept.pageCount, 2);
   assert.equal(relaxedWarnings(kept).length, 0);
+});
+
+test("widow and orphan control can be disabled", async () => {
+  const markdown = "Filler.\n\nOne.  \nTwo.  \nThree.";
+  const controlled = await estimateMarkdown(markdown, {
+    paragraphDiagnostics: true,
+    layout: tinyLayout(1440, {
+      pagination: { widowLines: 2, orphanLines: 2 },
+    }),
+  });
+  const disabled = await estimateMarkdown(markdown, {
+    paragraphDiagnostics: true,
+    layout: tinyLayout(1440, {
+      pagination: {
+        widowOrphanControl: false,
+        widowLines: 2,
+        orphanLines: 2,
+      },
+    }),
+  });
+
+  assert.equal(controlled.paragraphs[1].startPage, 2);
+  assert.equal(controlled.lastPage.visualLines, 3);
+  assert.equal(disabled.paragraphs[1].startPage, 1);
+  assert.equal(disabled.lastPage.visualLines, 1);
+  await assert.rejects(
+    () =>
+      estimateMarkdown(markdown, {
+        layout: { pagination: { widowOrphanControl: "false" } },
+      }),
+    (error) =>
+      error instanceof MdPageCountError &&
+      error.code === "INVALID_LAYOUT" &&
+      /widowOrphanControl/.test(error.message),
+  );
 });
 
 test("keep-chain preflight reserves fitting and continuing notes transactionally", async () => {

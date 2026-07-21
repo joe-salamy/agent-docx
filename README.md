@@ -129,3 +129,5 @@ Tables, code blocks, inline code, images, arbitrary HTML, thematic breaks, YAML,
 Use `--paragraphs` for per-paragraph line and last-line-fill diagnostics. `--trim` reports advisory candidates whose final line is short; `--trim-limit` and `--trim-threshold` tune that report. `--page-limit` adds remaining/over-limit budget data, and `--fail-over-limit` makes an over-limit CLI result fail.
 
 Pass `--config path/to/config.json` to use a JSON configuration file. Paths inside it are resolved relative to that file; explicit CLI options override config values. Configuration is validated against the exported `md-page-count/config.schema.json` schema. No parent-directory, home-directory, or environment configuration is discovered.
+
+Widow/orphan control is enabled by default. Set `layout.pagination.widowOrphanControl` to `false` to disable it in both deterministic pagination and generated DOCX paragraphs; `widowLines` and `orphanLines` continue to configure the enabled minimums and must each be integers of at least 1.

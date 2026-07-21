@@ -53,6 +53,7 @@ export type PageGeometry = {
   gutterTwips: number;
 };
 export type PaginationRules = {
+  widowOrphanControl: boolean;
   widowLines: number;
   orphanLines: number;
   maxCountedLinesPerPage: number | null;

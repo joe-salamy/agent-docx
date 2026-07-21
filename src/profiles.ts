@@ -54,6 +54,7 @@ const conventional: LayoutProfile = {
   list: style(240, double, { leftIndentTwips: 720, hangingIndentTwips: 360 }),
   footnote: style(240, double),
   pagination: {
+    widowOrphanControl: true,
     widowLines: 2,
     orphanLines: 2,
     maxCountedLinesPerPage: null,
@@ -107,6 +108,7 @@ const cand: LayoutProfile = {
   }),
   footnote: style(240, single),
   pagination: {
+    widowOrphanControl: true,
     widowLines: 2,
     orphanLines: 2,
     maxCountedLinesPerPage: 28,

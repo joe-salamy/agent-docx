@@ -559,6 +559,12 @@ export function paginate(
       return 0;
     }
 
+    if (!profile.pagination.widowOrphanControl) {
+      if (maximum === 0) return 0;
+      placePrefix(target, state, pending, maximum, spacing);
+      return maximum;
+    }
+
     const orphan = profile.pagination.orphanLines;
     const widow = profile.pagination.widowLines;
     let constrained = 0;
@@ -770,6 +776,7 @@ export function paginate(
     }
 
     if (
+      profile.pagination.widowOrphanControl &&
       !record.style.keepLines &&
       record.lines.length > 1 &&
       hasContent(page)
@@ -809,6 +816,7 @@ export function paginate(
           (line) => line.block === record.block,
         ).length;
         if (
+          profile.pagination.widowOrphanControl &&
           remaining < profile.pagination.widowLines &&
           placedOnPage >= profile.pagination.orphanLines
         ) {
