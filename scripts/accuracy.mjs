@@ -3,12 +3,28 @@ import { createHash } from "node:crypto";
 import { measureMarkdown, AgentDocxError } from "../dist/index.js";
 const argIndex = process.argv.indexOf("--renderer");
 const renderer = argIndex >= 0 ? process.argv[argIndex + 1] : "deterministic";
-const manifest = JSON.parse(
+const syntheticManifest = JSON.parse(
   await readFile(
     new URL("../test/accuracy-manifest.json", import.meta.url),
     "utf8",
   ),
 );
+const corpusManifest = JSON.parse(
+  await readFile(
+    new URL("../test/corpus-manifest.json", import.meta.url),
+    "utf8",
+  ),
+);
+const cases = [
+  ...syntheticManifest.cases,
+  ...corpusManifest.documents.map((document) => ({
+    id: document.id,
+    category: "real-document",
+    targetPages: document.expected.pageCount,
+    fixture: document.file,
+    markdownSha256: document.markdownSha256,
+  })),
+];
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 function makeCase(entry) {
   const lines = entry.targetPages * 23 - (entry.variant % 3);
@@ -96,6 +112,18 @@ function makeCase(entry) {
       : {};
   return { markdown, options };
 }
+async function loadCase(entry) {
+  if (!entry.fixture) return makeCase(entry);
+  const markdown = await readFile(
+    new URL(`../test/fixtures/corpus/${entry.fixture}`, import.meta.url),
+    "utf8",
+  );
+  if (sha(markdown) !== entry.markdownSha256)
+    throw new Error(
+      `${entry.id}: corpus fixture SHA-256 does not match manifest`,
+    );
+  return { markdown, options: {} };
+}
 if (renderer === "word" && process.env.AGENT_DOCX_TEST_WORD !== "1")
   throw new Error(
     "Set AGENT_DOCX_TEST_WORD=1 to run the live Word release gate",
@@ -108,8 +136,8 @@ if (
     "Set AGENT_DOCX_TEST_LIBREOFFICE=1 to run the live LibreOffice release gate",
   );
 const observations = [];
-for (const entry of manifest.cases) {
-  const generated = makeCase(entry);
+for (const entry of cases) {
+  const generated = await loadCase(entry);
   try {
     const result = await measureMarkdown(generated.markdown, {
       ...generated.options,
@@ -145,7 +173,7 @@ for (const entry of manifest.cases) {
     throw error;
   }
 }
-if (observations.length === manifest.cases.length) {
+if (observations.length === cases.length) {
   const errors = observations.map((o) =>
     Math.abs(o.deterministicPages - o.rendererPages),
   );

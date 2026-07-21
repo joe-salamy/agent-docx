@@ -112,6 +112,12 @@ LibreOffice does not guarantee the requested font is installed and may substitut
 
 `officeTimeoutMs` / `--office-timeout` overrides the render timeout for either adapter and accepts 1,000 through 600,000 milliseconds. Office-mode failures use structured codes such as `WORD_NOT_FOUND`, `WORD_TIMEOUT`, `LIBREOFFICE_NOT_FOUND`, and `LIBREOFFICE_RENDER_FAILED`; the CLI exits with status 4 for renderer availability or execution failures.
 
+## Accuracy testing
+
+`pnpm test` includes unit and boundary coverage plus deterministic golden tests over three committed, real-world Markdown lecture-note documents. The corpus manifest pins each input hash and checks physical pages, equivalent pages, visual lines, last-page usage, paragraph diagnostics, and warning codes.
+
+`pnpm accuracy` runs those documents together with the synthetic boundary matrix. Pass `--renderer word` or `--renderer libreoffice` with the corresponding `AGENT_DOCX_TEST_WORD=1` or `AGENT_DOCX_TEST_LIBREOFFICE=1` opt-in to compare the same inputs with a native renderer. The release gate evaluates exact-match rate, mean absolute page error, and worst page error across the corpus; native output is not a portable per-document golden because Office versions, fonts, and printer state can change pagination.
+
 ## Supported Markdown
 
 Supported block content includes paragraphs, headings, blockquotes, ordered and unordered lists, single-paragraph GFM footnotes, and the explicit `<!-- pagebreak -->` marker. Inline text may use emphasis, strong emphasis, links, strikethrough, hard breaks, and footnote references. Link destinations do not affect layout.
