@@ -170,6 +170,7 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "widowOrphanControl": { "type": "boolean" },
             "widowLines": { "type": "integer", "minimum": 1 },
             "orphanLines": { "type": "integer", "minimum": 1 },
             "maxCountedLinesPerPage": {

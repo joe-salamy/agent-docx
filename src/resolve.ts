@@ -178,6 +178,11 @@ export function validateProfile(p: LayoutProfile) {
         );
     } else finite("lineSpacing.twips", s.lineSpacing.twips, 1);
   }
+  if (typeof p.pagination.widowOrphanControl !== "boolean")
+    throw new AgentDocxError(
+      "INVALID_LAYOUT",
+      "widowOrphanControl must be a boolean",
+    );
   finite("widowLines", p.pagination.widowLines, 1, true);
   finite("orphanLines", p.pagination.orphanLines, 1, true);
   if (p.pagination.maxCountedLinesPerPage !== null)
