@@ -184,7 +184,42 @@ export type EstimateOptions = {
   filingKind?: FilingKind;
   pageLimit?: number;
   paragraphDiagnostics?: boolean;
+  sectionDiagnostics?: boolean;
   trim?: false | { maxCandidates?: number; maxLastLineRatio?: number };
+};
+export type SectionPageDiagnostic = {
+  page: number;
+  bodyVisualLines: number;
+  footnoteVisualLines: number;
+  visualLines: number;
+  countedLines: number;
+};
+export type SectionHeading = {
+  level: 1 | 2 | 3 | 4 | 5 | 6;
+  title: string;
+  position: SourcePosition;
+};
+export type SectionPageBudget = {
+  limitPages: number;
+  withinLimit: boolean;
+  pagesBeyondLimit: readonly number[];
+};
+export type SectionDiagnostic = {
+  source: "deterministic";
+  index: number;
+  parentIndex: number | null;
+  heading: SectionHeading | null;
+  position: SourcePosition | null;
+  empty: boolean;
+  startPage: number | null;
+  endPage: number | null;
+  pageCount: number;
+  bodyVisualLines: number;
+  footnoteVisualLines: number;
+  visualLines: number;
+  countedLines: number;
+  pages: readonly SectionPageDiagnostic[];
+  pageBudget?: SectionPageBudget;
 };
 export type WordRendererOptions = { powerShellPath?: string };
 export type LibreOfficeRendererOptions = {
@@ -196,6 +231,7 @@ export type MeasureOptions = EstimateOptions & {
   officeTimeoutMs?: number;
   word?: WordRendererOptions;
   libreoffice?: LibreOfficeRendererOptions;
+  includeGeneratedDocx?: boolean;
 };
 export type InspectTemplateOptions = {
   fallbackProfile?: BuiltInProfileId | LayoutProfile;
@@ -243,11 +279,14 @@ export type DeterministicResult = {
   warnings: readonly Diagnostic[];
   paragraphs?: readonly ParagraphDiagnostic[];
   trimOpportunities?: readonly TrimOpportunity[];
+  sections?: readonly SectionDiagnostic[];
   budget?: Budget;
 };
 export type ErrorCode =
   | "INVALID_ARGUMENT"
   | "INVALID_CONFIG"
+  | "OUTPUT_EXISTS"
+  | "OUTPUT_WRITE_FAILED"
   | "INPUT_NOT_FOUND"
   | "INPUT_NOT_UTF8"
   | "UNSUPPORTED_MARKDOWN"
@@ -311,6 +350,7 @@ export type MeasurementResult = {
     libreoffice?: RendererStatus<LibreOfficeRendering>;
   };
   budget?: Budget;
+  generatedDocx?: Uint8Array;
   budgetBySource?: Readonly<Partial<Record<PageCountSource, Budget>>>;
 };
 export class AgentDocxError extends Error {

@@ -1,7 +1,10 @@
 import { parseArgs } from "node:util";
 import { AgentDocxError } from "./types.js";
 
-export type CliOptionValues = Record<string, string | boolean | undefined>;
+export type CliOptionValues = Record<
+  string,
+  string | boolean | readonly string[] | undefined
+>;
 
 export type CliCommand =
   | { mode: "help" }
@@ -43,6 +46,7 @@ const specs = {
   "page-limit": { type: "string" },
   "fail-over-limit": { type: "boolean" },
   paragraphs: { type: "boolean" },
+  sections: { type: "boolean" },
   trim: { type: "boolean" },
   "trim-limit": { type: "string" },
   "trim-threshold": { type: "string" },
@@ -50,8 +54,13 @@ const specs = {
   "office-timeout": { type: "string" },
   "libreoffice-path": { type: "string" },
   json: { type: "boolean" },
+  output: { type: "string" },
   batch: { type: "boolean" },
   "input-jsonl": { type: "boolean" },
+  recursive: { type: "boolean" },
+  "no-recursive": { type: "boolean" },
+  include: { type: "string", multiple: true },
+  exclude: { type: "string", multiple: true },
   watch: { type: "boolean" },
   jsonl: { type: "boolean" },
   "debounce-ms": { type: "string" },
@@ -59,7 +68,7 @@ const specs = {
   "inspect-template": { type: "boolean" },
 } as const;
 
-export const cliHelp = `Usage: agent-docx [options] [FILE.md|-]\n\nEstimate DOCX-equivalent pages for legal Markdown.\n\nModes: --inspect-template FILE.docx, --batch FILE..., --batch --input-jsonl, --watch FILE\nOutput: --json (single/inspect), --jsonl (watch)\n`;
+export const cliHelp = `Usage: agent-docx [options] [FILE.md|-]\n\nEstimate DOCX-equivalent pages for legal Markdown.\n\nModes: --inspect-template FILE.docx, --batch FILE..., --batch --input-jsonl, --watch FILE\nOutput: --json (single/inspect), --jsonl (watch), --output FILE.docx (single)\nBatch discovery: --recursive, --no-recursive, --include GLOB, --exclude GLOB\n`;
 
 export function parseCliArgs(args: readonly string[]): CliCommand {
   const parsed = parseArgs({
@@ -74,7 +83,7 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
   const seen = new Set<string>();
   for (const token of parsed.tokens) {
     if (token.kind !== "option" || !token.name) continue;
-    if (seen.has(token.name)) {
+    if (seen.has(token.name) && !["include", "exclude"].includes(token.name)) {
       throw new AgentDocxError(
         "INVALID_ARGUMENT",
         `Duplicate option: --${token.name}`,
@@ -82,6 +91,28 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
     }
     seen.add(token.name);
   }
+
+  if (
+    values.output === "" ||
+    values.output === "-" ||
+    (typeof values.output === "string" && values.output.length === 0)
+  ) {
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "--output requires a file path other than -",
+    );
+  }
+  if (values.recursive && values["no-recursive"]) {
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "--recursive and --no-recursive cannot be combined",
+    );
+  }
+  const hasDiscoveryOptions =
+    values.recursive === true ||
+    values["no-recursive"] === true ||
+    values.include !== undefined ||
+    values.exclude !== undefined;
 
   if (values.help || values.version) {
     const selected = values.help ? "help" : "version";
@@ -117,13 +148,19 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
   }
 
   if (values.batch) {
-    if (values.json || values.jsonl || values.watch) {
+    if (values.json || values.jsonl || values.watch || values.output) {
       throw new AgentDocxError(
         "INVALID_ARGUMENT",
         "Invalid batch option combination",
       );
     }
     if (values["input-jsonl"]) {
+      if (hasDiscoveryOptions) {
+        throw new AgentDocxError(
+          "INVALID_ARGUMENT",
+          "Discovery options require positional batch",
+        );
+      }
       if (parsed.positionals.length) {
         throw new AgentDocxError(
           "INVALID_ARGUMENT",
@@ -138,6 +175,18 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
         "Positional batch requires file paths",
       );
     }
+    if (parsed.positionals.includes("-")) {
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        "Positional batch does not accept stdin; use --input-jsonl",
+      );
+    }
+    if (parsed.positionals.some((token) => token.length === 0)) {
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        "Batch selector must not be empty",
+      );
+    }
     return { mode: "batch-files", paths: parsed.positionals, values };
   }
 
@@ -145,7 +194,9 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
     if (
       parsed.positionals.length !== 1 ||
       values.json ||
-      values["input-jsonl"]
+      values["input-jsonl"] ||
+      values.output ||
+      hasDiscoveryOptions
     ) {
       throw new AgentDocxError(
         "INVALID_ARGUMENT",
@@ -155,6 +206,18 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
     return { mode: "watch", path: parsed.positionals[0]!, values };
   }
 
+  if (hasDiscoveryOptions) {
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "Discovery options require positional batch",
+    );
+  }
+  if (values.output !== undefined && typeof values.output !== "string") {
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "--output requires a file path",
+    );
+  }
   if (values.jsonl || values["debounce-ms"] !== undefined || values.poll) {
     throw new AgentDocxError(
       "INVALID_ARGUMENT",

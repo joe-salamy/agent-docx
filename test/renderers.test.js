@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { PDFDocument } from "pdf-lib";
 import {
   renderLibreOffice,
   resolveLibreOffice,
 } from "../dist/renderers/office.js";
 import { AgentDocxError } from "../dist/index.js";
+import { measureMarkdown } from "../dist/index.js";
 
 test("LibreOffice resolver rejects an explicit missing executable", async () => {
   await assert.rejects(
@@ -42,6 +44,37 @@ test("LibreOffice adapter uses isolated exact conversion arguments and PDF page 
     assert.match(rendered.versionRaw, /99.0 fake/);
     assert.equal(rendered.calibratedFontEnvironment, false);
     assert.equal(rendered.requestedFontFamilies[0], "Times New Roman");
+  } finally {
+    delete process.env.AGENT_DOCX_FAKE_PDF;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("LibreOffice renders the exact returned generated DOCX", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-docx-fake-lo-sha-"));
+  const executable = join(root, "soffice");
+  const pdf = await PDFDocument.create();
+  pdf.addPage();
+  process.env.AGENT_DOCX_FAKE_PDF = Buffer.from(await pdf.save()).toString(
+    "base64",
+  );
+  const script = `#!/usr/bin/env node\nimport {writeFileSync} from 'node:fs';import {join} from 'node:path';const a=process.argv.slice(2);if(a[0]==='--version'){console.log('LibreOffice 99.0 fake');process.exit(0)}const out=a[a.indexOf('--outdir')+1];writeFileSync(join(out,'render.pdf'),Buffer.from(process.env.AGENT_DOCX_FAKE_PDF,'base64'));`;
+  try {
+    await writeFile(executable, script);
+    await chmod(executable, 0o755);
+    const result = await measureMarkdown("# Exact bytes", {
+      renderer: "libreoffice",
+      sectionDiagnostics: true,
+      includeGeneratedDocx: true,
+      libreoffice: { executablePath: executable },
+    });
+    const hash = createHash("sha256")
+      .update(result.generatedDocx)
+      .digest("hex");
+    assert.equal(result.pageCountSource, "libreoffice");
+    assert.equal(result.deterministic.sections[1].source, "deterministic");
+    assert.equal("sections" in result.renderers.libreoffice.value, false);
+    assert.equal(hash, result.renderers.libreoffice.value.generatedDocxSha256);
   } finally {
     delete process.env.AGENT_DOCX_FAKE_PDF;
     await rm(root, { recursive: true, force: true });

@@ -1,7 +1,11 @@
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
-import { AgentDocxError, type SourcePosition } from "./types.js";
+import {
+  AgentDocxError,
+  type SectionHeading,
+  type SourcePosition,
+} from "./types.js";
 type Node = {
   type: string;
   value?: string;
@@ -41,6 +45,100 @@ export type NormalizedDocument = {
   footnotes: Map<string, FlowBlock>;
   paragraphs: FlowBlock[];
 };
+export type IndexedSection = {
+  index: number;
+  parentIndex: number | null;
+  heading: SectionHeading | null;
+  position: SourcePosition | null;
+  empty: boolean;
+  ancestors: readonly number[];
+};
+export type SectionIndex = {
+  sections: readonly IndexedSection[];
+  deepestOwnerByBlock: ReadonlyMap<FlowBlock, number>;
+};
+
+export function indexSections(blocks: readonly FlowBlock[]): SectionIndex {
+  type WorkSection = IndexedSection & {
+    firstPosition: SourcePosition | null;
+    lastPosition: SourcePosition | null;
+  };
+  const sections: WorkSection[] = [
+    {
+      index: 0,
+      parentIndex: null,
+      heading: null,
+      position: null,
+      empty: true,
+      ancestors: [0],
+      firstPosition: null,
+      lastPosition: null,
+    },
+  ];
+  const stack: number[] = [];
+  const deepestOwnerByBlock = new Map<FlowBlock, number>();
+  for (const block of blocks) {
+    let owner = stack.at(-1) ?? 0;
+    if (block.kind === "heading") {
+      const level = block.level as 1 | 2 | 3 | 4 | 5 | 6;
+      while (stack.length && sections[stack.at(-1)!]!.heading!.level >= level) {
+        stack.pop();
+      }
+      const parentIndex = stack.at(-1) ?? null;
+      const index = sections.length;
+      const heading: SectionHeading = {
+        level,
+        title: block.runs
+          .filter((run) => run.footnoteId === undefined)
+          .map((run) => run.text)
+          .join("")
+          .replace(/\s+/gu, " ")
+          .trim(),
+        position: block.position,
+      };
+      sections.push({
+        index,
+        parentIndex,
+        heading,
+        position: block.position,
+        empty: true,
+        ancestors:
+          parentIndex === null
+            ? [index]
+            : [...sections[parentIndex]!.ancestors, index],
+        firstPosition: block.position,
+        lastPosition: block.position,
+      });
+      stack.push(index);
+      owner = index;
+    }
+    deepestOwnerByBlock.set(block, owner);
+    const owners = sections[owner]!.ancestors;
+    for (const sectionIndex of owners) {
+      const section = sections[sectionIndex]!;
+      section.firstPosition ??= block.position;
+      section.lastPosition = block.position;
+      if (block.kind !== "heading" && block.kind !== "pagebreak") {
+        section.empty = false;
+      }
+    }
+  }
+  return {
+    sections: sections.map(
+      ({ firstPosition, lastPosition, ...section }): IndexedSection => ({
+        ...section,
+        position:
+          firstPosition === null || lastPosition === null
+            ? null
+            : {
+                start: firstPosition.start,
+                end: lastPosition.end,
+              },
+      }),
+    ),
+    deepestOwnerByBlock,
+  };
+}
 const pos = (node: Node): SourcePosition => {
   if (!node.position)
     throw new AgentDocxError(
