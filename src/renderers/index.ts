@@ -80,11 +80,15 @@ export async function measureMarkdown(
     renderers: {},
   };
   if (deterministic.budget) output.budget = deterministic.budget;
-  if (mode === "deterministic") return output;
+  const needsDocx =
+    options.includeGeneratedDocx === true || mode !== "deterministic";
+  if (!needsDocx) return output;
   const flow = normalizeMarkdown(markdown);
-  // Load DOCX generation only for opt-in office modes; docx eagerly probes Node web storage on import.
+  // Load DOCX generation only when bytes or Office rendering are requested.
   const { generateDocx } = await import("../docx/generate.js");
   const docx = await generateDocx(flow, deterministic.profile);
+  if (options.includeGeneratedDocx === true) output.generatedDocx = docx;
+  if (mode === "deterministic") return output;
   const requestedFontFamilies = [deterministic.profile.requestedFontFamily];
   let word: RendererStatus<WordRendering> | undefined;
   let libreoffice: RendererStatus<LibreOfficeRendering> | undefined;

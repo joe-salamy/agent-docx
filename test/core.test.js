@@ -26,6 +26,20 @@ test("root API and immutable profiles", () => {
   assert.equal(typeof inspectDocxTemplate, "function");
 });
 
+test("generated DOCX bytes are opt-in and publicly inspectable", async () => {
+  const regular = await measureMarkdown("# Generated");
+  assert.equal("generatedDocx" in regular, false);
+  const included = await measureMarkdown("# Generated", {
+    includeGeneratedDocx: true,
+  });
+  assert.ok(included.generatedDocx instanceof Uint8Array);
+  assert.equal(
+    Buffer.from(included.generatedDocx).subarray(0, 2).toString(),
+    "PK",
+  );
+  await inspectDocxTemplate(included.generatedDocx);
+});
+
 test("default metric fonts match the committed manifest", async () => {
   const manifest = JSON.parse(
     await readFile(
@@ -496,4 +510,85 @@ test("keep-chain preflight reserves fitting and continuing notes transactionally
     3,
   );
   assert.equal(relaxedWarnings(continuing).length, 1);
+});
+
+test("section indexing preserves source identity and inclusive hierarchy", async () => {
+  const markdown =
+    "Preamble.\n\n# Parent\n\n### Duplicate\n\nBody.\n\n## Duplicate\n\n##\n";
+  const regular = await estimateMarkdown(markdown);
+  assert.equal("sections" in regular, false);
+  const result = await estimateMarkdown(markdown, {
+    sectionDiagnostics: true,
+  });
+  assert.deepEqual(
+    result.sections.map((section) => ({
+      index: section.index,
+      parent: section.parentIndex,
+      title: section.heading?.title ?? null,
+      empty: section.empty,
+      line: section.heading?.position.start.line ?? null,
+    })),
+    [
+      { index: 0, parent: null, title: null, empty: false, line: null },
+      { index: 1, parent: null, title: "Parent", empty: false, line: 3 },
+      { index: 2, parent: 1, title: "Duplicate", empty: false, line: 5 },
+      { index: 3, parent: 1, title: "Duplicate", empty: true, line: 9 },
+      { index: 4, parent: 1, title: "", empty: true, line: 11 },
+    ],
+  );
+  assert.equal(result.sections[0].position.start.line, 1);
+  assert.equal(result.sections[0].position.end.line, 1);
+  assert.equal(result.sections[1].position.end.line, 11);
+  assert.ok(
+    result.sections[1].visualLines > result.sections[2].visualLines,
+    "inclusive parent contains its own heading and descendants",
+  );
+
+  const headingFirst = await estimateMarkdown("## Leading", {
+    sectionDiagnostics: true,
+  });
+  assert.equal(headingFirst.sections[0].position, null);
+  assert.equal(headingFirst.sections[1].parentIndex, null);
+  const empty = await estimateMarkdown("", { sectionDiagnostics: true });
+  assert.equal(empty.sections.length, 1);
+  assert.deepEqual(
+    [empty.sections[0].position, empty.sections[0].startPage],
+    [null, null],
+  );
+});
+
+test("section pages include lines, footnotes, breaks, and page budgets", async () => {
+  const broken = await estimateMarkdown(
+    "# Parent\n\nRef.[^n]\n\n## Child\n\nBody.\n\n<!-- pagebreak -->\n\n<!-- pagebreak -->\n\n[^n]: One.  \nTwo.",
+    {
+      sectionDiagnostics: true,
+      pageLimit: 1,
+      layout: tinyLayout(),
+    },
+  );
+  const parent = broken.sections[1];
+  const child = broken.sections[2];
+  assert.deepEqual(
+    parent.pages.map(({ page }) => page),
+    [...parent.pages.map(({ page }) => page)].sort((a, b) => a - b),
+  );
+  assert.equal(parent.pageCount, parent.pages.length);
+  assert.ok(parent.footnoteVisualLines > 0);
+  assert.equal(child.footnoteVisualLines, 0);
+  assert.ok(parent.visualLines >= child.visualLines);
+  assert.deepEqual(
+    parent.pageBudget.pagesBeyondLimit,
+    parent.pages.map(({ page }) => page).filter((page) => page > 1),
+  );
+  assert.equal(parent.pageBudget.withinLimit, false);
+
+  const breaks = await estimateMarkdown(
+    "# Breaks\n\n<!-- pagebreak -->\n\n<!-- pagebreak -->",
+    { sectionDiagnostics: true },
+  );
+  assert.deepEqual(
+    breaks.sections[1].pages.map(({ page }) => page),
+    [1, 2],
+  );
+  assert.equal(breaks.pageCount, 2);
 });

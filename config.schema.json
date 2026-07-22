@@ -34,6 +34,7 @@
     },
     "pageLimit": { "type": "integer", "minimum": 1 },
     "paragraphDiagnostics": { "type": "boolean" },
+    "sectionDiagnostics": { "type": "boolean" },
     "trim": {
       "oneOf": [
         { "const": false },
@@ -78,6 +79,25 @@
               "path": { "type": "string", "minLength": 1 }
             }
           }
+        }
+      }
+    },
+    "batch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "recursive": { "type": "boolean" },
+        "include": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "exclude": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
         }
       }
     }

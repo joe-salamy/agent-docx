@@ -1,4 +1,4 @@
-import { normalizeMarkdown } from "./markdown.js";
+import { indexSections, normalizeMarkdown } from "./markdown.js";
 import { paginate } from "./layout/paginate.js";
 import { loadFonts, resolveProfile, resolvedProfile } from "./resolve.js";
 import {
@@ -45,9 +45,18 @@ export async function estimateMarkdown(
       "trim.maxLastLineRatio must be from 0 through 1",
     );
   const profile = resolveProfile(options);
+  const selectedLimit =
+    options.pageLimit ??
+    (options.filingKind
+      ? profile.filingPageLimits[options.filingKind]
+      : undefined);
   const fonts = await loadFonts(options.fontSet, profile.requestedFontFamily);
   const document = normalizeMarkdown(markdown);
-  const layout = paginate(document, profile, fonts);
+  const sectionIndex =
+    options.sectionDiagnostics === true
+      ? indexSections(document.blocks)
+      : undefined;
+  const layout = paginate(document, profile, fonts, sectionIndex);
   const warnings = [
     ...profile.warnings,
     ...(options.template?.warnings ?? []),
@@ -66,6 +75,7 @@ export async function estimateMarkdown(
     profile: resolvedProfile(profile, fonts, options),
     warnings,
   };
+  if (layout.sections) result.sections = layout.sections;
   if (options.paragraphDiagnostics || options.trim)
     result.paragraphs = layout.paragraphs;
   if (options.trim) {
@@ -88,11 +98,6 @@ export async function estimateMarkdown(
       }),
     );
   }
-  const selectedLimit =
-    options.pageLimit ??
-    (options.filingKind
-      ? profile.filingPageLimits[options.filingKind]
-      : undefined);
   if (selectedLimit !== undefined) {
     const pitch =
       result.lastPage && result.lastPage.bodyLineCapacity > 0
@@ -114,6 +119,21 @@ export async function estimateMarkdown(
       fractionalFieldsSource: "deterministic",
     };
     result.budget = budget;
+    if (result.sections) {
+      result.sections = result.sections.map((section) => {
+        const pagesBeyondLimit = section.pages
+          .map((page) => page.page)
+          .filter((page) => page > selectedLimit);
+        return {
+          ...section,
+          pageBudget: {
+            limitPages: selectedLimit,
+            withinLimit: pagesBeyondLimit.length === 0,
+            pagesBeyondLimit,
+          },
+        };
+      });
+    }
   }
   return result;
 }

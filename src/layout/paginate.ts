@@ -1,12 +1,18 @@
 import type { Font } from "fontkit";
 import LineBreaker from "linebreak";
-import type { FlowBlock, InlineRun, NormalizedDocument } from "../markdown.js";
+import type {
+  FlowBlock,
+  InlineRun,
+  NormalizedDocument,
+  SectionIndex,
+} from "../markdown.js";
 import type { LoadedFonts } from "../resolve.js";
 import type {
   Diagnostic,
   LayoutProfile,
   ParagraphDiagnostic,
   TextStyle,
+  SectionDiagnostic,
 } from "../types.js";
 
 export type PaginationOutput = {
@@ -23,6 +29,7 @@ export type PaginationOutput = {
   } | null;
   paragraphs: ParagraphDiagnostic[];
   warnings: Diagnostic[];
+  sections?: SectionDiagnostic[];
 };
 
 type WrappedLine = {
@@ -37,7 +44,11 @@ type WrappedLine = {
   footnoteRefs: string[];
 };
 
-type PlacedFootnoteLine = { footnoteId: string; line: WrappedLine };
+type PlacedFootnoteLine = {
+  footnoteId: string;
+  line: WrappedLine;
+  ownerIndex: number;
+};
 
 type Page = {
   bodyUsed: number;
@@ -46,6 +57,7 @@ type Page = {
   counted: number;
   bodyLines: WrappedLine[];
   footnoteLines: PlacedFootnoteLine[];
+  sectionTouches?: Set<number>;
 };
 
 type PendingFootnote = {
@@ -53,6 +65,7 @@ type PendingFootnote = {
   lines: readonly WrappedLine[];
   nextLine: number;
   warningEmitted: boolean;
+  ownerIndex: number;
 };
 
 type FootnoteState = {
@@ -310,7 +323,7 @@ function styleFor(profile: LayoutProfile, block: FlowBlock) {
           : profile.body;
 }
 
-function emptyPage(): Page {
+function emptyPage(trackSections = false): Page {
   return {
     bodyUsed: 0,
     footnoteUsed: 0,
@@ -318,6 +331,7 @@ function emptyPage(): Page {
     counted: 0,
     bodyLines: [],
     footnoteLines: [],
+    ...(trackSections ? { sectionTouches: new Set<number>() } : {}),
   };
 }
 
@@ -326,6 +340,9 @@ function clonePage(page: Page): Page {
     ...page,
     bodyLines: [...page.bodyLines],
     footnoteLines: [...page.footnoteLines],
+    ...(page.sectionTouches
+      ? { sectionTouches: new Set(page.sectionTouches) }
+      : {}),
   };
 }
 
@@ -345,6 +362,7 @@ export function paginate(
   document: NormalizedDocument,
   profile: LayoutProfile,
   fonts: LoadedFonts,
+  sectionIndex?: SectionIndex,
 ): PaginationOutput {
   if (document.blocks.length === 0) {
     return {
@@ -355,6 +373,26 @@ export function paginate(
       lastPage: null,
       paragraphs: [],
       warnings: [],
+      ...(sectionIndex
+        ? {
+            sections: sectionIndex.sections.map((section) => ({
+              source: "deterministic" as const,
+              index: section.index,
+              parentIndex: section.parentIndex,
+              heading: section.heading,
+              position: section.position,
+              empty: section.empty,
+              startPage: null,
+              endPage: null,
+              pageCount: 0,
+              bodyVisualLines: 0,
+              footnoteVisualLines: 0,
+              visualLines: 0,
+              countedLines: 0,
+              pages: [],
+            })),
+          }
+        : {}),
     };
   }
 
@@ -422,7 +460,7 @@ export function paginate(
   };
 
   let pages: Page[] = [];
-  let page = emptyPage();
+  let page = emptyPage(sectionIndex !== undefined);
   let footnotes: FootnoteState = {
     placed: new Set(),
     pending: [],
@@ -441,7 +479,7 @@ export function paginate(
   };
   const commitPage = () => {
     pages.push(page);
-    page = emptyPage();
+    page = emptyPage(sectionIndex !== undefined);
   };
   const lineFits = (target: Page, line: WrappedLine, extra = 0) => {
     const cap = profile.pagination.maxCountedLinesPerPage;
@@ -470,7 +508,8 @@ export function paginate(
     return count;
   };
   const footnoteFitsEmpty = (lines: readonly WrappedLine[]) =>
-    prefixThatFits(emptyPage(), lines, 0, 0) === lines.length;
+    prefixThatFits(emptyPage(sectionIndex !== undefined), lines, 0, 0) ===
+    lines.length;
   const warnRelaxed = (
     state: FootnoteState,
     pending: PendingFootnote,
@@ -487,7 +526,11 @@ export function paginate(
       position: document.footnotes.get(pending.footnoteId)!.position,
     });
   };
-  const enqueue = (state: FootnoteState, ids: readonly string[]) => {
+  const enqueue = (
+    state: FootnoteState,
+    ids: readonly string[],
+    ownerIndex: number,
+  ) => {
     for (const id of ids) {
       if (state.placed.has(id)) continue;
       state.placed.add(id);
@@ -496,6 +539,7 @@ export function paginate(
         lines: wrappedFootnote(id),
         nextLine: 0,
         warningEmitted: state.relaxed.has(id),
+        ownerIndex,
       });
     }
   };
@@ -523,12 +567,16 @@ export function paginate(
       target.footnoteUsed += (offset === 0 ? spacing : 0) + line.height;
       target.visual++;
       if (line.counted) target.counted++;
-      target.footnoteLines.push({ footnoteId: pending.footnoteId, line });
+      target.footnoteLines.push({
+        footnoteId: pending.footnoteId,
+        line,
+        ownerIndex: pending.ownerIndex,
+      });
       discovered.push(...line.footnoteRefs);
     }
     pending.nextLine += count;
     if (pending.nextLine === pending.lines.length) state.pending.shift();
-    enqueue(state, discovered);
+    enqueue(state, discovered, pending.ownerIndex);
   };
   const placePendingHead = (
     target: Page,
@@ -580,7 +628,7 @@ export function paginate(
     }
 
     const emptyMaximum = prefixThatFits(
-      emptyPage(),
+      emptyPage(sectionIndex !== undefined),
       pending.lines,
       pending.nextLine,
       0,
@@ -654,7 +702,11 @@ export function paginate(
     if (line.counted) target.counted++;
     target.bodyLines.push(line);
     const pendingBefore = state.pending.length;
-    enqueue(state, line.footnoteRefs);
+    enqueue(
+      state,
+      line.footnoteRefs,
+      sectionIndex?.deepestOwnerByBlock.get(line.block) ?? 0,
+    );
     const footnoteLinesBefore = target.footnoteLines.length;
     reserveOnCurrentPage(target, state, diagnostics);
     if (
@@ -680,7 +732,11 @@ export function paginate(
       target.visual++;
       if (line.counted) target.counted++;
       target.bodyLines.push(line);
-      enqueue(state, line.footnoteRefs);
+      enqueue(
+        state,
+        line.footnoteRefs,
+        sectionIndex?.deepestOwnerByBlock.get(line.block) ?? 0,
+      );
       reserveOnCurrentPage(target, state, diagnostics);
     }
     return state.pending.length === 0;
@@ -719,6 +775,12 @@ export function paginate(
   for (let blockIndex = 0; blockIndex < bodyBlocks.length; blockIndex++) {
     const record = bodyBlocks[blockIndex]!;
     if (record.block.kind === "pagebreak") {
+      if (sectionIndex && page.sectionTouches) {
+        const owner = sectionIndex.deepestOwnerByBlock.get(record.block) ?? 0;
+        for (const index of sectionIndex.sections[owner]!.ancestors) {
+          page.sectionTouches.add(index);
+        }
+      }
       commitPage();
       priorAfter = 0;
       continue;
@@ -749,7 +811,11 @@ export function paginate(
         );
         const emptyUnit = unitFromBlocks(indexes, terminatingLines, 0, false);
         if (
-          simulateUnit(emptyUnit, emptyPage(), footnotes) &&
+          simulateUnit(
+            emptyUnit,
+            emptyPage(sectionIndex !== undefined),
+            footnotes,
+          ) &&
           !simulateUnit(currentUnit, page, footnotes) &&
           hasContent(page)
         ) {
@@ -767,7 +833,11 @@ export function paginate(
       );
       const emptyUnit = unitFromBlocks([blockIndex], null, 0, false);
       if (
-        simulateUnit(emptyUnit, emptyPage(), footnotes) &&
+        simulateUnit(
+          emptyUnit,
+          emptyPage(sectionIndex !== undefined),
+          footnotes,
+        ) &&
         !simulateUnit(currentUnit, page, footnotes) &&
         hasContent(page)
       ) {
@@ -875,6 +945,103 @@ export function paginate(
     }
   }
 
+  let sectionResults: SectionDiagnostic[] | undefined;
+  if (sectionIndex) {
+    type MutableSectionPage = {
+      page: number;
+      bodyVisualLines: number;
+      footnoteVisualLines: number;
+      visualLines: number;
+      countedLines: number;
+    };
+    const sectionPages = sectionIndex.sections.map(
+      () => new Map<number, MutableSectionPage>(),
+    );
+    pages.forEach((placedPage, pageIndex) => {
+      const pageNumber = pageIndex + 1;
+      for (const section of placedPage.sectionTouches ?? []) {
+        sectionPages[section]!.set(pageNumber, {
+          page: pageNumber,
+          bodyVisualLines: 0,
+          footnoteVisualLines: 0,
+          visualLines: 0,
+          countedLines: 0,
+        });
+      }
+      for (const line of placedPage.bodyLines) {
+        const owner = sectionIndex.deepestOwnerByBlock.get(line.block) ?? 0;
+        for (const section of sectionIndex.sections[owner]!.ancestors) {
+          let entry = sectionPages[section]!.get(pageNumber);
+          if (!entry) {
+            entry = {
+              page: pageNumber,
+              bodyVisualLines: 0,
+              footnoteVisualLines: 0,
+              visualLines: 0,
+              countedLines: 0,
+            };
+            sectionPages[section]!.set(pageNumber, entry);
+          }
+          entry.bodyVisualLines++;
+          entry.visualLines++;
+          if (line.counted) entry.countedLines++;
+        }
+      }
+      for (const placed of placedPage.footnoteLines) {
+        for (const section of sectionIndex.sections[placed.ownerIndex]!
+          .ancestors) {
+          let entry = sectionPages[section]!.get(pageNumber);
+          if (!entry) {
+            entry = {
+              page: pageNumber,
+              bodyVisualLines: 0,
+              footnoteVisualLines: 0,
+              visualLines: 0,
+              countedLines: 0,
+            };
+            sectionPages[section]!.set(pageNumber, entry);
+          }
+          entry.footnoteVisualLines++;
+          entry.visualLines++;
+          if (placed.line.counted) entry.countedLines++;
+        }
+      }
+    });
+    sectionResults = sectionIndex.sections.map((section) => {
+      const diagnosticPages = [...sectionPages[section.index]!.values()].sort(
+        (a, b) => a.page - b.page,
+      );
+      return {
+        source: "deterministic",
+        index: section.index,
+        parentIndex: section.parentIndex,
+        heading: section.heading,
+        position: section.position,
+        empty: section.empty,
+        startPage: diagnosticPages[0]?.page ?? null,
+        endPage: diagnosticPages.at(-1)?.page ?? null,
+        pageCount: diagnosticPages.length,
+        bodyVisualLines: diagnosticPages.reduce(
+          (total, page) => total + page.bodyVisualLines,
+          0,
+        ),
+        footnoteVisualLines: diagnosticPages.reduce(
+          (total, page) => total + page.footnoteVisualLines,
+          0,
+        ),
+        visualLines: diagnosticPages.reduce(
+          (total, page) => total + page.visualLines,
+          0,
+        ),
+        countedLines: diagnosticPages.reduce(
+          (total, page) => total + page.countedLines,
+          0,
+        ),
+        pages: diagnosticPages,
+      };
+    });
+  }
+
   const last = pages.at(-1)!;
   const representative = document.blocks.find(
     (block) => block.kind !== "pagebreak",
@@ -907,5 +1074,6 @@ export function paginate(
     },
     paragraphs: paragraphResults,
     warnings,
+    ...(sectionResults ? { sections: sectionResults } : {}),
   };
 }

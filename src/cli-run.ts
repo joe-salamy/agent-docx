@@ -1,5 +1,14 @@
-import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import {
+  glob,
+  lstat,
+  open,
+  readFile,
+  realpath,
+  stat,
+  unlink,
+} from "node:fs/promises";
+import type { Stats } from "node:fs";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import chokidar from "chokidar";
@@ -40,6 +49,7 @@ type SerializableConfig = {
   filingKind?: EstimateOptions["filingKind"];
   pageLimit?: number;
   paragraphDiagnostics?: boolean;
+  sectionDiagnostics?: boolean;
   trim?: EstimateOptions["trim"];
   renderer?: RendererMode;
   officeTimeoutMs?: number;
@@ -48,6 +58,11 @@ type SerializableConfig = {
     executablePath?: string;
     installedFonts?: { family: string; path: string }[];
   };
+  batch?: {
+    recursive?: boolean;
+    include?: string[];
+    exclude?: string[];
+  };
 };
 
 type Source =
@@ -55,7 +70,295 @@ type Source =
   | { kind: "stdin" }
   | { kind: "inline"; name: string | null };
 
+type BatchSelection = {
+  readonly recursive: boolean;
+  readonly include: readonly string[];
+  readonly exclude: readonly string[];
+};
+
+function invalidPattern(pattern: string) {
+  if (!pattern || isAbsolute(pattern) || pattern.startsWith("!")) return true;
+  let brackets = 0;
+  let escaped = false;
+  for (const character of pattern) {
+    if (escaped) {
+      escaped = false;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if (character === "[") {
+      brackets++;
+    } else if (character === "]") {
+      if (brackets === 0) return true;
+      brackets--;
+    }
+  }
+  return brackets !== 0;
+}
+
+const normalizedRelativePath = (cwd: string, path: string) =>
+  relative(cwd, path).split(sep).join("/");
+
+export async function resolveBatchInputs(
+  selectors: readonly string[],
+  selection: BatchSelection,
+  cwd: string,
+): Promise<Extract<Source, { kind: "file" }>[]> {
+  for (const pattern of [...selection.include, ...selection.exclude]) {
+    if (invalidPattern(pattern)) {
+      throw new MdPageCountError(
+        "INVALID_ARGUMENT",
+        `Invalid batch pattern: ${pattern}`,
+      );
+    }
+  }
+  const output: Extract<Source, { kind: "file" }>[] = [];
+  const seen = new Set<string>();
+  const add = async (
+    source: Extract<Source, { kind: "file" }>,
+    existing: boolean,
+  ) => {
+    const identity = existing
+      ? await realpath(source.resolvedPath)
+      : source.resolvedPath;
+    if (seen.has(identity)) return;
+    seen.add(identity);
+    output.push(source);
+  };
+  const discoveredSources = async (
+    pattern: string | readonly string[],
+    root: string,
+    excludes: readonly string[],
+    errorPattern: string,
+    directOnly: boolean,
+  ) => {
+    const candidates: Extract<Source, { kind: "file" }>[] = [];
+    try {
+      for await (const matched of glob(pattern, {
+        cwd: root,
+        exclude: excludes,
+      })) {
+        const resolvedPath = resolve(root, matched);
+        const sourcePath = normalizedRelativePath(cwd, resolvedPath);
+        const matchedPath = String(matched).split(sep).join("/");
+        if (directOnly && matchedPath.includes("/")) continue;
+        try {
+          if (!(await stat(resolvedPath)).isFile()) continue;
+        } catch {
+          continue;
+        }
+        candidates.push({
+          kind: "file",
+          path: sourcePath,
+          resolvedPath,
+        });
+      }
+    } catch {
+      throw new MdPageCountError(
+        "INVALID_ARGUMENT",
+        `Invalid batch pattern: ${errorPattern}`,
+      );
+    }
+    candidates.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    const unique: Extract<Source, { kind: "file" }>[] = [];
+    const localSeen = new Set<string>();
+    for (const candidate of candidates) {
+      const identity = await realpath(candidate.resolvedPath);
+      if (localSeen.has(identity)) continue;
+      localSeen.add(identity);
+      unique.push(candidate);
+    }
+    return unique;
+  };
+
+  for (const selector of selectors) {
+    if (!selector) {
+      throw new MdPageCountError(
+        "INVALID_ARGUMENT",
+        "Batch selector must not be empty",
+      );
+    }
+    if (selector === "-") {
+      throw new MdPageCountError(
+        "INVALID_ARGUMENT",
+        "Positional batch does not accept stdin; use --input-jsonl",
+      );
+    }
+    const resolvedSelector = resolve(cwd, selector);
+    let information: Stats | undefined;
+    try {
+      information = await lstat(resolvedSelector);
+    } catch (error) {
+      if (
+        !(
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "ENOENT"
+        )
+      ) {
+        throw error;
+      }
+    }
+    if (information) {
+      if (information.isSymbolicLink()) {
+        try {
+          if ((await stat(resolvedSelector)).isFile()) {
+            await add(
+              {
+                kind: "file",
+                path: selector,
+                resolvedPath: resolvedSelector,
+              },
+              true,
+            );
+            continue;
+          }
+        } catch {}
+        throw new MdPageCountError(
+          "INVALID_ARGUMENT",
+          `Unsupported batch input: ${selector}`,
+        );
+      }
+      if (information.isFile()) {
+        await add(
+          { kind: "file", path: selector, resolvedPath: resolvedSelector },
+          true,
+        );
+        continue;
+      }
+      if (information.isDirectory()) {
+        const include = selection.recursive
+          ? selection.include.map((pattern) =>
+              pattern.includes("/") ? pattern : `**/${pattern}`,
+            )
+          : selection.include.filter((pattern) => !pattern.includes("/"));
+        const exclude = selection.exclude.map((pattern) =>
+          selection.recursive && !pattern.includes("/")
+            ? `**/${pattern}`
+            : pattern,
+        );
+        const matches =
+          include.length === 0
+            ? []
+            : await discoveredSources(
+                include,
+                resolvedSelector,
+                exclude,
+                include[0]!,
+                !selection.recursive,
+              );
+        if (matches.length === 0) {
+          throw new MdPageCountError(
+            "INVALID_ARGUMENT",
+            `Batch selector matched no files: ${selector}`,
+          );
+        }
+        for (const source of matches) await add(source, true);
+        continue;
+      }
+      throw new MdPageCountError(
+        "INVALID_ARGUMENT",
+        `Unsupported batch input: ${selector}`,
+      );
+    }
+
+    if (selector.startsWith("!")) {
+      throw new MdPageCountError(
+        "INVALID_ARGUMENT",
+        `Invalid batch pattern: ${selector}`,
+      );
+    }
+    if (/[*?[\]]/.test(selector)) {
+      if (invalidPattern(selector)) {
+        throw new MdPageCountError(
+          "INVALID_ARGUMENT",
+          `Invalid batch pattern: ${selector}`,
+        );
+      }
+      const exclude = selection.exclude.map((pattern) =>
+        pattern.includes("/") ? pattern : `**/${pattern}`,
+      );
+      const matches = await discoveredSources(
+        selector,
+        cwd,
+        exclude,
+        selector,
+        false,
+      );
+      if (matches.length === 0) {
+        throw new MdPageCountError(
+          "INVALID_ARGUMENT",
+          `Batch selector matched no files: ${selector}`,
+        );
+      }
+      for (const source of matches) await add(source, true);
+      continue;
+    }
+
+    await add(
+      { kind: "file", path: selector, resolvedPath: resolvedSelector },
+      false,
+    );
+  }
+  return output;
+}
 type SequenceState = { sequence: number };
+
+export type OutputFileHandle = {
+  writeFile(bytes: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+};
+export type OutputFileIo = {
+  open(path: string, flags: "wx"): Promise<OutputFileHandle>;
+  unlink(path: string): Promise<void>;
+};
+
+const outputFileIo: OutputFileIo = { open, unlink };
+
+export async function writeOutputExclusive(
+  resolvedPath: string,
+  displayPath: string,
+  bytes: Uint8Array,
+  io: OutputFileIo = outputFileIo,
+): Promise<void> {
+  let handle: OutputFileHandle;
+  try {
+    handle = await io.open(resolvedPath, "wx");
+  } catch (error) {
+    if (
+      error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "EEXIST"
+    ) {
+      throw new MdPageCountError(
+        "OUTPUT_EXISTS",
+        `Output already exists: ${displayPath}`,
+      );
+    }
+    throw new MdPageCountError(
+      "OUTPUT_WRITE_FAILED",
+      `Failed to write output: ${displayPath}`,
+      { cause: error instanceof Error ? error.message : String(error) },
+    );
+  }
+  try {
+    await handle.writeFile(bytes);
+    await handle.close();
+  } catch (error) {
+    try {
+      await handle.close();
+    } catch {}
+    try {
+      await io.unlink(resolvedPath);
+    } catch {}
+    throw new MdPageCountError(
+      "OUTPUT_WRITE_FAILED",
+      `Failed to write output: ${displayPath}`,
+      { cause: error instanceof Error ? error.message : String(error) },
+    );
+  }
+}
 
 function asciiInteger(
   value: string,
@@ -156,7 +459,11 @@ async function fileBytes(path: string, base: string) {
 async function optionsFrom(
   values: CliOptionValues,
   cwd: string,
-): Promise<{ options: MeasureOptions; dependencies: string[] }> {
+): Promise<{
+  options: MeasureOptions;
+  dependencies: string[];
+  batch: SerializableConfig["batch"];
+}> {
   let config: SerializableConfig = {};
   let base = cwd;
   const dependencies: string[] = [];
@@ -172,6 +479,9 @@ async function optionsFrom(
   if (config.pageLimit) options.pageLimit = config.pageLimit;
   if (config.paragraphDiagnostics !== undefined) {
     options.paragraphDiagnostics = config.paragraphDiagnostics;
+  }
+  if (config.sectionDiagnostics !== undefined) {
+    options.sectionDiagnostics = config.sectionDiagnostics;
   }
   if (config.trim !== undefined) options.trim = config.trim;
   if (config.renderer) options.renderer = config.renderer;
@@ -285,6 +595,7 @@ async function optionsFrom(
     options.pageLimit = asciiInteger(values["page-limit"], "--page-limit");
   }
   if (values.paragraphs === true) options.paragraphDiagnostics = true;
+  if (values.sections === true) options.sectionDiagnostics = true;
   if (values.trim === true) options.trim = {};
   if (typeof values["trim-limit"] === "string") {
     options.trim = {
@@ -389,7 +700,14 @@ async function optionsFrom(
     };
   }
   if (Object.keys(layout).length) options.layout = layout;
-  return { options, dependencies };
+  return { options, dependencies, batch: config.batch };
+}
+
+function serializableMeasurement(
+  measurement: MeasurementResult,
+): Omit<MeasurementResult, "generatedDocx"> {
+  const { generatedDocx: _generatedDocx, ...serializable } = measurement;
+  return serializable;
 }
 
 function human(measurement: MeasurementResult) {
@@ -400,6 +718,23 @@ function human(measurement: MeasurementResult) {
   if (deterministic.lastPage) {
     rows.push(
       `Last page: ${deterministic.lastPage.bodyLineEquivalentsUsed.toFixed(2)}/${deterministic.lastPage.bodyLineCapacity} body-line equivalents; ${deterministic.lastPage.visualLines} visual lines`,
+    );
+  }
+  for (const section of deterministic.sections ?? []) {
+    const label =
+      section.heading === null
+        ? "preamble"
+        : `H${section.heading.level} ${JSON.stringify(section.heading.title)}`;
+    const pages =
+      section.pages.length === 0
+        ? "0 pages"
+        : `pages ${section.pages.map((page) => page.page).join(",")} (${section.pageCount})`;
+    const beyond =
+      section.pageBudget && !section.pageBudget.withinLimit
+        ? `; beyond limit ${section.pageBudget.limitPages}: ${section.pageBudget.pagesBeyondLimit.join(",")}`
+        : "";
+    rows.push(
+      `Section ${section.index} (${label}): ${pages}; ${section.visualLines} visual lines; ${section.countedLines} counted lines${beyond}`,
     );
   }
   if (measurement.renderers.word?.status === "ok") {
@@ -441,7 +776,7 @@ function envelope(
     requestId,
     source,
     trigger,
-    measurement,
+    measurement: serializableMeasurement(measurement),
   };
 }
 
@@ -500,6 +835,27 @@ async function executeCli(
   if (command.mode === "batch-files" || command.mode === "batch-jsonl") {
     const values = command.values;
     const base = await optionsFrom(values, runtime.cwd);
+    const batchSources =
+      command.mode === "batch-files"
+        ? await resolveBatchInputs(
+            command.paths,
+            {
+              recursive:
+                values.recursive === true
+                  ? true
+                  : values["no-recursive"] === true
+                    ? false
+                    : (base.batch?.recursive ?? true),
+              include: Array.isArray(values.include)
+                ? values.include
+                : (base.batch?.include ?? ["*.md"]),
+              exclude: Array.isArray(values.exclude)
+                ? values.exclude
+                : (base.batch?.exclude ?? []),
+            },
+            runtime.cwd,
+          )
+        : [];
     let failed = false;
     let over = false;
     if (command.mode === "batch-jsonl") {
@@ -582,9 +938,8 @@ async function executeCli(
         }
       }
     } else {
-      for (const token of command.paths) {
-        const resolvedPath = resolve(runtime.cwd, token);
-        const source: Source = { kind: "file", path: token, resolvedPath };
+      for (const source of batchSources) {
+        const resolvedPath = source.resolvedPath;
         try {
           const measurement = await measureMarkdown(
             await strictUtf8(await readFile(resolvedPath)),
@@ -735,6 +1090,11 @@ async function executeCli(
   }
 
   const loaded = await optionsFrom(command.values, runtime.cwd);
+  const outputPath =
+    typeof command.values.output === "string"
+      ? command.values.output
+      : undefined;
+  if (outputPath) loaded.options.includeGeneratedDocx = true;
   let markdown: string;
   if (command.input.kind === "file") {
     markdown = await strictUtf8(
@@ -750,8 +1110,17 @@ async function executeCli(
     markdown = await strictUtf8(await runtime.readStdin());
   }
   const measurement = await measureMarkdown(markdown, loaded.options);
+  if (outputPath) {
+    await writeOutputExclusive(
+      resolve(runtime.cwd, outputPath),
+      outputPath,
+      measurement.generatedDocx!,
+    );
+  }
   if (command.values.json) {
-    await runtime.writeStdout(`${JSON.stringify(measurement)}\n`);
+    await runtime.writeStdout(
+      `${JSON.stringify(serializableMeasurement(measurement))}\n`,
+    );
   } else {
     await runtime.writeStdout(human(measurement));
     for (const warning of measurement.deterministic.warnings) {

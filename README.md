@@ -13,7 +13,7 @@ md-page-count filing.md --profile frap-32 --paragraphs --trim
 md-page-count filing.md --renderer compare --json
 ```
 
-Standard input is accepted by omitting the file or passing `-`. Human-readable output is the default. Use `--json` for one machine-readable result, `--batch FILE...` for ordered JSONL, `--watch FILE --jsonl` for change streams, and `--inspect-template FILE.docx --json` for bounded, read-only template inspection.
+Standard input is accepted by omitting the file or passing `-`. Human-readable output is the default. Use `--json` for one machine-readable result, `--output FILE.docx` to export the exact generated package for a single input, `--batch INPUT...` for ordered JSONL, `--watch FILE --jsonl` for change streams, and `--inspect-template FILE.docx --json` for bounded, read-only template inspection. Positional batch inputs may be explicit files, directories, or glob patterns; directory discovery is recursive with `*.md` by default and supports repeatable `--include`/`--exclude` patterns plus `--no-recursive`.
 
 ## JavaScript API
 
@@ -33,10 +33,11 @@ const estimate = await estimateMarkdown(markdown, {
 const measured = await measureMarkdown(markdown, {
   profile: "cand-civil",
   renderer: "compare",
+  includeGeneratedDocx: true,
 });
 ```
 
-`estimateMarkdown` runs only the portable deterministic paginator. `measureMarkdown` always computes that estimate and optionally invokes an Office renderer. Both return structured provenance, warnings, physical page count, fractional equivalent-page usage, total and per-page visual-line counts, and last-page metrics; page-limit options also add budget information. Exported TypeScript types describe the complete result.
+`estimateMarkdown` runs only the portable deterministic paginator. `measureMarkdown` always computes that estimate and optionally invokes an Office renderer. Both return structured provenance, warnings, physical page count, fractional equivalent-page usage, total and per-page visual-line counts, and last-page metrics; page-limit options also add budget information. `sectionDiagnostics: true` adds inclusive, source-ordered heading-section page and line attribution under the deterministic result. `includeGeneratedDocx: true` adds the generated `Uint8Array`; Office renderers consume that same buffer. The CLI never serializes these bytes into JSON. Exported TypeScript types describe the complete result.
 
 ## Profiles, fonts, and templates
 
@@ -126,8 +127,8 @@ Tables, code blocks, inline code, images, arbitrary HTML, thematic breaks, YAML,
 
 ## Diagnostics and configuration
 
-Use `--paragraphs` for per-paragraph line and last-line-fill diagnostics. `--trim` reports advisory candidates whose final line is short; `--trim-limit` and `--trim-threshold` tune that report. `--page-limit` adds remaining/over-limit budget data, and `--fail-over-limit` makes an over-limit CLI result fail.
+Use `--paragraphs` for per-paragraph line and last-line-fill diagnostics. `--sections` reports inclusive heading-section page and line usage; with a page limit it also identifies each section touching pages beyond that limit. `--trim` reports advisory candidates whose final line is short; `--trim-limit` and `--trim-threshold` tune that report. `--page-limit` adds remaining/over-limit budget data, and `--fail-over-limit` makes an over-limit CLI result fail.
 
-Pass `--config path/to/config.json` to use a JSON configuration file. Paths inside it are resolved relative to that file; explicit CLI options override config values. Configuration is validated against the exported `md-page-count/config.schema.json` schema. No parent-directory, home-directory, or environment configuration is discovered.
+Pass `--config path/to/config.json` to use a JSON configuration file. Paths inside it are resolved relative to that file; explicit CLI options override config values. Top-level `sectionDiagnostics` enables section output, while `batch.recursive`, `batch.include`, and `batch.exclude` configure positional batch discovery. Configuration is validated against the exported `md-page-count/config.schema.json` schema. No parent-directory, home-directory, or environment configuration is discovered.
 
 Widow/orphan control is enabled by default. Set `layout.pagination.widowOrphanControl` to `false` to disable it in both deterministic pagination and generated DOCX paragraphs; `widowLines` and `orphanLines` continue to configure the enabled minimums and must each be integers of at least 1.
