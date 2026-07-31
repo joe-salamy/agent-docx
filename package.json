@@ -84,7 +84,7 @@
   },
   "devDependencies": {
     "@types/fontkit": "^2.0.8",
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.1.2",
     "@types/yauzl": "3.4.0",
     "prettier": "3.6.2",
     "typescript": "7.0.2"
