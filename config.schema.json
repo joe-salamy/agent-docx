@@ -186,6 +186,36 @@
         "blockquote": { "$ref": "#/$defs/style" },
         "list": { "$ref": "#/$defs/style" },
         "footnote": { "$ref": "#/$defs/style" },
+        "thematicBreak": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "beforeTwips": { "type": "integer", "minimum": 0 },
+            "afterTwips": { "type": "integer", "minimum": 0 },
+            "thicknessTwips": { "type": "integer", "minimum": 1 },
+            "keepWithNext": { "type": "boolean" }
+          }
+        },
+        "table": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "body": { "$ref": "#/$defs/style" },
+            "header": { "$ref": "#/$defs/style" },
+            "cellPaddingTwips": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "top": { "type": "integer", "minimum": 0 },
+                "right": { "type": "integer", "minimum": 0 },
+                "bottom": { "type": "integer", "minimum": 0 },
+                "left": { "type": "integer", "minimum": 0 }
+              }
+            },
+            "borderTwips": { "type": "integer", "minimum": 0 },
+            "repeatHeader": { "type": "boolean" }
+          }
+        },
         "pagination": {
           "type": "object",
           "additionalProperties": false,

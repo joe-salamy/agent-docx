@@ -86,7 +86,8 @@ export async function measureMarkdown(
   const flow = normalizeMarkdown(markdown);
   // Load DOCX generation only when bytes or Office rendering are requested.
   const { generateDocx } = await import("../docx/generate.js");
-  const docx = await generateDocx(flow, deterministic.profile);
+  const generated = await generateDocx(flow, deterministic.profile);
+  const docx = generated.bytes;
   if (options.includeGeneratedDocx === true) output.generatedDocx = docx;
   if (mode === "deterministic") return output;
   const requestedFontFamilies = [deterministic.profile.requestedFontFamily];
@@ -101,6 +102,9 @@ export async function measureMarkdown(
           requestedFontFamilies,
           options.word,
           timeout ?? 120000,
+          options.paragraphDiagnostics || options.trim
+            ? generated.bodyParagraphs
+            : undefined,
         ),
       };
     } catch (error) {

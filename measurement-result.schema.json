@@ -1,0 +1,573 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://md-page-count.dev/schemas/measurement-result-v1.json",
+  "title": "md-page-count serializable measurement result version 1",
+  "$ref": "#/$defs/measurement",
+  "$defs": {
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/point" },
+        "end": { "$ref": "#/$defs/point" }
+      }
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "column", "offset"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 },
+        "offset": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "lineSpacing": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rule", "numerator", "denominator"],
+          "properties": {
+            "rule": { "const": "auto" },
+            "numerator": { "type": "number" },
+            "denominator": { "const": 240 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rule", "twips"],
+          "properties": {
+            "rule": { "enum": ["exact", "atLeast"] },
+            "twips": { "type": "number" }
+          }
+        }
+      ]
+    },
+    "textStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fontSizeTwips",
+        "bold",
+        "italic",
+        "lineSpacing",
+        "beforeTwips",
+        "afterTwips",
+        "leftIndentTwips",
+        "rightIndentTwips",
+        "firstLineIndentTwips",
+        "hangingIndentTwips",
+        "keepWithNext",
+        "keepLines"
+      ],
+      "properties": {
+        "fontSizeTwips": { "type": "number" },
+        "bold": { "type": "boolean" },
+        "italic": { "type": "boolean" },
+        "lineSpacing": { "$ref": "#/$defs/lineSpacing" },
+        "beforeTwips": { "type": "number" },
+        "afterTwips": { "type": "number" },
+        "leftIndentTwips": { "type": "number" },
+        "rightIndentTwips": { "type": "number" },
+        "firstLineIndentTwips": { "type": "number" },
+        "hangingIndentTwips": { "type": "number" },
+        "keepWithNext": { "type": "boolean" },
+        "keepLines": { "type": "boolean" }
+      }
+    },
+    "thematicBreak": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "beforeTwips",
+        "afterTwips",
+        "thicknessTwips",
+        "keepWithNext"
+      ],
+      "properties": {
+        "beforeTwips": { "type": "integer" },
+        "afterTwips": { "type": "integer" },
+        "thicknessTwips": { "type": "integer", "minimum": 1 },
+        "keepWithNext": { "type": "boolean" }
+      }
+    },
+    "tableStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body",
+        "header",
+        "cellPaddingTwips",
+        "borderTwips",
+        "repeatHeader"
+      ],
+      "properties": {
+        "body": { "$ref": "#/$defs/textStyle" },
+        "header": { "$ref": "#/$defs/textStyle" },
+        "cellPaddingTwips": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["top", "right", "bottom", "left"],
+          "properties": {
+            "top": { "type": "integer" },
+            "right": { "type": "integer" },
+            "bottom": { "type": "integer" },
+            "left": { "type": "integer" }
+          }
+        },
+        "borderTwips": { "type": "integer" },
+        "repeatHeader": { "type": "boolean" }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "widthTwips",
+        "heightTwips",
+        "marginsTwips",
+        "headerTwips",
+        "footerTwips",
+        "gutterTwips"
+      ],
+      "properties": {
+        "widthTwips": { "type": "number" },
+        "heightTwips": { "type": "number" },
+        "marginsTwips": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["top", "right", "bottom", "left"],
+          "properties": {
+            "top": { "type": "number" },
+            "right": { "type": "number" },
+            "bottom": { "type": "number" },
+            "left": { "type": "number" }
+          }
+        },
+        "headerTwips": { "type": "number" },
+        "footerTwips": { "type": "number" },
+        "gutterTwips": { "type": "number" }
+      }
+    },
+    "jsonValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/$defs/jsonValue" } },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+        }
+      ]
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "severity": { "const": "warning" },
+        "message": { "type": "string" },
+        "position": { "$ref": "#/$defs/position" },
+        "details": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "effectiveDate",
+        "sourceUrl",
+        "sourceCitation",
+        "page",
+        "requestedFontFamily",
+        "body",
+        "headings",
+        "blockquote",
+        "list",
+        "footnote",
+        "pagination",
+        "thematicBreak",
+        "table",
+        "maxCharactersPerInch",
+        "filingPageLimits",
+        "provenance",
+        "warnings",
+        "metricFonts",
+        "template"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "effectiveDate": { "type": ["string", "null"] },
+        "sourceUrl": { "type": ["string", "null"] },
+        "sourceCitation": { "type": "string" },
+        "page": { "$ref": "#/$defs/page" },
+        "requestedFontFamily": { "type": "string" },
+        "body": { "$ref": "#/$defs/textStyle" },
+        "headings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["1", "2", "3", "4", "5", "6"],
+          "properties": {
+            "1": { "$ref": "#/$defs/textStyle" },
+            "2": { "$ref": "#/$defs/textStyle" },
+            "3": { "$ref": "#/$defs/textStyle" },
+            "4": { "$ref": "#/$defs/textStyle" },
+            "5": { "$ref": "#/$defs/textStyle" },
+            "6": { "$ref": "#/$defs/textStyle" }
+          }
+        },
+        "blockquote": { "$ref": "#/$defs/textStyle" },
+        "list": { "$ref": "#/$defs/textStyle" },
+        "footnote": { "$ref": "#/$defs/textStyle" },
+        "pagination": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "widowOrphanControl",
+            "widowLines",
+            "orphanLines",
+            "maxCountedLinesPerPage",
+            "lineCapExclusions"
+          ],
+          "properties": {
+            "widowOrphanControl": { "type": "boolean" },
+            "widowLines": { "type": "integer" },
+            "orphanLines": { "type": "integer" },
+            "maxCountedLinesPerPage": { "type": ["integer", "null"] },
+            "lineCapExclusions": {
+              "type": "array",
+              "items": { "enum": ["footnote", "blockquote"] },
+              "uniqueItems": true
+            }
+          }
+        },
+        "thematicBreak": { "$ref": "#/$defs/thematicBreak" },
+        "table": { "$ref": "#/$defs/tableStyle" },
+        "maxCharactersPerInch": { "type": ["number", "null"] },
+        "filingPageLimits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "principal-brief": { "type": "number" },
+            "reply-brief": { "type": "number" },
+            "motion-document": { "type": "number" },
+            "opposition-text": { "type": "number" },
+            "reply-text": { "type": "number" }
+          }
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source"],
+            "properties": {
+              "source": {
+                "enum": ["rule", "package", "template", "override", "fallback"]
+              },
+              "citation": { "type": "string" },
+              "detail": { "type": "string" }
+            }
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/diagnostic" }
+        },
+        "metricFonts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "role",
+              "requestedFamily",
+              "metricsFamily",
+              "sha256",
+              "substitutedMetrics"
+            ],
+            "properties": {
+              "role": { "enum": ["regular", "bold", "italic", "boldItalic"] },
+              "requestedFamily": { "type": "string" },
+              "metricsFamily": { "type": "string" },
+              "sha256": { "type": "string" },
+              "substitutedMetrics": { "type": "boolean" }
+            }
+          }
+        },
+        "template": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "packageSha256",
+                "mainPart",
+                "selectedSection",
+                "macroEnabled",
+                "warnings"
+              ],
+              "properties": {
+                "packageSha256": { "type": "string" },
+                "mainPart": { "type": "string" },
+                "selectedSection": { "type": "integer" },
+                "macroEnabled": { "type": "boolean" },
+                "warnings": {
+                  "type": "array",
+                  "items": { "$ref": "#/$defs/diagnostic" }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "lastPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "visualLines",
+        "usedTwips",
+        "usableTwips",
+        "bodyLineEquivalentsUsed",
+        "bodyLineCapacity"
+      ],
+      "properties": {
+        "source": { "const": "deterministic" },
+        "visualLines": { "type": "integer" },
+        "usedTwips": { "type": "number" },
+        "usableTwips": { "type": "number" },
+        "bodyLineEquivalentsUsed": { "type": "number" },
+        "bodyLineCapacity": { "type": "integer" }
+      }
+    },
+    "reduction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["estimatedRemovalTwips", "basis", "confidence"],
+      "properties": {
+        "estimatedRemovalTwips": { "type": "number" },
+        "basis": { "const": "deterministic-tail-width-deficit" },
+        "confidence": { "const": "heuristic" }
+      }
+    },
+    "paragraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "index",
+        "position",
+        "startPage",
+        "endPage",
+        "visualLines",
+        "lastLineText",
+        "lastLineTextRange",
+        "lastLineSourceRanges",
+        "lastLineUsedTwips",
+        "lastLineAvailableTwips",
+        "lastLineUnusedTwips",
+        "lastLineRatio",
+        "lastLineOverflow",
+        "penultimateLineText",
+        "penultimateLineUnusedTwips",
+        "oneLineReduction",
+        "preview"
+      ],
+      "properties": {
+        "source": { "const": "deterministic" },
+        "index": { "type": "integer", "minimum": 0 },
+        "position": { "$ref": "#/$defs/position" },
+        "startPage": { "type": "integer", "minimum": 1 },
+        "endPage": { "type": "integer", "minimum": 1 },
+        "visualLines": { "type": "integer", "minimum": 1 },
+        "lastLineText": { "type": "string" },
+        "lastLineTextRange": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "properties": {
+            "start": { "type": "integer", "minimum": 0 },
+            "end": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "lastLineSourceRanges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["position", "precision"],
+            "properties": {
+              "position": { "$ref": "#/$defs/position" },
+              "precision": { "enum": ["exact", "node"] }
+            }
+          }
+        },
+        "lastLineUsedTwips": { "type": "number" },
+        "lastLineAvailableTwips": { "type": "number" },
+        "lastLineUnusedTwips": { "type": "number" },
+        "lastLineRatio": { "type": "number" },
+        "lastLineOverflow": { "type": "boolean" },
+        "penultimateLineText": { "type": ["string", "null"] },
+        "penultimateLineUnusedTwips": { "type": ["number", "null"] },
+        "oneLineReduction": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/reduction" }]
+        },
+        "preview": { "type": "string" },
+        "rank": { "type": "integer", "minimum": 1 },
+        "message": {
+          "const": "This block may lose one wrapped line after removing or rephrasing approximately the reported width; verify by re-running pagination."
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limitPages",
+        "withinLimit",
+        "pagesRemaining",
+        "equivalentPagesRemaining",
+        "bodyLineEquivalentsRemaining",
+        "fractionalFieldsSource"
+      ],
+      "properties": {
+        "limitPages": { "type": "number" },
+        "withinLimit": { "type": "boolean" },
+        "pagesRemaining": { "type": "number" },
+        "equivalentPagesRemaining": { "type": "number" },
+        "bodyLineEquivalentsRemaining": { "type": "number" },
+        "fractionalFieldsSource": { "const": "deterministic" }
+      }
+    },
+    "deterministic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "pageCount",
+        "equivalentPages",
+        "totalVisualLines",
+        "visualLinesByPage",
+        "lastPage",
+        "profile",
+        "warnings"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "pageCount": { "type": "integer", "minimum": 1 },
+        "equivalentPages": { "type": "number" },
+        "totalVisualLines": { "type": "integer" },
+        "visualLinesByPage": {
+          "type": "array",
+          "items": { "type": "integer" }
+        },
+        "lastPage": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/lastPage" }]
+        },
+        "profile": { "$ref": "#/$defs/profile" },
+        "warnings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/diagnostic" }
+        },
+        "paragraphs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/paragraph" }
+        },
+        "trimOpportunities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/paragraph" }
+        },
+        "sections": { "type": "array", "items": { "type": "object" } },
+        "budget": { "$ref": "#/$defs/budget" }
+      }
+    },
+    "rendererError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "phase"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "phase": { "type": "string" },
+        "details": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+        }
+      }
+    },
+    "rendererStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": { "const": "ok" },
+            "value": { "type": "object" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "error"],
+          "properties": {
+            "status": { "enum": ["unavailable", "error"] },
+            "error": { "$ref": "#/$defs/rendererError" }
+          }
+        }
+      ]
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "mode",
+        "pageCount",
+        "pageCountSource",
+        "deterministic",
+        "renderers"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "mode": { "enum": ["deterministic", "word", "libreoffice", "compare"] },
+        "pageCount": { "type": "integer", "minimum": 1 },
+        "pageCountSource": { "enum": ["deterministic", "word", "libreoffice"] },
+        "deterministic": { "$ref": "#/$defs/deterministic" },
+        "renderers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "word": { "$ref": "#/$defs/rendererStatus" },
+            "libreoffice": { "$ref": "#/$defs/rendererStatus" }
+          }
+        },
+        "budget": { "$ref": "#/$defs/budget" },
+        "budgetBySource": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "deterministic": { "$ref": "#/$defs/budget" },
+            "word": { "$ref": "#/$defs/budget" },
+            "libreoffice": { "$ref": "#/$defs/budget" }
+          }
+        }
+      }
+    }
+  }
+}

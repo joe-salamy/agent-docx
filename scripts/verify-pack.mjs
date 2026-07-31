@@ -16,6 +16,24 @@ const expectedMetricFonts = manifest.fonts.map(({ sha256 }, index) => ({
   metricsFamily: "Liberation Serif",
   sha256,
 }));
+const schemaNames = [
+  "cli-request.schema.json",
+  "measurement-result.schema.json",
+  "docx-template-inspection.schema.json",
+  "cli-jsonl.schema.json",
+  "cli-error.schema.json",
+  "profile-catalog.schema.json",
+];
+const fontPrefix = "assets/fonts/liberation-serif-2.1.5/";
+const requiredAssets = [
+  "assets/word/render.ps1",
+  ...manifest.fonts.map(({ file }) => `${fontPrefix}${file}`),
+  `${fontPrefix}manifest.json`,
+  `${fontPrefix}OFL-1.1.txt`,
+  ...schemaNames,
+];
+const npmExecutable = process.env.npm_execpath ? process.execPath : "npm";
+const npmArguments = process.env.npm_execpath ? [process.env.npm_execpath] : [];
 
 function run(command, args, cwd) {
   const { promise, resolve: done, reject } = Promise.withResolvers();
@@ -41,8 +59,15 @@ const packDir = await mkdtemp(join(tmpdir(), "md-page-count-pack-"));
 const installDir = await mkdtemp(join(tmpdir(), "md-page-count-install-"));
 try {
   const packed = await run(
-    "npm",
-    ["pack", "--json", "--pack-destination", packDir],
+    npmExecutable,
+    [
+      ...npmArguments,
+      "pack",
+      "--ignore-scripts",
+      "--json",
+      "--pack-destination",
+      packDir,
+    ],
     process.cwd(),
   );
   const info = JSON.parse(packed.stdout)[0];
@@ -62,25 +87,21 @@ try {
       `Archive contains forbidden files: ${forbidden.join(", ")}`,
     );
   }
-  const allowed =
-    /^(?:package\.json|README\.md|LICENSE|THIRD_PARTY_NOTICES\.txt|config\.schema\.json|dist\/|assets\/)/;
-  const unexpected = paths.filter((path) => !allowed.test(path));
+  const allowed = (path) =>
+    /^(?:package\.json|README\.md|LICENSE|THIRD_PARTY_NOTICES\.txt|(?:config|cli-request|measurement-result|docx-template-inspection|cli-jsonl|cli-error|profile-catalog)\.schema\.json|dist\/)/.test(
+      path,
+    ) || requiredAssets.includes(path);
+  const unexpected = paths.filter((path) => !allowed(path));
   if (unexpected.length) {
     throw new Error(
       `Archive contains unexpected files: ${unexpected.join(", ")}`,
     );
   }
 
-  const fontPrefix = "assets/fonts/liberation-serif-2.1.5/";
-  const requiredAssets = [
-    ...manifest.fonts.map(({ file }) => `${fontPrefix}${file}`),
-    `${fontPrefix}manifest.json`,
-    `${fontPrefix}OFL-1.1.txt`,
-  ];
   const missingAssets = requiredAssets.filter((path) => !paths.includes(path));
   if (missingAssets.length) {
     throw new Error(
-      `Archive is missing font assets: ${missingAssets.join(", ")}`,
+      `Archive is missing required files: ${missingAssets.join(", ")}`,
     );
   }
 
@@ -89,7 +110,11 @@ try {
     JSON.stringify({ name: "pack-smoke", private: true, type: "module" }),
   );
   const tgz = resolve(packDir, info.filename);
-  await run("npm", ["install", "--ignore-scripts", tgz], installDir);
+  await run(
+    npmExecutable,
+    [...npmArguments, "install", "--ignore-scripts", tgz],
+    installDir,
+  );
   const expected = JSON.stringify(expectedMetricFonts);
   await run(
     process.execPath,
@@ -100,7 +125,20 @@ try {
     ],
     installDir,
   );
-  await run("npm", ["exec", "--", "md-page-count", "--version"], installDir);
+  await run(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import {readFile} from "node:fs/promises"; import {createRequire} from "node:module"; import {Ajv2020} from "ajv/dist/2020.js"; const require=createRequire(import.meta.url); const names=${JSON.stringify(schemaNames)}; const schemas=await Promise.all(names.map(async name=>JSON.parse(await readFile(require.resolve("md-page-count/"+name),"utf8")))); const ajv=new Ajv2020({strict:true,allowUnionTypes:true}); for(const schema of schemas) ajv.addSchema(schema); for(const schema of schemas) ajv.getSchema(schema.$id);`,
+    ],
+    installDir,
+  );
+  await run(
+    npmExecutable,
+    [...npmArguments, "exec", "--", "md-page-count", "--version"],
+    installDir,
+  );
   console.log(`Verified ${info.filename} (${info.files.length} files)`);
 } finally {
   await Promise.all([

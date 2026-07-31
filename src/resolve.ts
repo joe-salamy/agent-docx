@@ -72,6 +72,8 @@ export function resolveProfile(options: EstimateOptions): LayoutProfile {
     blockquote: p.blockquote,
     list: p.list,
     footnote: p.footnote,
+    thematicBreak: p.thematicBreak,
+    table: p.table,
   });
   const apply = (
     o: typeof options.layout | undefined,
@@ -97,6 +99,19 @@ export function resolveProfile(options: EstimateOptions): LayoutProfile {
     if (o.blockquote) p.blockquote = mergeStyle(p.blockquote, o.blockquote);
     if (o.list) p.list = mergeStyle(p.list, o.list);
     if (o.footnote) p.footnote = mergeStyle(p.footnote, o.footnote);
+    if (o.thematicBreak)
+      p.thematicBreak = { ...p.thematicBreak, ...o.thematicBreak };
+    if (o.table)
+      p.table = {
+        ...p.table,
+        ...o.table,
+        body: mergeStyle(p.table.body, o.table.body),
+        header: mergeStyle(p.table.header, o.table.header),
+        cellPaddingTwips: {
+          ...p.table.cellPaddingTwips,
+          ...o.table.cellPaddingTwips,
+        },
+      };
     if (o.pagination) p.pagination = { ...p.pagination, ...o.pagination };
     p.provenance = { ...p.provenance, "": { source } };
   };
@@ -110,6 +125,8 @@ export function resolveProfile(options: EstimateOptions): LayoutProfile {
     blockquote: p.blockquote,
     list: p.list,
     footnote: p.footnote,
+    thematicBreak: p.thematicBreak,
+    table: p.table,
   });
   if ((p.id === "frap-32" || p.id === "cand-civil") && actual !== original)
     p.warnings = [
@@ -158,6 +175,8 @@ export function validateProfile(p: LayoutProfile) {
     p.blockquote,
     p.list,
     p.footnote,
+    p.table.body,
+    p.table.header,
   ]) {
     finite("fontSizeTwips", s.fontSizeTwips, 1);
     for (const n of [
@@ -177,6 +196,32 @@ export function validateProfile(p: LayoutProfile) {
           "Auto line spacing denominator must be 240",
         );
     } else finite("lineSpacing.twips", s.lineSpacing.twips, 1);
+  }
+  for (const [name, value] of Object.entries({
+    "thematicBreak.beforeTwips": p.thematicBreak.beforeTwips,
+    "thematicBreak.afterTwips": p.thematicBreak.afterTwips,
+    "table.cellPaddingTwips.top": p.table.cellPaddingTwips.top,
+    "table.cellPaddingTwips.right": p.table.cellPaddingTwips.right,
+    "table.cellPaddingTwips.bottom": p.table.cellPaddingTwips.bottom,
+    "table.cellPaddingTwips.left": p.table.cellPaddingTwips.left,
+    "table.borderTwips": p.table.borderTwips,
+  })) {
+    finite(name, value, 0, true);
+  }
+  finite(
+    "thematicBreak.thicknessTwips",
+    p.thematicBreak.thicknessTwips,
+    1,
+    true,
+  );
+  if (
+    typeof p.thematicBreak.keepWithNext !== "boolean" ||
+    typeof p.table.repeatHeader !== "boolean"
+  ) {
+    throw new MdPageCountError(
+      "INVALID_LAYOUT",
+      "Thematic-break and table boolean values must be booleans",
+    );
   }
   if (typeof p.pagination.widowOrphanControl !== "boolean")
     throw new MdPageCountError(

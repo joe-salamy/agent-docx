@@ -5,14 +5,18 @@ import type {
   InlineRun,
   NormalizedDocument,
   SectionIndex,
+  TableFlowBlock,
+  TextFlowBlock,
 } from "../markdown.js";
 import type { LoadedFonts } from "../resolve.js";
-import type {
-  Diagnostic,
-  LayoutProfile,
-  ParagraphDiagnostic,
-  TextStyle,
-  SectionDiagnostic,
+import {
+  MdPageCountError,
+  type Diagnostic,
+  type LayoutProfile,
+  type ParagraphDiagnostic,
+  type TextStyle,
+  type SectionDiagnostic,
+  type SourcePosition,
 } from "../types.js";
 
 export type PaginationOutput = {
@@ -39,9 +43,16 @@ type WrappedLine = {
   text: string;
   block: FlowBlock;
   counted: boolean;
+  visualCount: number;
+  countedCount: number;
   start: number;
   end: number;
+  contentEnd: number;
+  startCause: "soft" | "hard" | "start";
+  overflowed: boolean;
   footnoteRefs: string[];
+  rowStart?: boolean;
+  rowEnd?: boolean;
 };
 
 type PlacedFootnoteLine = {
@@ -62,7 +73,8 @@ type Page = {
 
 type PendingFootnote = {
   footnoteId: string;
-  lines: readonly WrappedLine[];
+  blocks: readonly (readonly WrappedLine[])[];
+  blockIndex: number;
   nextLine: number;
   warningEmitted: boolean;
   ownerIndex: number;
@@ -78,6 +90,7 @@ type WrappedBlock = {
   block: FlowBlock;
   style: TextStyle;
   lines: WrappedLine[];
+  headerLineCount?: number;
 };
 
 type Snapshot = {
@@ -111,7 +124,7 @@ function width(font: Font, text: string, size: number) {
 }
 
 function candidateWidth(
-  block: FlowBlock,
+  block: TextFlowBlock,
   start: number,
   end: number,
   fonts: LoadedFonts,
@@ -137,7 +150,7 @@ function candidateWidth(
 
 function naturalHeight(
   fonts: LoadedFonts,
-  block: FlowBlock,
+  block: TextFlowBlock,
   style: TextStyle,
   start: number,
   end: number,
@@ -170,7 +183,7 @@ function linePitch(natural: number, style: TextStyle) {
 }
 
 function warnMissingGlyphs(
-  block: FlowBlock,
+  block: TextFlowBlock,
   style: TextStyle,
   fonts: LoadedFonts,
   warnings: Diagnostic[],
@@ -192,7 +205,7 @@ function warnMissingGlyphs(
   }
 }
 
-function referencesInRange(block: FlowBlock, start: number, end: number) {
+function referencesInRange(block: TextFlowBlock, start: number, end: number) {
   const references: string[] = [];
   let cursor = 0;
   for (const run of block.runs) {
@@ -204,9 +217,62 @@ function referencesInRange(block: FlowBlock, start: number, end: number) {
   }
   return references;
 }
+const advanceSourcePoint = (
+  point: SourcePosition["start"],
+  text: string,
+): SourcePosition["start"] => {
+  let line = point.line;
+  let column = point.column;
+  for (const character of text) {
+    if (character === "\n") {
+      line++;
+      column = 1;
+    } else {
+      column++;
+    }
+  }
+  return { line, column, offset: point.offset + text.length };
+};
+
+const sourceRangesFor = (
+  block: TextFlowBlock,
+  start: number,
+  end: number,
+): readonly {
+  position: SourcePosition;
+  precision: "exact" | "node";
+}[] => {
+  const selected =
+    start === end
+      ? block.sourceSegments.filter(
+          (segment) =>
+            segment.normalizedEnd === start ||
+            (segment.normalizedStart <= start && segment.normalizedEnd > start),
+        )
+      : block.sourceSegments.filter(
+          (segment) =>
+            segment.normalizedStart < end && segment.normalizedEnd > start,
+        );
+  return selected.map((segment) => {
+    if (segment.precision === "node")
+      return { position: segment.position, precision: segment.precision };
+    const from = Math.max(start, segment.normalizedStart);
+    const to = Math.min(end, segment.normalizedEnd);
+    const before = block.normalizedText.slice(segment.normalizedStart, from);
+    const selectedText = block.normalizedText.slice(from, to);
+    const rangeStart = advanceSourcePoint(segment.position.start, before);
+    return {
+      position: {
+        start: rangeStart,
+        end: advanceSourcePoint(rangeStart, selectedText),
+      },
+      precision: segment.precision,
+    };
+  });
+};
 
 function wrap(
-  block: FlowBlock,
+  block: TextFlowBlock,
   style: TextStyle,
   available: number,
   fonts: LoadedFonts,
@@ -214,26 +280,32 @@ function wrap(
   lineCapExclusions: LayoutProfile["pagination"]["lineCapExclusions"],
 ): WrappedLine[] {
   warnMissingGlyphs(block, style, fonts, warnings);
-  const text = block.runs.map((run) => run.text).join("");
+  const text = block.normalizedText;
   const lines: WrappedLine[] = [];
   const counted =
     block.kind !== "footnote" && block.kind !== "blockquote"
       ? true
       : !lineCapExclusions.includes(block.kind);
+  const hardBreaks = [...text.matchAll(/\n/g)].map((match) => match.index ?? 0);
+  const segmentEnds = [...hardBreaks, text.length];
   let segmentStart = 0;
-  const mandatory = [...text.matchAll(/\n/g)].map(
-    (match) => (match.index ?? 0) + 1,
-  );
-  mandatory.push(text.length);
-  for (const segmentEndWithBreak of mandatory) {
-    const segmentEnd =
-      segmentEndWithBreak < text.length
-        ? segmentEndWithBreak - 1
-        : segmentEndWithBreak;
+  for (
+    let segmentIndex = 0;
+    segmentIndex < segmentEnds.length;
+    segmentIndex++
+  ) {
+    const segmentEnd = segmentEnds[segmentIndex]!;
     let start = segmentStart;
+    const segmentCause: WrappedLine["startCause"] =
+      segmentIndex === 0 ? "start" : "hard";
     if (start === segmentEnd) {
-      const end = Math.min(text.length, start + 1);
-      const natural = naturalHeight(fonts, block, style, start, end);
+      const natural = naturalHeight(
+        fonts,
+        block,
+        style,
+        Math.max(0, start - 1),
+        start,
+      );
       const lineAvailable =
         available -
         (lines.length === 0
@@ -246,11 +318,17 @@ function wrap(
         text: "",
         block,
         counted,
+        visualCount: 1,
+        countedCount: counted ? 1 : 0,
         start,
         end: segmentEnd,
-        footnoteRefs: referencesInRange(block, start, segmentEnd),
+        contentEnd: segmentEnd,
+        startCause: segmentCause,
+        overflowed: false,
+        footnoteRefs: [],
       });
     }
+    let lineInSegment = 0;
     while (start < segmentEnd) {
       const lineAvailable =
         available -
@@ -264,20 +342,21 @@ function wrap(
         opportunities.push(start + nextBreak.position);
       }
       if (opportunities.at(-1) !== segmentEnd) opportunities.push(segmentEnd);
-      const measuredEnd = (end: number) => {
-        while (end > start && text[end - 1] === " ") end--;
-        return end;
+      const measuredEnd = (candidateEnd: number) => {
+        while (candidateEnd > start && text[candidateEnd - 1] === " ")
+          candidateEnd--;
+        return candidateEnd;
       };
       let chosen = start;
-      for (const end of opportunities) {
+      for (const candidateEnd of opportunities) {
         const used = candidateWidth(
           block,
           start,
-          measuredEnd(end),
+          measuredEnd(candidateEnd),
           fonts,
           style,
         );
-        if (used <= lineAvailable) chosen = end;
+        if (used <= lineAvailable) chosen = candidateEnd;
         else break;
       }
       if (chosen === start) {
@@ -296,22 +375,262 @@ function wrap(
         used,
         available: lineAvailable,
         height: linePitch(natural, style),
-        text: text.slice(start, chosen).trimEnd(),
+        text: text.slice(start, contentEnd),
         block,
         counted,
+        visualCount: 1,
+        countedCount: counted ? 1 : 0,
         start,
         end: chosen,
+        contentEnd,
+        startCause: lineInSegment === 0 ? segmentCause : "soft",
+        overflowed: used > lineAvailable,
         footnoteRefs: referencesInRange(block, start, chosen),
       });
+      lineInSegment++;
       start = chosen;
       while (text[start] === " ") start++;
     }
-    segmentStart = segmentEndWithBreak;
+    segmentStart = segmentEnd + 1;
   }
   return lines;
 }
+type WrappedTable = {
+  lines: WrappedLine[];
+  headerLineCount: number;
+  gridWidths: number[];
+};
 
-function styleFor(profile: LayoutProfile, block: FlowBlock) {
+function allocateTableColumns(
+  block: TableFlowBlock,
+  profile: LayoutProfile,
+  fonts: LoadedFonts,
+  usableWidth: number,
+): number[] {
+  const columnCount = block.rows[0]?.length ?? 0;
+  if (columnCount === 0)
+    throw new MdPageCountError(
+      "INVALID_LAYOUT",
+      "A table must contain at least one column.",
+      { position: block.position as unknown as Record<string, never> },
+    );
+  const styleFloor = (style: TextStyle) =>
+    Math.max(0, style.leftIndentTwips) +
+    Math.max(0, style.rightIndentTwips) +
+    Math.max(0, style.firstLineIndentTwips - style.hangingIndentTwips);
+  const fixed =
+    profile.table.cellPaddingTwips.left +
+    profile.table.cellPaddingTwips.right +
+    2 * profile.table.borderTwips;
+  const structuralFloor =
+    fixed +
+    Math.max(styleFloor(profile.table.header), styleFloor(profile.table.body)) +
+    1;
+  const widths = Array<number>(columnCount).fill(structuralFloor);
+  if (widths.reduce((total, value) => total + value, 0) > usableWidth)
+    throw new MdPageCountError(
+      "INVALID_LAYOUT",
+      "Table structural column floors exceed the usable page width.",
+      { position: block.position as unknown as Record<string, never> },
+    );
+  const minimums = [...widths];
+  const preferred = [...widths];
+  for (let rowIndex = 0; rowIndex < block.rows.length; rowIndex++) {
+    const style = rowIndex === 0 ? profile.table.header : profile.table.body;
+    const structural = fixed + styleFloor(style);
+    const row = block.rows[rowIndex]!;
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+      const cell = row[columnIndex];
+      if (!cell) continue;
+      const cellBlock: TextFlowBlock = {
+        kind: "paragraph",
+        runs: cell.runs,
+        normalizedText: cell.normalizedText,
+        sourceSegments: cell.sourceSegments,
+        position: cell.position,
+        footnoteRefs: [],
+      };
+      let unbreakable = 0;
+      let tokenStart = 0;
+      const breaker = new LineBreaker(cell.normalizedText);
+      let opportunity;
+      while ((opportunity = breaker.nextBreak()) !== null) {
+        const tokenEnd = opportunity.position;
+        unbreakable = Math.max(
+          unbreakable,
+          candidateWidth(cellBlock, tokenStart, tokenEnd, fonts, style),
+        );
+        tokenStart = tokenEnd;
+      }
+      unbreakable = Math.max(
+        unbreakable,
+        candidateWidth(
+          cellBlock,
+          tokenStart,
+          cell.normalizedText.length,
+          fonts,
+          style,
+        ),
+      );
+      minimums[columnIndex] = Math.max(
+        minimums[columnIndex]!,
+        structural + Math.max(1, unbreakable),
+      );
+      preferred[columnIndex] = Math.max(
+        preferred[columnIndex]!,
+        structural +
+          Math.max(
+            1,
+            candidateWidth(
+              cellBlock,
+              0,
+              cell.normalizedText.length,
+              fonts,
+              style,
+            ),
+          ),
+      );
+    }
+  }
+  const growToward = (targets: readonly number[]) => {
+    let remaining =
+      usableWidth - widths.reduce((total, value) => total + value, 0);
+    const deficits = targets.map((target, index) =>
+      Math.max(0, target - widths[index]!),
+    );
+    const totalDeficit = deficits.reduce((total, value) => total + value, 0);
+    if (remaining <= 0 || totalDeficit === 0) return;
+    const allocation = deficits.map((deficit) =>
+      Math.floor((Math.min(remaining, totalDeficit) * deficit) / totalDeficit),
+    );
+    const used = allocation.reduce((total, value) => total + value, 0);
+    let leftover = Math.min(remaining, totalDeficit) - used;
+    const order = deficits
+      .map((deficit, index) => ({
+        index,
+        fraction:
+          (Math.min(remaining, totalDeficit) * deficit) / totalDeficit -
+          allocation[index]!,
+      }))
+      .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+    for (const entry of order) {
+      if (leftover-- <= 0) break;
+      allocation[entry.index]!++;
+    }
+    for (let index = 0; index < widths.length; index++)
+      widths[index]! += allocation[index]!;
+  };
+  growToward(minimums);
+  growToward(preferred);
+  let surplus = usableWidth - widths.reduce((total, value) => total + value, 0);
+  for (let index = 0; surplus > 0; index = (index + 1) % widths.length) {
+    widths[index]!++;
+    surplus--;
+  }
+  return widths;
+}
+
+function wrapTable(
+  block: TableFlowBlock,
+  profile: LayoutProfile,
+  fonts: LoadedFonts,
+  usableWidth: number,
+  usableHeight: number,
+  warnings: Diagnostic[],
+): WrappedTable {
+  const gridWidths = allocateTableColumns(block, profile, fonts, usableWidth);
+  const lines: WrappedLine[] = [];
+  let headerLineCount = 0;
+  let relaxed = false;
+  for (let rowIndex = 0; rowIndex < block.rows.length; rowIndex++) {
+    const row = block.rows[rowIndex]!;
+    const style = rowIndex === 0 ? profile.table.header : profile.table.body;
+    const cells = row.map((cell, columnIndex) => {
+      const cellBlock: TextFlowBlock = {
+        kind: "paragraph",
+        runs: cell.runs,
+        normalizedText: cell.normalizedText,
+        sourceSegments: cell.sourceSegments,
+        position: cell.position,
+        footnoteRefs: [],
+      };
+      const available =
+        gridWidths[columnIndex]! -
+        profile.table.cellPaddingTwips.left -
+        profile.table.cellPaddingTwips.right -
+        2 * profile.table.borderTwips -
+        style.leftIndentTwips -
+        style.rightIndentTwips;
+      return wrap(
+        cellBlock,
+        style,
+        available,
+        fonts,
+        warnings,
+        profile.pagination.lineCapExclusions,
+      );
+    });
+    const bandCount = Math.max(
+      1,
+      ...cells.map((cellLines) => cellLines.length),
+    );
+    const rowLines: WrappedLine[] = [];
+    for (let bandIndex = 0; bandIndex < bandCount; bandIndex++) {
+      const top =
+        bandIndex === 0
+          ? profile.table.cellPaddingTwips.top +
+            profile.table.borderTwips +
+            style.beforeTwips
+          : 0;
+      const bottom =
+        bandIndex === bandCount - 1
+          ? profile.table.cellPaddingTwips.bottom +
+            profile.table.borderTwips +
+            style.afterTwips
+          : 0;
+      const bandHeight = Math.max(
+        0,
+        ...cells.map((cellLines) => cellLines[bandIndex]?.height ?? 0),
+      );
+      rowLines.push({
+        used: usableWidth,
+        available: usableWidth,
+        height: top + bandHeight + bottom,
+        text: "",
+        block,
+        counted: true,
+        visualCount: 1,
+        countedCount: 1,
+        start: 0,
+        end: 0,
+        contentEnd: 0,
+        startCause: "start",
+        overflowed: false,
+        footnoteRefs: [],
+        rowStart: bandIndex === 0,
+        rowEnd: bandIndex === bandCount - 1,
+      });
+    }
+    if (
+      rowLines.reduce((total, line) => total + line.height, 0) > usableHeight &&
+      !relaxed
+    ) {
+      relaxed = true;
+      warnings.push({
+        code: "TABLE_ROW_SPLIT_CONSTRAINT_RELAXED",
+        severity: "warning",
+        message:
+          "An intrinsically oversized table row was split across page bands.",
+        position: block.position,
+      });
+    }
+    lines.push(...rowLines);
+    if (rowIndex === 0) headerLineCount = lines.length;
+  }
+  return { lines, headerLineCount, gridWidths };
+}
+
+function styleFor(profile: LayoutProfile, block: TextFlowBlock) {
   return block.kind === "heading"
     ? profile.headings[String(block.level ?? 1) as "1"]
     : block.kind === "blockquote"
@@ -406,9 +725,66 @@ export function paginate(
     profile.page.marginsTwips.top -
     profile.page.marginsTwips.bottom;
   const warnings: Diagnostic[] = [];
+  const headerRepeatWarnings = new Set<FlowBlock>();
   const bodyBlocks: WrappedBlock[] = document.blocks.map((block) => {
-    if (block.kind === "pagebreak") {
+    if (block.kind === "pagebreak")
       return { block, style: profile.body, lines: [] };
+    if (block.kind === "thematic-break") {
+      const style: TextStyle = {
+        ...profile.body,
+        beforeTwips: profile.thematicBreak.beforeTwips,
+        afterTwips: profile.thematicBreak.afterTwips,
+        keepWithNext: profile.thematicBreak.keepWithNext,
+        keepLines: true,
+        lineSpacing: {
+          rule: "exact",
+          twips: profile.thematicBreak.thicknessTwips,
+        },
+      };
+      return {
+        block,
+        style,
+        lines: [
+          {
+            used: usableWidth,
+            available: usableWidth,
+            height: profile.thematicBreak.thicknessTwips,
+            text: "",
+            block,
+            counted: false,
+            visualCount: 0,
+            countedCount: 0,
+            start: 0,
+            end: 0,
+            contentEnd: 0,
+            startCause: "start",
+            overflowed: false,
+            footnoteRefs: [],
+          },
+        ],
+      };
+    }
+    if (block.kind === "table") {
+      const wrapped = wrapTable(
+        block,
+        profile,
+        fonts,
+        usableWidth,
+        usableHeight,
+        warnings,
+      );
+      return {
+        block,
+        style: {
+          ...profile.table.body,
+          beforeTwips: 0,
+          afterTwips: 0,
+          keepWithNext: false,
+          keepLines: false,
+        },
+        lines: wrapped.lines,
+        headerLineCount: wrapped.headerLineCount,
+      };
     }
     let style = styleFor(profile, block);
     const available =
@@ -441,22 +817,24 @@ export function paginate(
     }
     return { block, style, lines };
   });
-  const footnoteCache = new Map<string, readonly WrappedLine[]>();
+  const footnoteCache = new Map<string, readonly (readonly WrappedLine[])[]>();
   const wrappedFootnote = (id: string) => {
-    let lines = footnoteCache.get(id);
-    if (lines) return lines;
-    const block = document.footnotes.get(id)!;
+    let blocks = footnoteCache.get(id);
+    if (blocks) return blocks;
+    const definition = document.footnotes.get(id)!;
     const style = profile.footnote;
-    lines = wrap(
-      block,
-      style,
-      usableWidth - style.leftIndentTwips - style.rightIndentTwips,
-      fonts,
-      warnings,
-      profile.pagination.lineCapExclusions,
+    blocks = definition.blocks.map((block) =>
+      wrap(
+        block,
+        style,
+        usableWidth - style.leftIndentTwips - style.rightIndentTwips,
+        fonts,
+        warnings,
+        profile.pagination.lineCapExclusions,
+      ),
     );
-    footnoteCache.set(id, lines);
-    return lines;
+    footnoteCache.set(id, blocks);
+    return blocks;
   };
 
   let pages: Page[] = [];
@@ -485,7 +863,7 @@ export function paginate(
     const cap = profile.pagination.maxCountedLinesPerPage;
     return (
       occupied(target) + extra + line.height <= usableHeight &&
-      (!line.counted || cap === null || target.counted < cap)
+      (cap === null || target.counted + line.countedCount <= cap)
     );
   };
   const prefixThatFits = (
@@ -501,8 +879,8 @@ export function paginate(
       const spacing = count === 0 ? leadingSpacing : 0;
       if (!lineFits(probe, line, spacing)) break;
       probe.footnoteUsed += spacing + line.height;
-      probe.visual++;
-      if (line.counted) probe.counted++;
+      probe.visual += line.visualCount;
+      probe.counted += line.countedCount;
       count++;
     }
     return count;
@@ -536,7 +914,8 @@ export function paginate(
       state.placed.add(id);
       state.pending.push({
         footnoteId: id,
-        lines: wrappedFootnote(id),
+        blocks: wrappedFootnote(id),
+        blockIndex: 0,
         nextLine: 0,
         warningEmitted: state.relaxed.has(id),
         ownerIndex,
@@ -545,14 +924,14 @@ export function paginate(
   };
   const leadingFootnoteSpacing = (target: Page, pending: PendingFootnote) => {
     if (pending.nextLine !== 0) return 0;
+    if (pending.blockIndex > 0)
+      return Math.max(
+        profile.footnote.afterTwips,
+        profile.footnote.beforeTwips,
+      );
     const previous = target.footnoteLines.at(-1);
     if (!previous || previous.footnoteId === pending.footnoteId) return 0;
-    return Math.max(
-      document.footnotes.get(previous.footnoteId)!
-        ? profile.footnote.afterTwips
-        : 0,
-      profile.footnote.beforeTwips,
-    );
+    return Math.max(profile.footnote.afterTwips, profile.footnote.beforeTwips);
   };
   const placePrefix = (
     target: Page,
@@ -562,21 +941,27 @@ export function paginate(
     spacing: number,
   ) => {
     const discovered: string[] = [];
+    const current = pending.blocks[pending.blockIndex]!;
+    const ownerIndex = pending.ownerIndex;
     for (let offset = 0; offset < count; offset++) {
-      const line = pending.lines[pending.nextLine + offset]!;
+      const line = current[pending.nextLine + offset]!;
       target.footnoteUsed += (offset === 0 ? spacing : 0) + line.height;
-      target.visual++;
-      if (line.counted) target.counted++;
+      target.visual += line.visualCount;
+      target.counted += line.countedCount;
       target.footnoteLines.push({
         footnoteId: pending.footnoteId,
         line,
-        ownerIndex: pending.ownerIndex,
+        ownerIndex,
       });
       discovered.push(...line.footnoteRefs);
     }
     pending.nextLine += count;
-    if (pending.nextLine === pending.lines.length) state.pending.shift();
-    enqueue(state, discovered, pending.ownerIndex);
+    if (pending.nextLine === current.length) {
+      pending.blockIndex++;
+      pending.nextLine = 0;
+      if (pending.blockIndex === pending.blocks.length) state.pending.shift();
+    }
+    enqueue(state, discovered, ownerIndex);
   };
   const placePendingHead = (
     target: Page,
@@ -585,17 +970,23 @@ export function paginate(
   ) => {
     const pending = state.pending[0];
     if (!pending) return 0;
+    const current = pending.blocks[pending.blockIndex]!;
     const spacing = leadingFootnoteSpacing(target, pending);
-    const remaining = pending.lines.length - pending.nextLine;
-    const maximum = prefixThatFits(
-      target,
-      pending.lines,
-      pending.nextLine,
-      spacing,
-    );
-    const wholeFitsEmpty = footnoteFitsEmpty(pending.lines);
+    const remaining = current.length - pending.nextLine;
+    const maximum = prefixThatFits(target, current, pending.nextLine, spacing);
+    const wholeFitsEmpty = footnoteFitsEmpty(current);
     if (!wholeFitsEmpty) warnRelaxed(state, pending, diagnostics);
     if (maximum >= remaining) {
+      const next = pending.blocks[pending.blockIndex + 1];
+      if (
+        pending.nextLine === 0 &&
+        profile.footnote.keepWithNext &&
+        next &&
+        prefixThatFits(target, [...current, ...next.slice(0, 1)], 0, spacing) <=
+          current.length
+      ) {
+        return 0;
+      }
       placePrefix(target, state, pending, remaining, spacing);
       return remaining;
     }
@@ -629,7 +1020,7 @@ export function paginate(
 
     const emptyMaximum = prefixThatFits(
       emptyPage(sectionIndex !== undefined),
-      pending.lines,
+      current,
       pending.nextLine,
       0,
     );
@@ -654,9 +1045,16 @@ export function paginate(
     let placed = 0;
     while (state.pending.length) {
       const head = state.pending[0]!;
+      const blockIndex = head.blockIndex;
       const count = placePendingHead(target, state, diagnostics);
       placed += count;
-      if (count === 0 || state.pending[0] === head) break;
+      if (count === 0) break;
+      if (
+        state.pending[0] === head &&
+        head.blockIndex === blockIndex &&
+        head.nextLine > 0
+      )
+        break;
     }
     return placed;
   };
@@ -698,10 +1096,9 @@ export function paginate(
     } else {
       target.bodyUsed += spacing + line.height;
     }
-    target.visual++;
-    if (line.counted) target.counted++;
+    target.visual += line.visualCount;
+    target.counted += line.countedCount;
     target.bodyLines.push(line);
-    const pendingBefore = state.pending.length;
     enqueue(
       state,
       line.footnoteRefs,
@@ -710,7 +1107,7 @@ export function paginate(
     const footnoteLinesBefore = target.footnoteLines.length;
     reserveOnCurrentPage(target, state, diagnostics);
     if (
-      state.pending.length > pendingBefore &&
+      state.pending.length > 0 &&
       target.footnoteLines.length === footnoteLinesBefore &&
       occupiedBefore > 0
     ) {
@@ -718,6 +1115,43 @@ export function paginate(
     }
     return { page: target, footnotes: state, diagnostics };
   };
+  const warnTableHeaderRelaxed = (record: WrappedBlock) => {
+    if (headerRepeatWarnings.has(record.block)) return;
+    headerRepeatWarnings.add(record.block);
+    warnings.push({
+      code: "TABLE_HEADER_REPEAT_CONSTRAINT_RELAXED",
+      severity: "warning",
+      message:
+        "The table header could not repeat with a following content band.",
+      position: record.block.position,
+    });
+  };
+  const repeatTableHeader = (record: WrappedBlock, lineIndex: number) => {
+    if (
+      record.block.kind !== "table" ||
+      !profile.table.repeatHeader ||
+      !record.headerLineCount ||
+      lineIndex < record.headerLineCount
+    )
+      return;
+    const headers = record.lines.slice(0, record.headerLineCount);
+    let rowEnd = lineIndex;
+    while (rowEnd + 1 < record.lines.length && !record.lines[rowEnd]!.rowEnd)
+      rowEnd++;
+    const row = record.lines.slice(lineIndex, rowEnd + 1);
+    const unit = [...headers, ...row].map((line) => ({ line, spacing: 0 }));
+    if (!simulateUnit(unit, page, footnotes)) {
+      warnTableHeaderRelaxed(record);
+      return;
+    }
+    for (const header of headers) {
+      const result = attemptBodyLine(header, 0)!;
+      page = result.page;
+      footnotes = result.footnotes;
+      warnings.push(...result.diagnostics);
+    }
+  };
+
   const simulateUnit = (
     unit: readonly { line: WrappedLine; spacing: number }[],
     startPage: Page,
@@ -729,8 +1163,8 @@ export function paginate(
     for (const { line, spacing } of unit) {
       if (!lineFits(target, line, spacing)) return false;
       target.bodyUsed += spacing + line.height;
-      target.visual++;
-      if (line.counted) target.counted++;
+      target.visual += line.visualCount;
+      target.counted += line.countedCount;
       target.bodyLines.push(line);
       enqueue(
         state,
@@ -846,6 +1280,7 @@ export function paginate(
     }
 
     if (
+      record.block.kind !== "table" &&
       profile.pagination.widowOrphanControl &&
       !record.style.keepLines &&
       record.lines.length > 1 &&
@@ -874,6 +1309,30 @@ export function paginate(
     const beforeLine: Snapshot[] = [];
     let lineIndex = 0;
     while (lineIndex < record.lines.length) {
+      const currentLine = record.lines[lineIndex]!;
+      if (record.block.kind === "table" && currentLine.rowStart) {
+        let rowEnd = lineIndex;
+        while (
+          rowEnd + 1 < record.lines.length &&
+          !record.lines[rowEnd]!.rowEnd
+        )
+          rowEnd++;
+        const currentRow = record.lines
+          .slice(lineIndex, rowEnd + 1)
+          .map((line) => ({ line, spacing: 0 }));
+        if (
+          simulateUnit(
+            currentRow,
+            emptyPage(sectionIndex !== undefined),
+            footnotes,
+          ) &&
+          !simulateUnit(currentRow, page, footnotes) &&
+          hasContent(page)
+        ) {
+          commitPage();
+          repeatTableHeader(record, lineIndex);
+        }
+      }
       beforeLine[lineIndex] = snapshot();
       const spacing =
         lineIndex === 0 && page.bodyLines.length > 0
@@ -886,6 +1345,7 @@ export function paginate(
           (line) => line.block === record.block,
         ).length;
         if (
+          record.block.kind !== "table" &&
           profile.pagination.widowOrphanControl &&
           remaining < profile.pagination.widowLines &&
           placedOnPage >= profile.pagination.orphanLines
@@ -898,6 +1358,7 @@ export function paginate(
           continue;
         }
         commitPage();
+        repeatTableHeader(record, lineIndex);
         continue;
       }
       page = result.page;
@@ -913,7 +1374,12 @@ export function paginate(
   const paragraphResults: ParagraphDiagnostic[] = [];
   let paragraphIndex = 0;
   for (const block of document.blocks) {
-    if (block.kind === "pagebreak") continue;
+    if (
+      block.kind === "pagebreak" ||
+      block.kind === "table" ||
+      block.kind === "thematic-break"
+    )
+      continue;
     const occurrences: { page: number; line: WrappedLine }[] = [];
     pages.forEach((placedPage, pageIndex) =>
       placedPage.bodyLines.forEach((line) => {
@@ -924,6 +1390,25 @@ export function paginate(
     );
     if (occurrences.length) {
       const last = occurrences.at(-1)!;
+      const penultimate = occurrences.at(-2)?.line ?? null;
+      const style = styleFor(profile, block);
+      const oneLineReduction =
+        penultimate && last.line.startCause === "soft"
+          ? {
+              estimatedRemovalTwips: Math.max(
+                0,
+                candidateWidth(
+                  block,
+                  penultimate.start,
+                  last.line.contentEnd,
+                  fonts,
+                  style,
+                ) - penultimate.available,
+              ),
+              basis: "deterministic-tail-width-deficit" as const,
+              confidence: "heuristic" as const,
+            }
+          : null;
       paragraphResults.push({
         source: "deterministic",
         index: paragraphIndex++,
@@ -931,16 +1416,28 @@ export function paginate(
         startPage: occurrences[0]!.page,
         endPage: last.page,
         visualLines: occurrences.length,
+        lastLineText: last.line.text,
+        lastLineTextRange: {
+          start: last.line.start,
+          end: last.line.contentEnd,
+        },
+        lastLineSourceRanges: sourceRangesFor(
+          block,
+          last.line.start,
+          last.line.contentEnd,
+        ),
         lastLineUsedTwips: last.line.used,
         lastLineAvailableTwips: last.line.available,
+        lastLineUnusedTwips: last.line.available - last.line.used,
         lastLineRatio:
           last.line.available === 0 ? 0 : last.line.used / last.line.available,
-        preview: block.runs
-          .map((run) => run.text)
-          .join("")
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 80),
+        lastLineOverflow: last.line.overflowed,
+        penultimateLineText: penultimate?.text ?? null,
+        penultimateLineUnusedTwips: penultimate
+          ? penultimate.available - penultimate.used
+          : null,
+        oneLineReduction,
+        preview: block.normalizedText.replace(/\s+/g, " ").trim().slice(0, 80),
       });
     }
   }
@@ -982,9 +1479,9 @@ export function paginate(
             };
             sectionPages[section]!.set(pageNumber, entry);
           }
-          entry.bodyVisualLines++;
-          entry.visualLines++;
-          if (line.counted) entry.countedLines++;
+          entry.bodyVisualLines += line.visualCount;
+          entry.visualLines += line.visualCount;
+          entry.countedLines += line.countedCount;
         }
       }
       for (const placed of placedPage.footnoteLines) {
@@ -1001,9 +1498,9 @@ export function paginate(
             };
             sectionPages[section]!.set(pageNumber, entry);
           }
-          entry.footnoteVisualLines++;
-          entry.visualLines++;
-          if (placed.line.counted) entry.countedLines++;
+          entry.footnoteVisualLines += placed.line.visualCount;
+          entry.visualLines += placed.line.visualCount;
+          entry.countedLines += placed.line.countedCount;
         }
       }
     });
@@ -1044,18 +1541,20 @@ export function paginate(
 
   const last = pages.at(-1)!;
   const representative = document.blocks.find(
-    (block) => block.kind !== "pagebreak",
+    (block): block is TextFlowBlock =>
+      block.kind !== "pagebreak" &&
+      block.kind !== "table" &&
+      block.kind !== "thematic-break",
   );
-  const bodyNatural = naturalHeight(
-    fonts,
-    {
-      ...(representative ?? document.blocks[0]!),
-      runs: [{ text: "Ag", bold: false, italic: false }],
-    },
-    profile.body,
-    0,
-    2,
-  );
+  const metricProbe: TextFlowBlock = {
+    kind: "paragraph",
+    runs: [{ text: "Ag", bold: false, italic: false }],
+    normalizedText: "Ag",
+    sourceSegments: [],
+    position: representative?.position ?? document.blocks[0]!.position,
+    footnoteRefs: [],
+  };
+  const bodyNatural = naturalHeight(fonts, metricProbe, profile.body, 0, 2);
   const bodyPitch = linePitch(bodyNatural, profile.body);
   return {
     pageCount: pages.length,

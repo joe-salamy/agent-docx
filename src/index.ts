@@ -5,6 +5,15 @@ export { builtInProfiles } from "./profiles.js";
 export { MdPageCountError } from "./types.js";
 export type {
   Budget,
+  CliErrorPayload,
+  CliErrorRecord,
+  CliFatalRecord,
+  CliJsonlRequest,
+  CliResultRecord,
+  CliSource,
+  CliTrigger,
+  CliWatchEndRecord,
+  CliWatchReadyRecord,
   BuiltInProfileId,
   DeterministicResult,
   Diagnostic,
@@ -42,7 +51,10 @@ export type {
   SectionPageDiagnostic,
   SourcePosition,
   TextStyle,
+  TableStyle,
+  ThematicBreakStyle,
   TrimOpportunity,
   WordRendererOptions,
   WordRendering,
+  WordParagraphDiagnostic,
 } from "./types.js";

@@ -15,8 +15,17 @@ import chokidar from "chokidar";
 import { parseCliArgs, cliHelp, type CliOptionValues } from "./cli-args.js";
 import { inspectDocxTemplate } from "./docx/inspect.js";
 import { measureMarkdown } from "./renderers/index.js";
+import { builtInProfiles } from "./profiles.js";
 import {
   MdPageCountError,
+  type CliErrorPayload,
+  type CliErrorRecord,
+  type CliFatalRecord,
+  type CliResultRecord,
+  type CliSource,
+  type CliTrigger,
+  type CliWatchEndRecord,
+  type CliWatchReadyRecord,
   type EstimateOptions,
   type FontSetInput,
   type LayoutOverrides,
@@ -30,6 +39,7 @@ export interface CliRuntime {
   readonly stdinIsTTY: boolean;
   readonly version: string;
   readStdin(): Promise<Uint8Array>;
+  readStdinChunks?(): AsyncIterable<Uint8Array>;
   writeStdout(text: string): Promise<void>;
   writeStderr(text: string): Promise<void>;
   onceSignal(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
@@ -407,6 +417,43 @@ async function strictUtf8(bytes: Uint8Array) {
   }
 }
 
+function decodeUtf8Chunk(decoder: TextDecoder, bytes?: Uint8Array) {
+  try {
+    return bytes ? decoder.decode(bytes, { stream: true }) : decoder.decode();
+  } catch {
+    throw new MdPageCountError("INPUT_NOT_UTF8", "Input is not valid UTF-8");
+  }
+}
+
+async function* jsonlLines(
+  runtime: CliRuntime,
+): AsyncGenerator<string, void, undefined> {
+  if (!runtime.readStdinChunks) {
+    yield* (await strictUtf8(await runtime.readStdin())).split(/\r?\n/);
+    return;
+  }
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let pending = "";
+  const completeLines = (text: string) => {
+    pending += text;
+    const lines: string[] = [];
+    let newline = pending.indexOf("\n");
+    while (newline !== -1) {
+      const line = pending.slice(0, newline);
+      lines.push(line.endsWith("\r") ? line.slice(0, -1) : line);
+      pending = pending.slice(newline + 1);
+      newline = pending.indexOf("\n");
+    }
+    return lines;
+  };
+  for await (const bytes of runtime.readStdinChunks()) {
+    for (const line of completeLines(decodeUtf8Chunk(decoder, bytes)))
+      yield line;
+  }
+  for (const line of completeLines(decodeUtf8Chunk(decoder))) yield line;
+  if (pending) yield pending;
+}
+
 async function loadConfig(pathToken: string): Promise<{
   config: SerializableConfig;
   base: string;
@@ -710,7 +757,58 @@ function serializableMeasurement(
   return serializable;
 }
 
-function human(measurement: MeasurementResult) {
+type ProfileCatalogEntry = {
+  id: string;
+  label: string;
+  effectiveDate: string | null;
+  sourceUrl: string | null;
+  sourceCitation: string;
+  requestedFontFamily: string;
+  filingPageLimits: Record<string, number>;
+};
+
+type ProfileCatalog = {
+  schemaVersion: 1;
+  profiles: ProfileCatalogEntry[];
+};
+
+function profileCatalog(): ProfileCatalog {
+  return {
+    schemaVersion: 1,
+    profiles: Object.values(builtInProfiles).map((profile) => ({
+      id: profile.id,
+      label: profile.label,
+      effectiveDate: profile.effectiveDate,
+      sourceUrl: profile.sourceUrl,
+      sourceCitation: profile.sourceCitation,
+      requestedFontFamily: profile.requestedFontFamily,
+      filingPageLimits: { ...profile.filingPageLimits },
+    })),
+  };
+}
+
+function humanProfiles(catalog: ProfileCatalog) {
+  const rows = ["Built-in profiles:"];
+  for (const profile of catalog.profiles) {
+    const effective = profile.effectiveDate
+      ? `; effective ${profile.effectiveDate}`
+      : "";
+    rows.push(`${profile.id}: ${profile.label}${effective}`);
+    rows.push(`  ${profile.sourceCitation}`);
+    const limits = Object.entries(profile.filingPageLimits);
+    if (limits.length) {
+      rows.push(
+        `  Filing page limits: ${limits.map(([kind, pages]) => `${kind} ${pages}`).join(", ")}`,
+      );
+    }
+  }
+  return `${rows.join("\n")}\n`;
+}
+
+function human(
+  measurement: MeasurementResult,
+  display: { paragraphs: boolean; trim: boolean },
+) {
   const deterministic = measurement.deterministic;
   const rows = [
     `Estimated pages: ${deterministic.pageCount} physical; ${deterministic.equivalentPages.toFixed(3)} equivalent`,
@@ -742,16 +840,42 @@ function human(measurement: MeasurementResult) {
       `Microsoft Word pages: ${measurement.renderers.word.value.pageCount} (delta ${measurement.renderers.word.value.pageCount - deterministic.pageCount})`,
     );
   }
+  if (
+    measurement.renderers.word?.status === "ok" &&
+    measurement.renderers.word.value.paragraphDiagnostics?.status === "error"
+  ) {
+    rows.push(
+      `Word paragraph diagnostics unavailable: ${measurement.renderers.word.value.paragraphDiagnostics.error.message}`,
+    );
+  }
   if (measurement.renderers.libreoffice?.status === "ok") {
     rows.push(
       `LibreOffice Writer pages: ${measurement.renderers.libreoffice.value.pageCount} (delta ${measurement.renderers.libreoffice.value.pageCount - deterministic.pageCount})`,
     );
   }
-  for (const paragraph of deterministic.paragraphs ?? []) {
-    const filled = Math.round(paragraph.lastLineRatio * 10);
-    rows.push(
-      `Lines ${paragraph.position.start.line}-${paragraph.position.end.line}: ${Math.round(paragraph.lastLineRatio * 100)}% ${"█".repeat(filled)}${"░".repeat(10 - filled)} ${paragraph.preview}`,
-    );
+  if (display.paragraphs) {
+    for (const paragraph of deterministic.paragraphs ?? []) {
+      const filled = Math.max(
+        0,
+        Math.min(10, Math.round(paragraph.lastLineRatio * 10)),
+      );
+      rows.push(
+        `Lines ${paragraph.position.start.line}-${paragraph.position.end.line}: ${Math.round(paragraph.lastLineRatio * 100)}% ${"█".repeat(filled)}${"░".repeat(10 - filled)} ${paragraph.preview}`,
+      );
+    }
+  }
+  if (display.trim) {
+    const opportunities = deterministic.trimOpportunities ?? [];
+    if (opportunities.length === 0) {
+      rows.push("Trim opportunities: none");
+    } else {
+      rows.push("Trim opportunities:");
+      for (const opportunity of opportunities) {
+        rows.push(
+          `${opportunity.rank}. Lines ${opportunity.position.start.line}-${opportunity.position.end.line}: ${JSON.stringify(opportunity.lastLineText)}; ${Math.round(opportunity.lastLineRatio * 100)}%; ${opportunity.oneLineReduction!.estimatedRemovalTwips} twips; ${opportunity.message}`,
+        );
+      }
+    }
   }
   return `${rows.join("\n")}\n`;
 }
@@ -760,27 +884,51 @@ function nextSequence(state: SequenceState) {
   return ++state.sequence;
 }
 
-function envelope(
+function publicSource(source: Source, cwd: string): CliSource {
+  return source.kind === "file"
+    ? {
+        kind: "file",
+        path: normalizedRelativePath(cwd, source.resolvedPath),
+      }
+    : source;
+}
+
+function publicTrigger(
+  trigger: CliTrigger | null,
+  cwd: string,
+): CliTrigger | null {
+  return trigger
+    ? {
+        kind: trigger.kind,
+        paths: trigger.paths.map((path) =>
+          normalizedRelativePath(cwd, resolve(path)),
+        ),
+      }
+    : null;
+}
+
+function resultRecord(
   state: SequenceState,
-  mode: "single" | "batch" | "watch",
+  mode: "batch" | "watch",
   source: Source,
   measurement: MeasurementResult,
+  cwd: string,
   requestId: string | number | null = null,
-  trigger: unknown = null,
-) {
+  trigger: CliTrigger | null = null,
+): CliResultRecord {
   return {
     schemaVersion: 1,
     kind: "result",
     mode,
     sequence: nextSequence(state),
     requestId,
-    source,
-    trigger,
+    source: publicSource(source, cwd),
+    trigger: publicTrigger(trigger, cwd),
     measurement: serializableMeasurement(measurement),
   };
 }
 
-function errorObject(error: unknown) {
+function errorObject(error: unknown): CliErrorPayload {
   return error instanceof MdPageCountError
     ? {
         code: error.code,
@@ -788,9 +936,68 @@ function errorObject(error: unknown) {
         ...(error.details ? { details: error.details } : {}),
       }
     : {
-        code: "INVALID_ARGUMENT",
+        code: "INTERNAL_ERROR",
         message: error instanceof Error ? error.message : String(error),
       };
+}
+
+function errorRecord(
+  state: SequenceState,
+  mode: "batch" | "watch",
+  source: Source,
+  error: unknown,
+  cwd: string,
+  requestId: string | number | null = null,
+  trigger: CliTrigger | null = null,
+): CliErrorRecord {
+  return {
+    schemaVersion: 1,
+    kind: "error",
+    mode,
+    sequence: nextSequence(state),
+    requestId,
+    source: publicSource(source, cwd),
+    trigger: publicTrigger(trigger, cwd),
+    error: errorObject(error),
+  };
+}
+
+function readyRecord(
+  state: SequenceState,
+  source: Source,
+  dependencies: readonly string[],
+  cwd: string,
+): CliWatchReadyRecord {
+  return {
+    schemaVersion: 1,
+    kind: "ready",
+    mode: "watch",
+    sequence: nextSequence(state),
+    source: publicSource(source, cwd),
+    dependencies: dependencies
+      .map((path) => normalizedRelativePath(cwd, resolve(path)))
+      .sort(),
+  };
+}
+
+function endRecord(
+  state: SequenceState,
+  source: Source,
+  reason: "SIGINT" | "SIGTERM",
+  cwd: string,
+): CliWatchEndRecord {
+  return {
+    schemaVersion: 1,
+    kind: "end",
+    mode: "watch",
+    sequence: nextSequence(state),
+    source: publicSource(source, cwd),
+    reason,
+  };
+}
+
+function fatalRecord(error: unknown): CliFatalRecord {
+  return { schemaVersion: 1, kind: "fatal", error: errorObject(error) };
 }
 
 function errorStatus(error: unknown) {
@@ -818,6 +1025,13 @@ async function executeCli(
   }
   if (command.mode === "version") {
     await runtime.writeStdout(`${runtime.version}\n`);
+    return 0;
+  }
+  if (command.mode === "profiles") {
+    const catalog = profileCatalog();
+    await runtime.writeStdout(
+      command.json ? `${JSON.stringify(catalog)}\n` : humanProfiles(catalog),
+    );
     return 0;
   }
   if (command.mode === "inspect") {
@@ -865,52 +1079,107 @@ async function executeCli(
           "JSONL batch requires non-TTY stdin and no positionals",
         );
       }
-      const text = await strictUtf8(await runtime.readStdin());
-      for (const line of text.split(/\r?\n/)) {
+      for await (const line of jsonlLines(runtime)) {
         if (!line.trim()) continue;
-        let request: unknown;
+        let requestId: string | number | null = null;
+        let source: Source = { kind: "stdin" };
         try {
-          request = JSON.parse(line);
+          let request: unknown;
+          try {
+            request = JSON.parse(line);
+          } catch (error) {
+            throw new MdPageCountError(
+              "INVALID_ARGUMENT",
+              error instanceof Error ? error.message : "Invalid JSON",
+            );
+          }
           if (
             !request ||
             typeof request !== "object" ||
             Array.isArray(request)
           ) {
-            throw new Error("request must be an object");
+            throw new MdPageCountError(
+              "INVALID_ARGUMENT",
+              "request must be an object",
+            );
           }
           const record = request as Record<string, unknown>;
-          if (
-            (typeof record.path === "string") ===
-            (typeof record.markdown === "string")
-          ) {
-            throw new Error("exactly one of path or markdown is required");
+          const hasPath = typeof record.path === "string";
+          const hasMarkdown = typeof record.markdown === "string";
+          if (hasPath && record.path !== "") {
+            source = {
+              kind: "file",
+              path: record.path as string,
+              resolvedPath: resolve(runtime.cwd, record.path as string),
+            };
+          } else if (hasMarkdown) {
+            source = {
+              kind: "inline",
+              name: typeof record.name === "string" ? record.name : null,
+            };
           }
-          const source: Source =
-            typeof record.path === "string"
-              ? {
-                  kind: "file",
-                  path: record.path,
-                  resolvedPath: resolve(runtime.cwd, record.path),
-                }
-              : {
-                  kind: "inline",
-                  name: typeof record.name === "string" ? record.name : null,
-                };
-          const markdown =
-            typeof record.path === "string"
-              ? await strictUtf8(
-                  await readFile(resolve(runtime.cwd, record.path)),
-                )
-              : String(record.markdown);
+          if ("id" in record) {
+            if (
+              record.id !== null &&
+              typeof record.id !== "string" &&
+              !(typeof record.id === "number" && Number.isFinite(record.id))
+            ) {
+              throw new MdPageCountError(
+                "INVALID_ARGUMENT",
+                "id must be a string, finite number, or null",
+              );
+            }
+            requestId = record.id as string | number | null;
+          }
+          if (hasPath === hasMarkdown) {
+            throw new MdPageCountError(
+              "INVALID_ARGUMENT",
+              "exactly one of path or markdown is required",
+            );
+          }
+          if (hasPath && record.path === "") {
+            throw new MdPageCountError(
+              "INVALID_ARGUMENT",
+              "path must not be empty",
+            );
+          }
+          if (
+            hasMarkdown &&
+            record.name !== undefined &&
+            typeof record.name !== "string"
+          ) {
+            throw new MdPageCountError(
+              "INVALID_ARGUMENT",
+              "name must be a string",
+            );
+          }
+          const allowed: readonly string[] = hasPath
+            ? ["id", "path"]
+            : ["id", "name", "markdown"];
+          const unknown = Object.keys(record).find(
+            (key) => !allowed.includes(key),
+          );
+          if (unknown) {
+            throw new MdPageCountError(
+              "INVALID_ARGUMENT",
+              `unknown request key: ${unknown}`,
+            );
+          }
+          const markdown = hasPath
+            ? await strictUtf8(
+                await readFile(resolve(runtime.cwd, record.path as string)),
+              )
+            : (record.markdown as string);
           const measurement = await measureMarkdown(markdown, base.options);
           await runtime.writeStdout(
             `${JSON.stringify(
-              envelope(
+              resultRecord(
                 state,
                 "batch",
                 source,
                 measurement,
-                (record.id as string | number | null | undefined) ?? null,
+                runtime.cwd,
+                requestId,
               ),
             )}\n`,
           );
@@ -924,16 +1193,16 @@ async function executeCli(
         } catch (error) {
           failed = true;
           await runtime.writeStdout(
-            `${JSON.stringify({
-              schemaVersion: 1,
-              kind: "error",
-              mode: "batch",
-              sequence: nextSequence(state),
-              requestId: null,
-              source: { kind: "stdin" },
-              trigger: null,
-              error: errorObject(error),
-            })}\n`,
+            `${JSON.stringify(
+              errorRecord(
+                state,
+                "batch",
+                source,
+                error,
+                runtime.cwd,
+                requestId,
+              ),
+            )}\n`,
           );
         }
       }
@@ -947,7 +1216,7 @@ async function executeCli(
           );
           await runtime.writeStdout(
             `${JSON.stringify(
-              envelope(state, "batch", source, measurement),
+              resultRecord(state, "batch", source, measurement, runtime.cwd),
             )}\n`,
           );
           if (
@@ -960,16 +1229,9 @@ async function executeCli(
         } catch (error) {
           failed = true;
           await runtime.writeStdout(
-            `${JSON.stringify({
-              schemaVersion: 1,
-              kind: "error",
-              mode: "batch",
-              sequence: nextSequence(state),
-              requestId: null,
-              source,
-              trigger: null,
-              error: errorObject(error),
-            })}\n`,
+            `${JSON.stringify(
+              errorRecord(state, "batch", source, error, runtime.cwd),
+            )}\n`,
           );
         }
       }
@@ -989,7 +1251,7 @@ async function executeCli(
     let timer: NodeJS.Timeout | undefined;
     let running = false;
     let dirty = false;
-    const execute = async (trigger: { kind: string; paths: string[] }) => {
+    const execute = async (trigger: CliTrigger) => {
       if (running) {
         dirty = true;
         return;
@@ -1004,21 +1266,33 @@ async function executeCli(
         await runtime.writeStdout(
           values.jsonl
             ? `${JSON.stringify(
-                envelope(state, "watch", source, measurement, null, trigger),
+                resultRecord(
+                  state,
+                  "watch",
+                  source,
+                  measurement,
+                  runtime.cwd,
+                  null,
+                  trigger,
+                ),
               )}\n`
-            : `\n[${trigger.kind}]\n${human(measurement)}`,
+            : `\n[${trigger.kind}]\n${human(measurement, {
+                paragraphs: values.paragraphs === true,
+                trim: loaded.options.trim !== undefined,
+              })}`,
         );
       } catch (error) {
-        const text = `${JSON.stringify({
-          schemaVersion: 1,
-          kind: "error",
-          mode: "watch",
-          sequence: nextSequence(state),
-          requestId: null,
-          source,
-          trigger,
-          error: errorObject(error),
-        })}\n`;
+        const text = `${JSON.stringify(
+          errorRecord(
+            state,
+            "watch",
+            source,
+            error,
+            runtime.cwd,
+            null,
+            trigger,
+          ),
+        )}\n`;
         await (values.jsonl
           ? runtime.writeStdout(text)
           : runtime.writeStderr(text));
@@ -1040,14 +1314,9 @@ async function executeCli(
     });
     if (values.jsonl) {
       await runtime.writeStdout(
-        `${JSON.stringify({
-          schemaVersion: 1,
-          kind: "ready",
-          mode: "watch",
-          sequence: nextSequence(state),
-          source,
-          dependencies: dependencies.slice().sort(),
-        })}\n`,
+        `${JSON.stringify(
+          readyRecord(state, source, dependencies, runtime.cwd),
+        )}\n`,
       );
     }
     await execute({ kind: "initial", paths: [path] });
@@ -1072,14 +1341,9 @@ async function executeCli(
           await watcher.close();
           if (values.jsonl) {
             await runtime.writeStdout(
-              `${JSON.stringify({
-                schemaVersion: 1,
-                kind: "end",
-                mode: "watch",
-                sequence: nextSequence(state),
-                source,
-                reason: signal,
-              })}\n`,
+              `${JSON.stringify(
+                endRecord(state, source, signal, runtime.cwd),
+              )}\n`,
             );
           }
           finish(code);
@@ -1122,7 +1386,12 @@ async function executeCli(
       `${JSON.stringify(serializableMeasurement(measurement))}\n`,
     );
   } else {
-    await runtime.writeStdout(human(measurement));
+    await runtime.writeStdout(
+      human(measurement, {
+        paragraphs: command.values.paragraphs === true,
+        trim: loaded.options.trim !== undefined,
+      }),
+    );
     for (const warning of measurement.deterministic.warnings) {
       await runtime.writeStderr(`${warning.code}: ${warning.message}\n`);
     }
@@ -1145,9 +1414,7 @@ export async function runCli(
   try {
     return await executeCli(args, runtime, state);
   } catch (error) {
-    await runtime.writeStderr(
-      `${JSON.stringify({ error: errorObject(error) })}\n`,
-    );
+    await runtime.writeStderr(`${JSON.stringify(fatalRecord(error))}\n`);
     return errorStatus(error);
   }
 }

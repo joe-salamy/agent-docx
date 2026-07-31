@@ -1,4 +1,9 @@
-import type { LayoutProfile, TextStyle, BuiltInProfileId } from "./types.js";
+import type {
+  BuiltInProfileId,
+  LayoutProfile,
+  TableStyle,
+  TextStyle,
+} from "./types.js";
 const double = { rule: "auto", numerator: 480, denominator: 240 } as const;
 const single = { rule: "auto", numerator: 240, denominator: 240 } as const;
 const style = (
@@ -19,6 +24,13 @@ const style = (
   keepWithNext: false,
   keepLines: false,
   ...extra,
+});
+const table = (body: TextStyle): TableStyle => ({
+  body: { ...body },
+  header: { ...body, bold: true },
+  cellPaddingTwips: { top: 72, right: 72, bottom: 72, left: 72 },
+  borderTwips: 10,
+  repeatHeader: true,
 });
 const headings = (s: TextStyle) =>
   Object.freeze({
@@ -53,6 +65,13 @@ const conventional: LayoutProfile = {
   }),
   list: style(240, double, { leftIndentTwips: 720, hangingIndentTwips: 360 }),
   footnote: style(240, double),
+  thematicBreak: {
+    beforeTwips: 120,
+    afterTwips: 120,
+    thicknessTwips: 10,
+    keepWithNext: true,
+  },
+  table: table(style(240, double)),
   pagination: {
     widowOrphanControl: true,
     widowLines: 2,
@@ -90,6 +109,7 @@ const frap: LayoutProfile = {
   }),
   list: style(280, double, { leftIndentTwips: 720, hangingIndentTwips: 360 }),
   footnote: style(280, single),
+  table: table(style(280, double)),
   filingPageLimits: { "principal-brief": 30, "reply-brief": 15 },
   provenance: { "": { source: "rule", citation: "Fed. R. App. P. 32" } },
   warnings: [],
@@ -107,6 +127,7 @@ const cand: LayoutProfile = {
     rightIndentTwips: 720,
   }),
   footnote: style(240, single),
+  table: table(style(240, double)),
   pagination: {
     widowOrphanControl: true,
     widowLines: 2,

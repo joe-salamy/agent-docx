@@ -9,6 +9,7 @@ import {
   measureMarkdown,
   MdPageCountError,
 } from "../dist/index.js";
+import { normalizeMarkdown } from "../dist/markdown.js";
 
 test("root API and immutable profiles", () => {
   assert.deepEqual(Object.keys(builtInProfiles), [
@@ -111,10 +112,11 @@ test("explicit page break abandons remaining page", async () => {
 
 test("unsupported Markdown rejects with source-aware code", async () => {
   await assert.rejects(
-    () => estimateMarkdown("| A |\n| - |\n| x |"),
+    () => estimateMarkdown("---\ntitle: filing\n---\n\nBody."),
     (error) =>
       error instanceof MdPageCountError &&
-      error.code === "UNSUPPORTED_MARKDOWN",
+      error.code === "UNSUPPORTED_MARKDOWN" &&
+      error.details.position.start.line === 1,
   );
   await assert.rejects(
     () => estimateMarkdown("```js\nalert(1)\n```"),
@@ -122,6 +124,22 @@ test("unsupported Markdown rejects with source-aware code", async () => {
       error instanceof MdPageCountError &&
       error.code === "UNSUPPORTED_MARKDOWN",
   );
+  for (const [markdown, line] of [
+    ["| A |\n| - |\n| ![image](file.png) |", 3],
+    ["| A |\n| - |\n| Ref.[^1] |\n\n[^1]: Note.", 3],
+    ["| A |\n| - |\n| <span>HTML</span> |", 3],
+    ["[^1]:\n    - list child\n\nBody.[^1]", 2],
+    ["Inline $$x + y$$ math.", 1],
+    ["$$\nx + y\n$$", 1],
+  ]) {
+    await assert.rejects(
+      () => estimateMarkdown(markdown),
+      (error) =>
+        error instanceof MdPageCountError &&
+        error.code === "UNSUPPORTED_MARKDOWN" &&
+        error.details.position.start.line === line,
+    );
+  }
 });
 
 test("font shaping distinguishes narrow and wide glyphs", async () => {
@@ -163,9 +181,212 @@ test("trim diagnostics are deterministic and advisory", async () => {
   assert.equal(p.lastLineRatio, p.lastLineUsedTwips / p.lastLineAvailableTwips);
   assert.equal(
     result.trimOpportunities[0].message,
-    "Shortening or rephrasing this paragraph may remove its final wrapped line.",
+    "This block may lose one wrapped line after removing or rephrasing approximately the reported width; verify by re-running pagination.",
   );
+  assert.ok(p.lastLineText.length > 0);
+  assert.equal(
+    p.lastLineUnusedTwips,
+    p.lastLineAvailableTwips - p.lastLineUsedTwips,
+  );
+  assert.equal(p.lastLineOverflow, false);
+  assert.equal(p.oneLineReduction.confidence, "heuristic");
   assert.equal(result.budget.limitPages, 1);
+});
+
+test("paragraph tails retain exact and node source provenance", async () => {
+  const markdown = "Alpha beta gamma delta epsilon.";
+  const exact = await estimateMarkdown(markdown, {
+    paragraphDiagnostics: true,
+    layout: {
+      page: { widthTwips: 3600, marginsTwips: { left: 1440, right: 1440 } },
+    },
+  });
+  const tail = exact.paragraphs[0];
+  assert.ok(tail.visualLines > 1);
+  assert.equal(
+    markdown.slice(
+      tail.lastLineSourceRanges[0].position.start.offset,
+      tail.lastLineSourceRanges[0].position.end.offset,
+    ),
+    tail.lastLineText,
+  );
+  assert.ok(
+    tail.lastLineSourceRanges.every(({ precision }) => precision === "exact"),
+  );
+  assert.deepEqual(tail.lastLineTextRange, {
+    start: markdown.indexOf(tail.lastLineText),
+    end: markdown.indexOf(tail.lastLineText) + tail.lastLineText.length,
+  });
+
+  const decoded = await estimateMarkdown("Alpha &amp; omega.", {
+    paragraphDiagnostics: true,
+  });
+  assert.equal(decoded.paragraphs[0].oneLineReduction, null);
+  assert.ok(
+    decoded.paragraphs[0].lastLineSourceRanges.some(
+      ({ precision }) => precision === "node",
+    ),
+  );
+
+  const normalizedBreak = normalizeMarkdown("First.  \nSecond.").blocks[0];
+  assert.ok(
+    normalizedBreak.sourceSegments.some(
+      ({ precision }) => precision === "node",
+    ),
+  );
+  const hardBreak = await estimateMarkdown("First.  \nSecond.", {
+    paragraphDiagnostics: true,
+  });
+  assert.equal(hardBreak.paragraphs[0].lastLineText, "Second.");
+  assert.equal(hardBreak.paragraphs[0].oneLineReduction, null);
+});
+
+test("overflow and trim ranking expose signed deterministic width facts", async () => {
+  const overflow = await estimateMarkdown("W".repeat(80), {
+    paragraphDiagnostics: true,
+    layout: {
+      page: { widthTwips: 3100, marginsTwips: { left: 1440, right: 1440 } },
+    },
+  });
+  assert.equal(overflow.paragraphs[0].lastLineOverflow, true);
+  assert.ok(overflow.paragraphs[0].lastLineUnusedTwips < 0);
+
+  const ranked = await estimateMarkdown(
+    [
+      "Alpha beta gamma delta epsilon zeta eta theta.",
+      "One two three four five six seven eight nine ten eleven.",
+      "Legal legal legal legal legal legal legal legal legal.",
+    ].join("\n\n"),
+    {
+      trim: { maxCandidates: 10, maxLastLineRatio: 1 },
+      layout: {
+        page: {
+          widthTwips: 4200,
+          marginsTwips: { left: 1440, right: 1440 },
+        },
+      },
+    },
+  );
+  const widths = ranked.trimOpportunities.map(
+    ({ oneLineReduction }) => oneLineReduction.estimatedRemovalTwips,
+  );
+  assert.deepEqual(
+    widths,
+    [...widths].sort((a, b) => a - b),
+  );
+});
+
+test("tables and thematic breaks use structural layout without paragraph diagnostics", async () => {
+  const table = "| A | B |\n| :- | -: |\n| *x* | `y` |";
+  const exactFloor = await estimateMarkdown(table, {
+    paragraphDiagnostics: true,
+    layout: {
+      page: {
+        widthTwips: 3210,
+        marginsTwips: { left: 1440, right: 1440 },
+      },
+    },
+  });
+  assert.equal(exactFloor.paragraphs.length, 0);
+  assert.equal(exactFloor.totalVisualLines, 2);
+  await assert.rejects(
+    () =>
+      estimateMarkdown(table, {
+        layout: {
+          page: {
+            widthTwips: 3209,
+            marginsTwips: { left: 1440, right: 1440 },
+          },
+        },
+      }),
+    (error) =>
+      error instanceof MdPageCountError &&
+      error.code === "INVALID_LAYOUT" &&
+      error.details.position.start.line === 1,
+  );
+
+  const repeated = await estimateMarkdown(
+    "| Header |\n| --- |\n| Row one |\n| Row two |\n| Row three |",
+    {
+      layout: {
+        page: {
+          heightTwips: 1440,
+          marginsTwips: { top: 0, bottom: 0 },
+          headerTwips: 0,
+          footerTwips: 0,
+        },
+      },
+    },
+  );
+  assert.equal(repeated.pageCount, 3);
+  assert.deepEqual(repeated.visualLinesByPage, [2, 2, 2]);
+  assert.equal(
+    repeated.warnings.some(
+      ({ code }) => code === "TABLE_HEADER_REPEAT_CONSTRAINT_RELAXED",
+    ),
+    false,
+  );
+
+  const atomic = await estimateMarkdown(
+    "| Header |\n| --- |\n| " + "wrapped cell ".repeat(3) + " |",
+    {
+      layout: {
+        page: {
+          widthTwips: 5000,
+          heightTwips: 2160,
+          marginsTwips: { top: 0, right: 1440, bottom: 0, left: 1440 },
+          headerTwips: 0,
+          footerTwips: 0,
+        },
+      },
+    },
+  );
+  assert.equal(atomic.pageCount, 2);
+  assert.equal(atomic.visualLinesByPage[0], 1);
+  assert.ok(atomic.visualLinesByPage[1] > 1);
+  assert.equal(
+    atomic.warnings.some(
+      ({ code }) => code === "TABLE_ROW_SPLIT_CONSTRAINT_RELAXED",
+    ),
+    false,
+  );
+
+  const keptRule = await estimateMarkdown("Before.\n\n---\n\nAfter.", {
+    layout: {
+      page: {
+        heightTwips: 960,
+        marginsTwips: { top: 0, bottom: 0 },
+        headerTwips: 0,
+        footerTwips: 0,
+      },
+    },
+  });
+  assert.equal(keptRule.pageCount, 2);
+  assert.ok(keptRule.lastPage.usedTwips > 480);
+
+  const plain = await estimateMarkdown("Before.\n\nAfter.");
+  const ruled = await estimateMarkdown("Before.\n\n---\n\nAfter.", {
+    paragraphDiagnostics: true,
+  });
+  assert.equal(ruled.paragraphs.length, 2);
+  assert.equal(ruled.totalVisualLines, plain.totalVisualLines);
+  assert.ok(ruled.equivalentPages > plain.equivalentPages);
+});
+
+test("multi-paragraph footnotes preserve child order and child spacing", async () => {
+  const result = await estimateMarkdown(
+    "Body.[^1]\n\n[^1]: First child.\n    \n    Second child.",
+    { layout: { footnote: { beforeTwips: 40, afterTwips: 60 } } },
+  );
+  assert.equal(result.pageCount, 1);
+  assert.equal(result.totalVisualLines, 3);
+  assert.ok(result.lastPage.usedTwips > 0);
+  assert.equal(
+    result.warnings.filter(
+      ({ code }) => code === "FOOTNOTE_SPLIT_CONSTRAINT_RELAXED",
+    ).length,
+    0,
+  );
 });
 
 test("block style, indentation, and line-cap exclusions affect deterministic layout", async () => {

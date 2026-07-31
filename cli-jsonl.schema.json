@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://md-page-count.dev/schemas/cli-jsonl-v1.json",
+  "title": "md-page-count JSONL response record version 1",
+  "oneOf": [
+    { "$ref": "#/$defs/result" },
+    { "$ref": "#/$defs/errorRecord" },
+    { "$ref": "#/$defs/ready" },
+    { "$ref": "#/$defs/end" }
+  ],
+  "$defs": {
+    "id": { "type": ["string", "number", "null"] },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "path"],
+          "properties": {
+            "kind": { "const": "file" },
+            "path": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "stdin" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name"],
+          "properties": {
+            "kind": { "const": "inline" },
+            "name": { "type": ["string", "null"] }
+          }
+        }
+      ]
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "paths"],
+      "properties": {
+        "kind": { "enum": ["initial", "source-change", "dependency-change"] },
+        "paths": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "errorPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "details": { "type": "object" }
+      }
+    },
+    "common": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "kind",
+        "mode",
+        "sequence",
+        "requestId",
+        "source",
+        "trigger"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "enum": ["result", "error"] },
+        "mode": { "enum": ["batch", "watch"] },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "requestId": { "$ref": "#/$defs/id" },
+        "source": { "$ref": "#/$defs/source" },
+        "trigger": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/trigger" }]
+        }
+      }
+    },
+    "result": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "kind",
+            "mode",
+            "sequence",
+            "requestId",
+            "source",
+            "trigger",
+            "measurement"
+          ],
+          "properties": {
+            "schemaVersion": { "const": 1 },
+            "kind": { "const": "result" },
+            "mode": { "enum": ["batch", "watch"] },
+            "sequence": { "type": "integer", "minimum": 1 },
+            "requestId": { "$ref": "#/$defs/id" },
+            "source": { "$ref": "#/$defs/source" },
+            "trigger": {
+              "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/trigger" }]
+            },
+            "measurement": {
+              "$ref": "https://md-page-count.dev/schemas/measurement-result-v1.json"
+            }
+          }
+        }
+      ]
+    },
+    "errorRecord": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "kind",
+            "mode",
+            "sequence",
+            "requestId",
+            "source",
+            "trigger",
+            "error"
+          ],
+          "properties": {
+            "schemaVersion": { "const": 1 },
+            "kind": { "const": "error" },
+            "mode": { "enum": ["batch", "watch"] },
+            "sequence": { "type": "integer", "minimum": 1 },
+            "requestId": { "$ref": "#/$defs/id" },
+            "source": { "$ref": "#/$defs/source" },
+            "trigger": {
+              "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/trigger" }]
+            },
+            "error": { "$ref": "#/$defs/errorPayload" }
+          }
+        }
+      ]
+    },
+    "ready": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "mode",
+        "sequence",
+        "source",
+        "dependencies"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "ready" },
+        "mode": { "const": "watch" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "source": { "$ref": "#/$defs/source" },
+        "dependencies": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "end": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "mode",
+        "sequence",
+        "source",
+        "reason"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "end" },
+        "mode": { "const": "watch" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "source": { "$ref": "#/$defs/source" },
+        "reason": { "enum": ["SIGINT", "SIGTERM"] }
+      }
+    }
+  }
+}

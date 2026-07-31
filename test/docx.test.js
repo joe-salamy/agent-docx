@@ -51,8 +51,9 @@ function paragraphProperties(xml, text) {
   return properties;
 }
 
-function assertProperties(properties, expected) {
-  assert.match(properties, /<w:keepNext\/>/);
+function assertProperties(properties, expected, keepNext = true) {
+  if (keepNext) assert.match(properties, /<w:keepNext\/>/);
+  else assert.doesNotMatch(properties, /<w:keepNext\/>/);
   assert.match(properties, /<w:keepLines\/>/);
   assert.match(properties, /<w:widowControl\/>/);
   for (const [name, value] of Object.entries(expected)) {
@@ -85,10 +86,11 @@ test("main and footnote paragraphs share native pagination properties", async ()
     lineSpacing: { rule: "atLeast", twips: 360 },
   });
 
-  const bytes = await generateDocx(
+  const generated = await generateDocx(
     normalizeMarkdown("Main.[^1]\n\n[^1]: Footnote."),
     profile,
   );
+  const bytes = generated.bytes;
   const entries = await zipEntries(bytes, [
     "word/document.xml",
     "word/footnotes.xml",
@@ -110,26 +112,31 @@ test("main and footnote paragraphs share native pagination properties", async ()
     firstLine: 55,
     hanging: 66,
   });
-  assertProperties(paragraphProperties(footnotesXml, "Footnote."), {
-    before: 77,
-    after: 88,
-    line: 360,
-    lineRule: "atLeast",
-    left: 99,
-    right: 111,
-    firstLine: 122,
-    hanging: 133,
-  });
+  assertProperties(
+    paragraphProperties(footnotesXml, "Footnote."),
+    {
+      before: 0,
+      after: 0,
+      line: 360,
+      lineRule: "atLeast",
+      left: 99,
+      right: 111,
+      firstLine: 122,
+      hanging: 133,
+    },
+    false,
+  );
 });
 
 test("DOCX paragraphs can disable native widow and orphan control", async () => {
   const profile = structuredClone(builtInProfiles["us-district-conventional"]);
   profile.pagination.widowOrphanControl = false;
 
-  const bytes = await generateDocx(
+  const generated = await generateDocx(
     normalizeMarkdown("Main.[^1]\n\n[^1]: Footnote."),
     profile,
   );
+  const bytes = generated.bytes;
   const entries = await zipEntries(bytes, [
     "word/document.xml",
     "word/footnotes.xml",
@@ -144,4 +151,55 @@ test("DOCX paragraphs can disable native widow and orphan control", async () => 
       /<w:widowControl(?:\/>| w:val="true"\/>)/,
     );
   }
+});
+
+test("DOCX emits bookmarks, paragraph footnote children, native tables, and rules", async () => {
+  const generated = await generateDocx(
+    normalizeMarkdown(
+      "Main.[^1]\n\n| Left | Right |\n| :--- | ---: |\n| *A* | `B` |\n\n---\n\nTail.\n\n[^1]: First child.\n    \n    Second child.",
+    ),
+    builtInProfiles["us-district-conventional"],
+  );
+  assert.deepEqual(
+    generated.bodyParagraphs.map(({ id, index, preview }) => ({
+      id,
+      index,
+      preview,
+    })),
+    [
+      { id: "mpc_body_000000", index: 0, preview: "Main.⁎" },
+      { id: "mpc_body_000001", index: 1, preview: "Tail." },
+    ],
+  );
+  const entries = await zipEntries(generated.bytes, [
+    "word/document.xml",
+    "word/footnotes.xml",
+  ]);
+  const documentXml = entries["word/document.xml"];
+  const footnotesXml = entries["word/footnotes.xml"];
+  assert.match(documentXml, /w:bookmarkStart[^>]+w:name="mpc_body_000000"/);
+  assert.match(documentXml, /w:bookmarkStart[^>]+w:name="mpc_body_000001"/);
+  assert.equal((documentXml.match(/w:name="mpc_body_/g) ?? []).length, 2);
+  assert.match(documentXml, /<w:tbl>/);
+  assert.match(documentXml, /<w:tblGrid>/);
+  assert.match(documentXml, /<w:tblHeader\/>/);
+  assert.equal((documentXml.match(/<w:cantSplit\/>/g) ?? []).length, 2);
+  assert.match(documentXml, /<w:tcMar>/);
+  assert.match(documentXml, /<w:insideH[^>]+w:sz="4"/);
+  assert.match(documentXml, /<w:jc w:val="left"\/>/);
+  assert.match(documentXml, /<w:jc w:val="right"\/>/);
+  assert.match(
+    documentXml,
+    /<w:pBdr>[\s\S]*?<w:bottom[^>]+w:sz="4"[\s\S]*?<\/w:pBdr>/,
+  );
+  assert.match(documentXml, /w:line="10" w:lineRule="exact"/);
+  assert.doesNotMatch(documentXml, /<w:t[^>]*>_+<\/w:t>/);
+  const definition = footnotesXml.match(
+    /<w:footnote w:id="1">([\s\S]*?)<\/w:footnote>/,
+  )?.[1];
+  assert.ok(definition);
+  assert.equal((definition.match(/<w:p>/g) ?? []).length, 2);
+  assert.ok(
+    definition.indexOf("First child.") < definition.indexOf("Second child."),
+  );
 });
