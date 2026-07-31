@@ -32,8 +32,11 @@ const requiredAssets = [
   `${fontPrefix}OFL-1.1.txt`,
   ...schemaNames,
 ];
-const npmExecutable = process.env.npm_execpath ? process.execPath : "npm";
-const npmArguments = process.env.npm_execpath ? [process.env.npm_execpath] : [];
+const npmCli = process.env.npm_execpath;
+const usesNpmCli =
+  npmCli !== undefined && /(?:^|[/\\])npm-cli\.js$/.test(npmCli);
+const npmExecutable = usesNpmCli ? process.execPath : "npm";
+const npmArguments = usesNpmCli ? [npmCli] : [];
 
 function run(command, args, cwd) {
   const { promise, resolve: done, reject } = Promise.withResolvers();
