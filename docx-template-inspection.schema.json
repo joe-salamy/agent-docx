@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-docx.dev/schemas/docx-template-inspection-v1.json",
+  "title": "agent-docx DOCX template inspection version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "imported",
+    "sections",
+    "selectedSection",
+    "styles",
+    "package",
+    "warnings"
+  ],
+  "properties": {
+    "imported": { "type": "object" },
+    "sections": { "type": "array", "items": { "$ref": "#/$defs/section" } },
+    "selectedSection": { "type": "integer", "minimum": 0 },
+    "styles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body",
+        "headings",
+        "quote",
+        "footnote",
+        "footnoteReference"
+      ],
+      "properties": {
+        "body": { "$ref": "#/$defs/style" },
+        "headings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["1", "2", "3", "4", "5", "6"],
+          "properties": {
+            "1": { "$ref": "#/$defs/style" },
+            "2": { "$ref": "#/$defs/style" },
+            "3": { "$ref": "#/$defs/style" },
+            "4": { "$ref": "#/$defs/style" },
+            "5": { "$ref": "#/$defs/style" },
+            "6": { "$ref": "#/$defs/style" }
+          }
+        },
+        "quote": { "$ref": "#/$defs/style" },
+        "footnote": { "$ref": "#/$defs/style" },
+        "footnoteReference": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/style" }]
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "mainPart", "macroEnabled"],
+      "properties": {
+        "sha256": { "type": "string" },
+        "mainPart": { "type": "string" },
+        "macroEnabled": { "type": "boolean" }
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "object" } }
+  },
+  "$defs": {
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "column", "offset"],
+      "properties": {
+        "line": { "type": "integer" },
+        "column": { "type": "integer" },
+        "offset": { "type": "integer" }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "widthTwips",
+        "heightTwips",
+        "marginsTwips",
+        "headerTwips",
+        "footerTwips",
+        "gutterTwips"
+      ],
+      "properties": {
+        "widthTwips": { "type": "number" },
+        "heightTwips": { "type": "number" },
+        "marginsTwips": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["top", "right", "bottom", "left"],
+          "properties": {
+            "top": { "type": "number" },
+            "right": { "type": "number" },
+            "bottom": { "type": "number" },
+            "left": { "type": "number" }
+          }
+        },
+        "headerTwips": { "type": "number" },
+        "footerTwips": { "type": "number" },
+        "gutterTwips": { "type": "number" }
+      }
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "page", "sourcePart"],
+      "properties": {
+        "index": { "type": "integer" },
+        "page": { "$ref": "#/$defs/page" },
+        "sourcePart": { "type": "string" }
+      }
+    },
+    "style": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "styleId",
+        "name",
+        "resolved",
+        "requestedFontFamily",
+        "provenance"
+      ],
+      "properties": {
+        "styleId": { "type": ["string", "null"] },
+        "name": { "type": ["string", "null"] },
+        "resolved": { "type": "object" },
+        "requestedFontFamily": { "type": "string" },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    }
+  }
+}

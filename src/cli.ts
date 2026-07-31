@@ -6,11 +6,15 @@ const { version } = createRequire(import.meta.url)("../package.json") as {
   version: string;
 };
 
-async function readStdin(): Promise<Uint8Array> {
-  const chunks: Buffer[] = [];
+async function* readStdinChunks(): AsyncGenerator<Uint8Array> {
   for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
   }
+}
+
+async function readStdin(): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of readStdinChunks()) chunks.push(chunk);
   return Buffer.concat(chunks);
 }
 
@@ -28,6 +32,7 @@ const runtime: CliRuntime = {
   stdinIsTTY: process.stdin.isTTY === true,
   version,
   readStdin,
+  readStdinChunks,
   writeStdout: (text) => writeStream(process.stdout, text),
   writeStderr: (text) => writeStream(process.stderr, text),
   onceSignal: (signal, listener) => process.once(signal, listener),

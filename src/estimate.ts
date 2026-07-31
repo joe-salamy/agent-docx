@@ -82,19 +82,28 @@ export async function estimateMarkdown(
     const threshold = options.trim.maxLastLineRatio ?? 0.35;
     const max = options.trim.maxCandidates ?? 10;
     const candidates = layout.paragraphs
-      .filter((p) => p.visualLines > 1 && p.lastLineRatio <= threshold)
+      .filter(
+        (
+          paragraph,
+        ): paragraph is typeof paragraph & {
+          oneLineReduction: NonNullable<(typeof paragraph)["oneLineReduction"]>;
+        } =>
+          paragraph.oneLineReduction !== null &&
+          paragraph.lastLineRatio <= threshold,
+      )
       .sort(
         (a, b) =>
-          a.lastLineRatio - b.lastLineRatio ||
+          a.oneLineReduction.estimatedRemovalTwips -
+            b.oneLineReduction.estimatedRemovalTwips ||
           a.position.start.offset - b.position.start.offset,
       )
       .slice(0, max);
     result.trimOpportunities = candidates.map(
-      (p, i): TrimOpportunity => ({
-        ...p,
-        rank: i + 1,
+      (paragraph, index): TrimOpportunity => ({
+        ...paragraph,
+        rank: index + 1,
         message:
-          "Shortening or rephrasing this paragraph may remove its final wrapped line.",
+          "This block may lose one wrapped line after removing or rephrasing approximately the reported width; verify by re-running pagination.",
       }),
     );
   }

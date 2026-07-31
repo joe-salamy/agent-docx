@@ -1,6 +1,8 @@
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
+import remarkFrontmatter from "remark-frontmatter";
+import remarkMath from "remark-math";
 import {
   AgentDocxError,
   type SectionHeading,
@@ -12,6 +14,7 @@ type Node = {
   depth?: number;
   ordered?: boolean;
   children?: Node[];
+  align?: Array<"left" | "center" | "right" | null>;
   position?: {
     start: { line: number; column: number; offset?: number };
     end: { line: number; column: number; offset?: number };
@@ -20,30 +23,68 @@ type Node = {
   label?: string;
   url?: string;
 };
+export type NormalizedSourceSegment = {
+  normalizedStart: number;
+  normalizedEnd: number;
+  sourceStartOffset: number;
+  position: SourcePosition;
+  precision: "exact" | "node";
+};
 export type InlineRun = {
   text: string;
   bold: boolean;
   italic: boolean;
   footnoteId?: string;
+  literal?: boolean;
 };
-export type FlowBlock = {
-  kind:
-    | "paragraph"
-    | "heading"
-    | "blockquote"
-    | "list"
-    | "footnote"
-    | "pagebreak";
+export type TextBlockKind =
+  | "paragraph"
+  | "heading"
+  | "blockquote"
+  | "list"
+  | "footnote";
+export type TextFlowBlock = {
+  kind: TextBlockKind;
   runs: InlineRun[];
+  normalizedText: string;
+  sourceSegments: NormalizedSourceSegment[];
   position: SourcePosition;
   level?: number;
-  hardBreakAfter: boolean;
   footnoteRefs: string[];
+};
+export type TableCell = InlineNormalization & {
+  position: SourcePosition;
+  alignment: "left" | "center" | "right" | null;
+};
+export type TableFlowBlock = {
+  kind: "table";
+  position: SourcePosition;
+  alignments: readonly ("left" | "center" | "right" | null)[];
+  rows: readonly (readonly TableCell[])[];
+};
+export type ThematicBreakFlowBlock = {
+  kind: "thematic-break";
+  position: SourcePosition;
+};
+export type PageBreakFlowBlock = {
+  kind: "pagebreak";
+  position: SourcePosition;
+};
+export type FlowBlock =
+  | TextFlowBlock
+  | TableFlowBlock
+  | ThematicBreakFlowBlock
+  | PageBreakFlowBlock;
+export type FootnoteDefinition = {
+  id: string;
+  position: SourcePosition;
+  blocks: readonly TextFlowBlock[];
+  footnoteRefs: readonly string[];
 };
 export type NormalizedDocument = {
   blocks: FlowBlock[];
-  footnotes: Map<string, FlowBlock>;
-  paragraphs: FlowBlock[];
+  footnotes: Map<string, FootnoteDefinition>;
+  paragraphs: TextFlowBlock[];
 };
 export type IndexedSection = {
   index: number;
@@ -158,6 +199,38 @@ const pos = (node: Node): SourcePosition => {
     },
   };
 };
+const lineStartsFor = (markdown: string): number[] => {
+  const starts = [0];
+  for (let i = 0; i < markdown.length; i++)
+    if (markdown.charCodeAt(i) === 10) starts.push(i + 1);
+  return starts;
+};
+const sourcePoint = (
+  offset: number,
+  lineStarts: readonly number[],
+): SourcePosition["start"] => {
+  let low = 0;
+  let high = lineStarts.length;
+  while (low + 1 < high) {
+    const middle = (low + high) >>> 1;
+    if (lineStarts[middle]! <= offset) low = middle;
+    else high = middle;
+  }
+  return {
+    line: low + 1,
+    column: offset - lineStarts[low]! + 1,
+    offset,
+  };
+};
+const sourceRange = (
+  start: number,
+  end: number,
+  lineStarts: readonly number[],
+): SourcePosition => ({
+  start: sourcePoint(start, lineStarts),
+  end: sourcePoint(end, lineStarts),
+});
+
 const unsupported = (node: Node): never => {
   throw new AgentDocxError(
     "UNSUPPORTED_MARKDOWN",
@@ -165,50 +238,166 @@ const unsupported = (node: Node): never => {
     { position: pos(node) as unknown as Record<string, never> },
   );
 };
+type InlineNormalization = {
+  runs: InlineRun[];
+  normalizedText: string;
+  sourceSegments: NormalizedSourceSegment[];
+};
+
 function inline(
   nodes: Node[],
+  markdown: string,
+  lineStarts: readonly number[],
   bold = false,
   italic = false,
   refs: string[] = [],
-): InlineRun[] {
-  const out: InlineRun[] = [];
+): InlineNormalization {
+  const runs: InlineRun[] = [];
+  const sourceSegments: NormalizedSourceSegment[] = [];
+  let normalizedText = "";
+  const append = (
+    text: string,
+    node: Node,
+    run: Omit<InlineRun, "text">,
+    exactSourceOffset?: number,
+  ) => {
+    if (!text) return;
+    const normalizedStart = normalizedText.length;
+    normalizedText += text;
+    runs.push({ text, ...run });
+    const normalizedEnd = normalizedText.length;
+    const precision = exactSourceOffset === undefined ? "node" : "exact";
+    const position =
+      exactSourceOffset !== undefined
+        ? sourceRange(
+            exactSourceOffset,
+            exactSourceOffset + text.length,
+            lineStarts,
+          )
+        : pos(node);
+    const segment: NormalizedSourceSegment = {
+      normalizedStart,
+      normalizedEnd,
+      sourceStartOffset:
+        exactSourceOffset ??
+        node.position?.start.offset ??
+        position.start.offset,
+      position,
+      precision,
+    };
+    const previous = sourceSegments.at(-1);
+    if (
+      previous?.precision === "exact" &&
+      segment.precision === "exact" &&
+      previous.normalizedEnd === segment.normalizedStart &&
+      previous.sourceStartOffset +
+        (previous.normalizedEnd - previous.normalizedStart) ===
+        segment.sourceStartOffset
+    ) {
+      previous.normalizedEnd = segment.normalizedEnd;
+      previous.position = sourceRange(
+        previous.sourceStartOffset,
+        segment.sourceStartOffset + text.length,
+        lineStarts,
+      );
+    } else {
+      sourceSegments.push(segment);
+    }
+  };
+  const appendNested = (nested: InlineNormalization) => {
+    const normalizedOffset = normalizedText.length;
+    runs.push(...nested.runs);
+    normalizedText += nested.normalizedText;
+    for (const nestedSegment of nested.sourceSegments) {
+      const segment = {
+        ...nestedSegment,
+        normalizedStart: nestedSegment.normalizedStart + normalizedOffset,
+        normalizedEnd: nestedSegment.normalizedEnd + normalizedOffset,
+      };
+      const previous = sourceSegments.at(-1);
+      if (
+        previous?.precision === "exact" &&
+        segment.precision === "exact" &&
+        previous.normalizedEnd === segment.normalizedStart &&
+        previous.sourceStartOffset +
+          (previous.normalizedEnd - previous.normalizedStart) ===
+          segment.sourceStartOffset
+      ) {
+        previous.normalizedEnd = segment.normalizedEnd;
+        previous.position = sourceRange(
+          previous.sourceStartOffset,
+          segment.sourceStartOffset +
+            segment.normalizedEnd -
+            segment.normalizedStart,
+          lineStarts,
+        );
+      } else {
+        sourceSegments.push(segment);
+      }
+    }
+  };
   for (const node of nodes) {
     switch (node.type) {
       case "text": {
         const value = node.value ?? "";
+        const nodeStart = node.position?.start.offset;
+        const exact =
+          nodeStart !== undefined &&
+          node.position?.end.offset !== undefined &&
+          markdown.slice(nodeStart, node.position.end.offset) === value;
         let cursor = 0;
         for (const match of value.matchAll(/\[\^([^\]]+)\]/g)) {
           const start = match.index ?? 0;
           if (start > cursor)
-            out.push({ text: value.slice(cursor, start), bold, italic });
+            append(
+              value.slice(cursor, start),
+              node,
+              { bold, italic },
+              exact ? nodeStart + cursor : undefined,
+            );
           const id = match[1]!.trim().toLowerCase();
           refs.push(id);
-          out.push({ text: "⁎", bold, italic, footnoteId: id });
+          append("⁎", node, { bold, italic, footnoteId: id });
           cursor = start + match[0].length;
         }
         if (cursor < value.length)
-          out.push({ text: value.slice(cursor), bold, italic });
+          append(
+            value.slice(cursor),
+            node,
+            { bold, italic },
+            exact ? nodeStart + cursor : undefined,
+          );
         break;
       }
       case "strong":
-        out.push(...inline(node.children ?? [], true, italic, refs));
+        appendNested(
+          inline(node.children ?? [], markdown, lineStarts, true, italic, refs),
+        );
         break;
       case "emphasis":
-        out.push(...inline(node.children ?? [], bold, true, refs));
+        appendNested(
+          inline(node.children ?? [], markdown, lineStarts, bold, true, refs),
+        );
         break;
       case "link":
       case "delete":
-        out.push(...inline(node.children ?? [], bold, italic, refs));
+        appendNested(
+          inline(node.children ?? [], markdown, lineStarts, bold, italic, refs),
+        );
         break;
       case "break":
-        out.push({ text: "\n", bold, italic });
+        append("\n", node, { bold, italic });
         break;
-      case "footnoteReference":
+      case "footnoteReference": {
         if (!node.identifier) unsupported(node);
-        refs.push(node.identifier!);
-        out.push({ text: "⁎", bold, italic, footnoteId: node.identifier! });
+        const id = node.identifier!.toLowerCase();
+        refs.push(id);
+        append("⁎", node, { bold, italic, footnoteId: id });
         break;
+      }
       case "inlineCode":
+        append(node.value ?? "", node, { bold, italic, literal: true });
+        break;
       case "image":
       case "html":
         unsupported(node);
@@ -217,7 +406,7 @@ function inline(
         unsupported(node);
     }
   }
-  return out;
+  return { runs, normalizedText, sourceSegments };
 }
 const emptyPos: SourcePosition = {
   start: { line: 1, column: 1, offset: 0 },
@@ -227,22 +416,50 @@ export function normalizeMarkdown(markdown: string): NormalizedDocument {
   const root = unified()
     .use(remarkParse)
     .use(remarkGfm)
+    .use(remarkFrontmatter, ["yaml"])
+    .use(remarkMath, { singleDollarTextMath: false })
     .parse(markdown) as unknown as Node;
+  const lineStarts = lineStartsFor(markdown);
   const blocks: FlowBlock[] = [];
-  const footnotes = new Map<string, FlowBlock>();
-  const paragraphs: FlowBlock[] = [];
-  const emit = (node: Node, kind: FlowBlock["kind"], level?: number) => {
+  const footnotes = new Map<string, FootnoteDefinition>();
+  const paragraphs: TextFlowBlock[] = [];
+  const textBlock = (
+    node: Node,
+    kind: TextBlockKind,
+    level?: number,
+  ): TextFlowBlock => {
     const refs: string[] = [];
-    const b: FlowBlock = {
+    const normalized = inline(
+      node.children ?? [],
+      markdown,
+      lineStarts,
+      false,
+      false,
+      refs,
+    );
+    return {
       kind,
-      runs: inline(node.children ?? [], false, false, refs),
+      ...normalized,
       position: pos(node),
-      hardBreakAfter: false,
+      ...(level === undefined ? {} : { level }),
       footnoteRefs: refs,
     };
-    if (level !== undefined) b.level = level;
-    blocks.push(b);
-    if (kind === "paragraph") paragraphs.push(b);
+  };
+  const emit = (node: Node, kind: TextBlockKind, level?: number) => {
+    const block = textBlock(node, kind, level);
+    blocks.push(block);
+    if (kind === "paragraph") paragraphs.push(block);
+  };
+  const firstDescendant = (
+    node: Node,
+    predicate: (candidate: Node) => boolean,
+  ): Node | undefined => {
+    if (predicate(node)) return node;
+    for (const child of node.children ?? []) {
+      const found = firstDescendant(child, predicate);
+      if (found) return found;
+    }
+    return undefined;
   };
   const visit = (node: Node, context?: "blockquote" | "list") => {
     switch (node.type) {
@@ -253,52 +470,82 @@ export function normalizeMarkdown(markdown: string): NormalizedDocument {
         emit(node, "heading", node.depth);
         break;
       case "blockquote":
-        for (const c of node.children ?? []) visit(c, "blockquote");
+        for (const child of node.children ?? []) visit(child, "blockquote");
         break;
       case "list":
         for (const item of node.children ?? []) visit(item, "list");
         break;
       case "listItem":
-        for (const c of node.children ?? []) visit(c, context ?? "list");
+        for (const child of node.children ?? [])
+          visit(child, context ?? "list");
         break;
       case "footnoteDefinition": {
-        const id = node.identifier;
+        const id = node.identifier?.toLowerCase();
         if (!id || footnotes.has(id))
           throw new AgentDocxError(
             "UNSUPPORTED_MARKDOWN",
             `Missing or duplicate footnote: ${id ?? ""}`,
+            { position: pos(node) as unknown as Record<string, never> },
           );
-        if (
-          (node.children?.length ?? 0) !== 1 ||
-          node.children?.[0]?.type !== "paragraph"
-        )
-          unsupported(node);
-        const child = node.children![0]!;
-        const refs: string[] = [];
+        if ((node.children?.length ?? 0) === 0) unsupported(node);
+        const definitionBlocks: TextFlowBlock[] = [];
+        for (const child of node.children ?? []) {
+          if (child.type !== "paragraph") unsupported(child);
+          definitionBlocks.push(textBlock(child, "footnote"));
+        }
         footnotes.set(id, {
-          kind: "footnote",
-          runs: inline(child.children ?? [], false, false, refs),
+          id,
           position: pos(node),
-          hardBreakAfter: false,
-          footnoteRefs: refs,
+          blocks: definitionBlocks,
+          footnoteRefs: definitionBlocks.flatMap((block) => block.footnoteRefs),
         });
         break;
       }
+      case "table": {
+        const alignments = node.align ?? [];
+        const rows = (node.children ?? []).map((row) =>
+          (row.children ?? []).map((cell, columnIndex): TableCell => {
+            const offendingReference = firstDescendant(
+              cell,
+              (candidate) =>
+                candidate.type === "footnoteReference" ||
+                candidate.type === "image" ||
+                candidate.type === "html",
+            );
+            if (offendingReference) unsupported(offendingReference);
+            const refs: string[] = [];
+            const normalized = inline(
+              cell.children ?? [],
+              markdown,
+              lineStarts,
+              false,
+              false,
+              refs,
+            );
+            if (refs.length) unsupported(cell);
+            return {
+              ...normalized,
+              position: pos(cell),
+              alignment: alignments[columnIndex] ?? null,
+            };
+          }),
+        );
+        blocks.push({
+          kind: "table",
+          position: pos(node),
+          alignments,
+          rows,
+        });
+        break;
+      }
+      case "thematicBreak":
+        blocks.push({ kind: "thematic-break", position: pos(node) });
+        break;
       case "html":
         if ((node.value ?? "").trim() === "<!-- pagebreak -->")
-          blocks.push({
-            kind: "pagebreak",
-            runs: [],
-            position: pos(node),
-            hardBreakAfter: true,
-            footnoteRefs: [],
-          });
+          blocks.push({ kind: "pagebreak", position: pos(node) });
         else unsupported(node);
         break;
-      case "thematicBreak":
-        unsupported(node);
-        break;
-      case "table":
       case "code":
       case "yaml":
       case "image":
@@ -311,7 +558,7 @@ export function normalizeMarkdown(markdown: string): NormalizedDocument {
   };
   for (const child of root.children ?? []) visit(child);
   const visited = new Set<string>();
-  const validateDefinition = (id: string, source: FlowBlock) => {
+  const validateDefinition = (id: string, source: TextFlowBlock) => {
     const definition = footnotes.get(id);
     if (!definition)
       throw new AgentDocxError(
@@ -321,12 +568,19 @@ export function normalizeMarkdown(markdown: string): NormalizedDocument {
       );
     if (visited.has(id)) return;
     visited.add(id);
-    for (const nested of definition.footnoteRefs)
-      validateDefinition(nested, definition);
+    for (const block of definition.blocks)
+      for (const nested of block.footnoteRefs)
+        validateDefinition(nested, block);
   };
   for (const block of blocks)
-    for (const id of block.footnoteRefs) validateDefinition(id, block);
-  for (const [id, definition] of footnotes) validateDefinition(id, definition);
+    if (
+      block.kind !== "table" &&
+      block.kind !== "thematic-break" &&
+      block.kind !== "pagebreak"
+    )
+      for (const id of block.footnoteRefs) validateDefinition(id, block);
+  for (const [id, definition] of footnotes)
+    for (const block of definition.blocks) validateDefinition(id, block);
   return { blocks, footnotes, paragraphs };
 }
 export const emptyPosition = emptyPos;

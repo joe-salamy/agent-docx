@@ -3,6 +3,22 @@
   "version": "0.1.0",
   "description": "Deterministic DOCX-equivalent pagination for legal Markdown",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joe-salamy/agent-docx.git"
+  },
+  "bugs": {
+    "url": "https://github.com/joe-salamy/agent-docx/issues"
+  },
+  "homepage": "https://github.com/joe-salamy/agent-docx#readme",
+  "keywords": [
+    "legal",
+    "markdown",
+    "page-count",
+    "pagination",
+    "docx",
+    "word"
+  ],
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -17,12 +33,24 @@
       "import": "./dist/index.js"
     },
     "./config.schema.json": "./config.schema.json",
+    "./cli-request.schema.json": "./cli-request.schema.json",
+    "./measurement-result.schema.json": "./measurement-result.schema.json",
+    "./docx-template-inspection.schema.json": "./docx-template-inspection.schema.json",
+    "./cli-jsonl.schema.json": "./cli-jsonl.schema.json",
+    "./cli-error.schema.json": "./cli-error.schema.json",
+    "./profile-catalog.schema.json": "./profile-catalog.schema.json",
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
     "assets",
     "config.schema.json",
+    "cli-request.schema.json",
+    "measurement-result.schema.json",
+    "docx-template-inspection.schema.json",
+    "cli-jsonl.schema.json",
+    "cli-error.schema.json",
+    "profile-catalog.schema.json",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.txt"
@@ -47,6 +75,8 @@
     "linebreak": "^1.1.0",
     "pdf-lib": "1.17.1",
     "remark-gfm": "^4.0.1",
+    "remark-frontmatter": "^5.0.0",
+    "remark-math": "^6.0.0",
     "remark-parse": "^11.0.0",
     "saxes": "^6.0.0",
     "unified": "^11.0.5",

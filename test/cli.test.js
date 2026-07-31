@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import { spawn } from "node:child_process";
 import {
   mkdir,
@@ -20,6 +21,39 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const pkg = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
+);
+const schemaNames = [
+  "cli-request.schema.json",
+  "measurement-result.schema.json",
+  "docx-template-inspection.schema.json",
+  "cli-jsonl.schema.json",
+  "cli-error.schema.json",
+  "profile-catalog.schema.json",
+];
+const schemas = await Promise.all(
+  schemaNames.map(async (name) =>
+    JSON.parse(await readFile(new URL(`../${name}`, import.meta.url), "utf8")),
+  ),
+);
+const ajv = new Ajv2020({ strict: true, allowUnionTypes: true });
+for (const schema of schemas) ajv.addSchema(schema);
+const validateMeasurement = ajv.getSchema(
+  "https://agent-docx.dev/schemas/measurement-result-v1.json",
+);
+const validateRequest = ajv.getSchema(
+  "https://agent-docx.dev/schemas/cli-request-v1.json",
+);
+const validateJsonl = ajv.getSchema(
+  "https://agent-docx.dev/schemas/cli-jsonl-v1.json",
+);
+const validateInspection = ajv.getSchema(
+  "https://agent-docx.dev/schemas/docx-template-inspection-v1.json",
+);
+const validateFatal = ajv.getSchema(
+  "https://agent-docx.dev/schemas/cli-error-v1.json",
+);
+const validateProfileCatalog = ajv.getSchema(
+  "https://agent-docx.dev/schemas/profile-catalog-v1.json",
 );
 
 function memoryRuntime(input = "", overrides = {}) {
@@ -76,15 +110,60 @@ test("help and version are standalone", async () => {
   assert.match(bad.stderr, /INVALID_ARGUMENT/);
 });
 
+test("profile catalog is standalone and schema-valid", async () => {
+  const json = await runInProcess(["--list-profiles", "--json"]);
+  assert.equal(json.code, 0, json.stderr);
+  assert.equal(json.stderr, "");
+  const catalog = JSON.parse(json.stdout);
+  assert.deepEqual(
+    catalog.profiles.map(({ id }) => id),
+    ["us-district-conventional", "frap-32", "cand-civil"],
+  );
+  assert.equal(
+    validateProfileCatalog(catalog),
+    true,
+    JSON.stringify(validateProfileCatalog.errors),
+  );
+
+  const human = await runInProcess(["--list-profiles"]);
+  assert.equal(human.code, 0, human.stderr);
+  assert.match(human.stdout, /Built-in profiles:/);
+  assert.match(human.stdout, /frap-32: Federal Rule/);
+
+  const invalid = await runInProcess(["--list-profiles", "filing.md"]);
+  assert.equal(invalid.code, 2);
+  assert.match(invalid.stderr, /INVALID_ARGUMENT/);
+});
+
 test("single JSON is clean and strict UTF-8", async () => {
   const result = await runInProcess(["--json"], "A short filing.\n");
   assert.equal(result.code, 0);
   assert.equal(result.stderr, "");
   assert.equal(JSON.parse(result.stdout).schemaVersion, 1);
+  assert.equal(
+    validateMeasurement(JSON.parse(result.stdout)),
+    true,
+    JSON.stringify(validateMeasurement.errors),
+  );
 
   const invalid = await runInProcess(["--json"], new Uint8Array([0xff]));
   assert.equal(invalid.code, 1);
   assert.match(invalid.stderr, /INPUT_NOT_UTF8/);
+});
+
+test("template inspection JSON satisfies its published schema", async () => {
+  const result = await runInProcess([
+    "--inspect-template",
+    "test/fixtures/docx/theme-inheritance.docx",
+    "--json",
+  ]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.equal(
+    validateInspection(JSON.parse(result.stdout)),
+    true,
+    JSON.stringify(validateInspection.errors),
+  );
 });
 
 test("boundary fixture through committed config", async () => {
@@ -169,6 +248,136 @@ test("JSONL batch continues after structured item errors", async () => {
   assert.equal(records[1].kind, "error");
   assert.equal(records[1].error.code, "INVALID_ARGUMENT");
   assert.equal(records[2].requestId, 3);
+  for (const record of records)
+    assert.equal(
+      validateJsonl(record),
+      true,
+      JSON.stringify(validateJsonl.errors),
+    );
+});
+
+test("JSONL batch decodes streamed requests across UTF-8 boundaries", async () => {
+  const input = [
+    JSON.stringify({
+      id: "first",
+      name: "résumé",
+      markdown: "First 😀.",
+    }),
+    JSON.stringify({ id: "second", markdown: "Second." }),
+    "",
+  ].join("\r\n");
+  const bytes = Buffer.from(input);
+  const emojiStart = bytes.indexOf(Buffer.from("😀"));
+  const newline = bytes.indexOf(0x0a);
+  assert.ok(emojiStart >= 0);
+  assert.ok(newline > emojiStart);
+  const chunks = [
+    bytes.subarray(0, emojiStart + 2),
+    bytes.subarray(emojiStart + 2, newline + 1),
+    bytes.subarray(newline + 1),
+  ];
+  const result = await runInProcess(["--batch", "--input-jsonl"], "", {
+    readStdin: async () => {
+      throw new Error("JSONL batch must use streaming stdin");
+    },
+    readStdinChunks: async function* () {
+      for (const chunk of chunks) yield chunk;
+    },
+  });
+  assert.equal(result.code, 0, result.stderr);
+  const records = result.stdout.trim().split("\n").map(JSON.parse);
+  assert.deepEqual(
+    records.map(({ requestId }) => requestId),
+    ["first", "second"],
+  );
+  assert.deepEqual(records[0].source, { kind: "inline", name: "résumé" });
+  for (const record of records)
+    assert.equal(
+      validateJsonl(record),
+      true,
+      JSON.stringify(validateJsonl.errors),
+    );
+});
+
+test("request schema accepts exactly one closed source shape", () => {
+  assert.equal(validateRequest({ id: "x", markdown: "Text." }), true);
+  assert.equal(validateRequest({ id: 1, path: "filing.md" }), true);
+  assert.equal(validateRequest({ markdown: "Text.", extra: true }), false);
+  assert.equal(
+    validateRequest({ markdown: "Text.", path: "filing.md" }),
+    false,
+  );
+  assert.equal(validateRequest({ id: {}, markdown: "Text." }), false);
+});
+
+test("JSONL rejects closed requests while retaining valid correlation and relative sources", async () => {
+  const input = [
+    JSON.stringify({
+      id: "known",
+      markdown: "Inline.",
+      unexpected: true,
+    }),
+    JSON.stringify({ id: 7, path: "../outside.md", extra: 1 }),
+    JSON.stringify({ id: {}, markdown: "Bad ID." }),
+    JSON.stringify({ id: "empty", path: "" }),
+  ].join("\n");
+  const result = await runInProcess(["--batch", "--input-jsonl"], input);
+  assert.equal(result.code, 1);
+  assert.equal(result.stderr, "");
+  const records = result.stdout.trim().split("\n").map(JSON.parse);
+  assert.deepEqual(
+    records.map(({ requestId }) => requestId),
+    ["known", 7, null, "empty"],
+  );
+  assert.deepEqual(records[0].source, { kind: "inline", name: null });
+  assert.deepEqual(records[1].source, {
+    kind: "file",
+    path: "../outside.md",
+  });
+  assert.deepEqual(records[2].source, { kind: "inline", name: null });
+  assert.deepEqual(records[3].source, { kind: "stdin" });
+  for (const record of records)
+    assert.equal(
+      validateJsonl(record),
+      true,
+      JSON.stringify(validateJsonl.errors),
+    );
+});
+
+test("trim-only human output is ranked and omits generic paragraph bars", async () => {
+  const trim = await runInProcess(
+    ["--trim", "--trim-threshold", "1"],
+    "Word ".repeat(250),
+  );
+  assert.equal(trim.code, 0, trim.stderr);
+  assert.match(trim.stdout, /Trim opportunities:/);
+  assert.match(trim.stdout, /1\. Lines \d+-\d+: "/);
+  assert.match(trim.stdout, /\d+ twips/);
+  assert.doesNotMatch(trim.stdout, /[█░]/);
+
+  const paragraphs = await runInProcess(
+    ["--trim", "--trim-threshold", "1", "--paragraphs"],
+    "Word ".repeat(250),
+  );
+  assert.match(paragraphs.stdout, /[█░]/);
+});
+
+test("fatal records use INTERNAL_ERROR for unknown exceptions", async () => {
+  const capture = memoryRuntime("", {
+    readStdin: async () => {
+      throw new Error("injected failure");
+    },
+  });
+  const code = await runCli(["--json"], capture.runtime);
+  assert.equal(code, 1);
+  const fatal = JSON.parse(capture.stderr());
+  assert.equal(
+    validateFatal(fatal),
+    true,
+    JSON.stringify(validateFatal.errors),
+  );
+  assert.equal(fatal.error.code, "INTERNAL_ERROR");
+  assert.equal(fatal.error.message, "injected failure");
 });
 
 test("executable adapter wires real stdin and clean streams", async () => {
@@ -202,6 +411,8 @@ test("single output writes valid exclusive DOCX without JSON bytes", async () =>
     assert.equal(collision.stdout, "");
     assert.deepEqual(await readFile(output), original);
     assert.deepEqual(JSON.parse(collision.stderr), {
+      schemaVersion: 1,
+      kind: "fatal",
       error: {
         code: "OUTPUT_EXISTS",
         message: `Output already exists: ${output}`,
@@ -475,6 +686,45 @@ test("batch discovery preflights failures and config overrides", async () => {
     );
     assert.equal(invalidConfig.code, 1);
     assert.match(invalidConfig.stderr, /INVALID_CONFIG/);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("watch JSONL emits validated ready, result, and signal end records", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "agent-docx-watch-"));
+  const path = join(temporary, "watch.md");
+  await writeFile(path, "Watched.");
+  try {
+    const capture = memoryRuntime("", {
+      cwd: temporary,
+      onceSignal(signal, listener) {
+        if (signal === "SIGINT") setTimeout(listener, 10);
+      },
+    });
+    const code = await runCli(
+      ["--watch", "--jsonl", "watch.md"],
+      capture.runtime,
+    );
+    assert.equal(code, 130);
+    assert.equal(capture.stderr(), "");
+    const records = capture.stdout().trim().split("\n").map(JSON.parse);
+    assert.deepEqual(
+      records.map(({ kind }) => kind),
+      ["ready", "result", "end"],
+    );
+    assert.deepEqual(
+      records.map(({ sequence }) => sequence),
+      [1, 2, 3],
+    );
+    assert.equal(records[1].trigger.kind, "initial");
+    assert.equal(records[2].reason, "SIGINT");
+    for (const record of records)
+      assert.equal(
+        validateJsonl(record),
+        true,
+        JSON.stringify(validateJsonl.errors),
+      );
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

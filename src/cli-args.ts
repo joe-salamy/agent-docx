@@ -9,6 +9,7 @@ export type CliOptionValues = Record<
 export type CliCommand =
   | { mode: "help" }
   | { mode: "version" }
+  | { mode: "profiles"; json: boolean }
   | { mode: "inspect"; path: string; json: boolean }
   | { mode: "batch-files"; paths: readonly string[]; values: CliOptionValues }
   | { mode: "batch-jsonl"; values: CliOptionValues }
@@ -66,9 +67,20 @@ const specs = {
   "debounce-ms": { type: "string" },
   poll: { type: "boolean" },
   "inspect-template": { type: "boolean" },
+  "list-profiles": { type: "boolean" },
 } as const;
 
-export const cliHelp = `Usage: agent-docx [options] [FILE.md|-]\n\nEstimate DOCX-equivalent pages for legal Markdown.\n\nModes: --inspect-template FILE.docx, --batch FILE..., --batch --input-jsonl, --watch FILE\nOutput: --json (single/inspect), --jsonl (watch), --output FILE.docx (single)\nBatch discovery: --recursive, --no-recursive, --include GLOB, --exclude GLOB\n`;
+export const cliHelp = `Usage: agent-docx [options] [FILE.md|-]
+
+Estimate DOCX-equivalent pages for legal Markdown.
+
+Modes: --list-profiles, --inspect-template FILE.docx, --batch FILE..., --batch --input-jsonl, --watch FILE
+Output: --json (unwrapped single/inspect/profile catalog), --jsonl (watch), --output FILE.docx (single)
+Batch discovery: --recursive, --no-recursive, --include GLOB, --exclude GLOB
+JSONL request: {"id"?:string|number|null,"path":string} or {"id"?:string|number|null,"name"?:string,"markdown":string}
+JSONL lifecycle: batch result|error; watch ready, result|error updates, end. Sequence starts at 1; request IDs correlate batch records.
+Machine output: JSON/JSONL on stdout; fatal records on stderr. Exit: 0 success, 1 failure, 2 arguments, 3 over limit, 4 renderer failure.
+`;
 
 export function parseCliArgs(args: readonly string[]): CliCommand {
   const parsed = parseArgs({
@@ -126,6 +138,20 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
       );
     }
     return { mode: selected };
+  }
+  if (values["list-profiles"]) {
+    if (
+      parsed.positionals.length ||
+      Object.keys(values).some(
+        (key) => !["list-profiles", "json"].includes(key),
+      )
+    ) {
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        "--list-profiles accepts only optional --json",
+      );
+    }
+    return { mode: "profiles", json: values.json === true };
   }
 
   if (values["inspect-template"]) {

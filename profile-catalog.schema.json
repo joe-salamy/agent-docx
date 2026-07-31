@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-docx.dev/schemas/profile-catalog-v1.json",
+  "title": "agent-docx built-in profile catalog version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "profiles"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "effectiveDate",
+          "sourceUrl",
+          "sourceCitation",
+          "requestedFontFamily",
+          "filingPageLimits"
+        ],
+        "properties": {
+          "id": {
+            "enum": ["us-district-conventional", "frap-32", "cand-civil"]
+          },
+          "label": { "type": "string", "minLength": 1 },
+          "effectiveDate": { "type": ["string", "null"] },
+          "sourceUrl": { "type": ["string", "null"] },
+          "sourceCitation": { "type": "string", "minLength": 1 },
+          "requestedFontFamily": { "type": "string", "minLength": 1 },
+          "filingPageLimits": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "principal-brief": { "type": "integer", "minimum": 1 },
+              "reply-brief": { "type": "integer", "minimum": 1 },
+              "motion-document": { "type": "integer", "minimum": 1 },
+              "opposition-text": { "type": "integer", "minimum": 1 },
+              "reply-text": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

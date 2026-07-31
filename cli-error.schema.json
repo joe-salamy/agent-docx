@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-docx.dev/schemas/cli-error-v1.json",
+  "title": "agent-docx fatal error version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "error"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "fatal" },
+    "error": { "$ref": "#/$defs/error" }
+  },
+  "$defs": {
+    "jsonValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/$defs/jsonValue" } },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+        }
+      ]
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "enum": [
+            "INVALID_ARGUMENT",
+            "INTERNAL_ERROR",
+            "INVALID_CONFIG",
+            "OUTPUT_EXISTS",
+            "OUTPUT_WRITE_FAILED",
+            "INPUT_NOT_FOUND",
+            "INPUT_NOT_UTF8",
+            "UNSUPPORTED_MARKDOWN",
+            "INVALID_LAYOUT",
+            "INVALID_FONT",
+            "DOCX_INVALID",
+            "DOCX_TOO_LARGE",
+            "DOCX_UNSAFE",
+            "DOCX_XML_LIMIT",
+            "WORD_NOT_FOUND",
+            "WORD_WSL_BRIDGE_UNAVAILABLE",
+            "WORD_RENDER_FAILED",
+            "WORD_TIMEOUT",
+            "WORD_CLEANUP_FAILED",
+            "LIBREOFFICE_NOT_FOUND",
+            "LIBREOFFICE_RENDER_FAILED",
+            "LIBREOFFICE_TIMEOUT",
+            "NO_OFFICE_RENDERER"
+          ]
+        },
+        "message": { "type": "string" },
+        "details": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+        }
+      }
+    }
+  }
+}
