@@ -276,13 +276,40 @@
         "state": { "$ref": "#/$defs/jsonObject" }
       }
     },
+    "projectCompiled": {
+      "allOf": [
+        { "$ref": "https://agent-docx.dev/schemas/compiled-docx-v1.json" },
+        {
+          "type": "object",
+          "required": ["artifact"],
+          "properties": {
+            "artifact": {
+              "type": "object",
+              "required": ["path", "storePath", "revision", "mode", "baseRevision"],
+              "properties": {
+                "path": { "type": "string" },
+                "storePath": { "type": "string" },
+                "revision": { "$ref": "#/$defs/revisionId" },
+                "mode": { "enum": ["clean", "redline"] },
+                "baseRevision": {
+                  "anyOf": [
+                    { "$ref": "#/$defs/revisionId" },
+                    { "type": "null" }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "revisionDiff": {
       "type": "object",
       "additionalProperties": false,
       "required": ["changeSet"],
       "properties": {
         "changeSet": { "$ref": "https://agent-docx.dev/schemas/change-set-v1.json" },
-        "compiled": { "$ref": "https://agent-docx.dev/schemas/compiled-docx-v1.json" }
+        "compiled": { "$ref": "#/$defs/projectCompiled" }
       }
     },
     "resultBase": {
@@ -331,7 +358,7 @@
         { "type": "object", "properties": { "action": { "const": "draft.apply" }, "value": { "$ref": "#/$defs/revisionMutation" } } },
         { "type": "object", "properties": { "action": { "const": "review.add" }, "value": { "$ref": "#/$defs/revisionMutation" } } },
         { "type": "object", "properties": { "action": { "const": "review.resolve" }, "value": { "$ref": "#/$defs/revisionMutation" } } },
-        { "type": "object", "properties": { "action": { "const": "docx.export" }, "value": { "$ref": "https://agent-docx.dev/schemas/compiled-docx-v1.json" } } },
+        { "type": "object", "properties": { "action": { "const": "docx.export" }, "value": { "$ref": "#/$defs/projectCompiled" } } },
         { "type": "object", "properties": { "action": { "const": "docx.import" }, "value": { "$ref": "https://agent-docx.dev/schemas/docx-import-result-v1.json" } } },
         { "type": "object", "properties": { "action": { "const": "docx.inspect" }, "value": { "$ref": "https://agent-docx.dev/schemas/docx-template-inspection-v1.json" } } }
       ]

@@ -141,10 +141,10 @@ const deterministicBlockId = (
 };
 
 const markerPattern =
-  /^<!--[ \t]*agent-docx:block[ \t]+id="(b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"[ \t]*-->\r?\n/gm;
+  /^[ \t]*<!--[ \t]*agent-docx:block[ \t]+id="(b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"[ \t]*-->\r?\n/gm;
 
 const markerHtmlPattern =
-  /^<!--[ \t]*agent-docx:block[ \t]+id="(b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"[ \t]*-->$/;
+  /^[ \t]*<!--[ \t]*agent-docx:block[ \t]+id="(b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"[ \t]*-->$/;
 
 const markerMap = (markdown: string): ReadonlyMap<number, Marker> => {
   const found = new Map<number, Marker>();
@@ -152,29 +152,45 @@ const markerMap = (markdown: string): ReadonlyMap<number, Marker> => {
   for (const match of markdown.matchAll(markerPattern)) {
     const id = match[1]!;
     if (!isBlockId(id) || ids.has(id))
-      throw new AgentDocxError("REFERENCE_INVALID", `Duplicate block marker: ${id}`);
+      throw new AgentDocxError(
+        "REFERENCE_INVALID",
+        `Duplicate block marker: ${id}`,
+      );
     ids.add(id);
     const offset = match.index ?? 0;
     found.set(offset, { offset, end: offset + match[0].length, id });
   }
   return found;
 };
+const markdownForParser = (markdown: string): string =>
+  markdown.replace(markerPattern, (match) => {
+    const newline = match.endsWith("\r\n") ? "\r\n" : "\n";
+    return `${" ".repeat(match.length - newline.length)}${newline}`;
+  });
 
 const markerBefore = (
   markers: ReadonlyMap<number, Marker>,
+  markdown: string,
   offset: number,
 ): Marker | undefined => {
-  for (const marker of markers.values()) if (marker.end === offset) return marker;
+  for (const marker of markers.values())
+    if (
+      marker.end <= offset &&
+      /^[ \t]*$/.test(markdown.slice(marker.end, offset))
+    )
+      return marker;
   return undefined;
 };
-
 
 const appendInline = (
   target: InlineResult,
   text: string,
   node: MarkdownNode,
   state: Pick<InlineRun, "bold" | "italic" | "strikethrough" | "literal">,
-  extra: Omit<Partial<InlineRun>, keyof typeof state | "text" | "hardBreakAfter"> = {},
+  extra: Omit<
+    Partial<InlineRun>,
+    keyof typeof state | "text" | "hardBreakAfter"
+  > = {},
 ) => {
   if (!text) return;
   const position = positionOf(node);
@@ -191,7 +207,6 @@ const appendInline = (
     precision: exact ? "exact" : "node",
   });
 };
-
 
 const inlineSources = new WeakMap<InlineResult, string>();
 
@@ -231,12 +246,20 @@ const requireAttributes = (
   const allowed = new Set([...required, ...optional]);
   for (const key of Object.keys(attributes))
     if (!allowed.has(key))
-      errorAt("UNSUPPORTED_MARKDOWN", `Unknown directive attribute: ${key}`, node);
+      errorAt(
+        "UNSUPPORTED_MARKDOWN",
+        `Unknown directive attribute: ${key}`,
+        node,
+      );
   const result: Record<string, string> = {};
   for (const key of required) {
     const value = attributes[key];
     if (!value)
-      errorAt("UNSUPPORTED_MARKDOWN", `Missing directive attribute: ${key}`, node);
+      errorAt(
+        "UNSUPPORTED_MARKDOWN",
+        `Missing directive attribute: ${key}`,
+        node,
+      );
     result[key] = value!;
   }
   for (const key of optional) {
@@ -253,7 +276,11 @@ const requiredAttribute = (
 ): string => {
   const value = attributes[key];
   if (!value)
-    return errorAt("UNSUPPORTED_MARKDOWN", `Missing directive attribute: ${key}`, node);
+    return errorAt(
+      "UNSUPPORTED_MARKDOWN",
+      `Missing directive attribute: ${key}`,
+      node,
+    );
   return value;
 };
 
@@ -275,19 +302,31 @@ const inline = (
         appendInline(result, node.value ?? "", node, state);
         break;
       case "strong":
-        mergeInline(result, inline(node.children ?? [], markdown, { ...state, bold: true }));
+        mergeInline(
+          result,
+          inline(node.children ?? [], markdown, { ...state, bold: true }),
+        );
         break;
       case "emphasis":
-        mergeInline(result, inline(node.children ?? [], markdown, { ...state, italic: true }));
+        mergeInline(
+          result,
+          inline(node.children ?? [], markdown, { ...state, italic: true }),
+        );
         break;
       case "delete":
         mergeInline(
           result,
-          inline(node.children ?? [], markdown, { ...state, strikethrough: true }),
+          inline(node.children ?? [], markdown, {
+            ...state,
+            strikethrough: true,
+          }),
         );
         break;
       case "inlineCode":
-        appendInline(result, node.value ?? "", node, { ...state, literal: true });
+        appendInline(result, node.value ?? "", node, {
+          ...state,
+          literal: true,
+        });
         break;
       case "break": {
         const last = result.runs.at(-1);
@@ -310,45 +349,80 @@ const inline = (
       }
       case "footnoteReference": {
         const id = node.identifier?.toLowerCase();
-        if (!id) errorAt("REFERENCE_INVALID", "Missing footnote identifier", node);
+        if (!id)
+          errorAt("REFERENCE_INVALID", "Missing footnote identifier", node);
         appendInline(result, "⁎", node, state, { footnoteId: id });
         break;
       }
       case "textDirective": {
         if (node.name === "ref") {
           const attributes = requireAttributes(node, ["target"]);
-          const target = requiredAttribute(attributes, "target", node) as BlockId;
+          const target = requiredAttribute(
+            attributes,
+            "target",
+            node,
+          ) as BlockId;
           if (!isBlockId(target))
-            errorAt("REFERENCE_INVALID", `Invalid reference target: ${target}`, node);
+            errorAt(
+              "REFERENCE_INVALID",
+              `Invalid reference target: ${target}`,
+              node,
+            );
           const nested = inline(node.children ?? [], markdown, state);
           for (const run of nested.runs) run.referenceTarget = target;
           mergeInline(result, nested);
           break;
         }
         if (node.name === "authority") {
-          const attributes = requireAttributes(node, ["id", "category", "short"]);
+          const attributes = requireAttributes(node, [
+            "id",
+            "category",
+            "short",
+          ]);
           const category = requiredAttribute(attributes, "category", node);
-          if (!(["cases", "statutes", "rules", "other"] as readonly string[]).includes(category))
-            errorAt("REFERENCE_INVALID", `Invalid authority category: ${category}`, node);
+          if (
+            !(
+              ["cases", "statutes", "rules", "other"] as readonly string[]
+            ).includes(category)
+          )
+            errorAt(
+              "REFERENCE_INVALID",
+              `Invalid authority category: ${category}`,
+              node,
+            );
           const nested = inline(node.children ?? [], markdown, state);
           for (const run of nested.runs)
             run.authority = {
               id: requiredAttribute(attributes, "id", node),
-              category: category as NonNullable<InlineRun["authority"]>["category"],
+              category: category as NonNullable<
+                InlineRun["authority"]
+              >["category"],
               short: requiredAttribute(attributes, "short", node),
             };
           mergeInline(result, nested);
           break;
         }
-        errorAt("UNSUPPORTED_MARKDOWN", `Unsupported directive: ${node.name ?? ""}`, node);
+        errorAt(
+          "UNSUPPORTED_MARKDOWN",
+          `Unsupported directive: ${node.name ?? ""}`,
+          node,
+        );
         break;
       }
       case "image":
       case "html":
-        errorAt("UNSUPPORTED_MARKDOWN", `Unsupported Markdown node: ${node.type}`, node);
+        errorAt(
+          "UNSUPPORTED_MARKDOWN",
+          `Unsupported Markdown node: ${node.type}`,
+          node,
+        );
         break;
       default:
-        errorAt("UNSUPPORTED_MARKDOWN", `Unsupported Markdown node: ${node.type}`, node);
+        errorAt(
+          "UNSUPPORTED_MARKDOWN",
+          `Unsupported Markdown node: ${node.type}`,
+          node,
+        );
     }
   }
   return result;
@@ -357,18 +431,25 @@ const inline = (
 const collectRefs = (runs: readonly InlineRun[]): string[] =>
   runs.flatMap((run) => (run.footnoteId ? [run.footnoteId] : []));
 
-const validateRelativeAssetPath = (source: string, node: MarkdownNode): string => {
+const validateRelativeAssetPath = (
+  source: string,
+  node: MarkdownNode,
+): string => {
   if (
     source.length === 0 ||
     source.startsWith("/") ||
     source.includes("\\") ||
-    source.split("/").some((part) => part === "" || part === "." || part === "..")
+    source
+      .split("/")
+      .some((part) => part === "" || part === "." || part === "..")
   )
     errorAt("REFERENCE_INVALID", `Invalid asset source: ${source}`, node);
   return source;
 };
 
-const pngDimensions = (bytes: Uint8Array): { width: number; height: number } | null => {
+const pngDimensions = (
+  bytes: Uint8Array,
+): { width: number; height: number } | null => {
   if (
     bytes.byteLength < 24 ||
     bytes[0] !== 0x89 ||
@@ -385,8 +466,11 @@ const pngDimensions = (bytes: Uint8Array): { width: number; height: number } | n
   return { width: view.getUint32(16), height: view.getUint32(20) };
 };
 
-const jpegDimensions = (bytes: Uint8Array): { width: number; height: number } | null => {
-  if (bytes.byteLength < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+const jpegDimensions = (
+  bytes: Uint8Array,
+): { width: number; height: number } | null => {
+  if (bytes.byteLength < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8)
+    return null;
   let offset = 2;
   while (offset + 9 < bytes.byteLength) {
     if (bytes[offset] !== 0xff) return null;
@@ -412,7 +496,6 @@ const jpegDimensions = (bytes: Uint8Array): { width: number; height: number } | 
   return null;
 };
 
-
 const assetFor = (
   context: ParseContext,
   source: string,
@@ -424,7 +507,11 @@ const assetFor = (
   if (!asset)
     return errorAt("REFERENCE_INVALID", `Missing asset: ${normalized}`, node);
   if (image && !["image/png", "image/jpeg"].includes(asset.mediaType))
-    return errorAt("REFERENCE_INVALID", `Image must be PNG or JPEG: ${normalized}`, node);
+    return errorAt(
+      "REFERENCE_INVALID",
+      `Image must be PNG or JPEG: ${normalized}`,
+      node,
+    );
   const dimensions =
     asset.mediaType === "image/png"
       ? pngDimensions(asset.bytes)
@@ -432,7 +519,11 @@ const assetFor = (
         ? jpegDimensions(asset.bytes)
         : null;
   if (image && !dimensions)
-    return errorAt("REFERENCE_INVALID", `Invalid image bytes: ${normalized}`, node);
+    return errorAt(
+      "REFERENCE_INVALID",
+      `Invalid image bytes: ${normalized}`,
+      node,
+    );
   return asset;
 };
 
@@ -440,10 +531,19 @@ const baseFor = (
   node: MarkdownNode,
   kind: string,
   context: ParseContext,
-): { id: BlockId; position: SourcePosition; sourceText: string; segments: [] } => {
+): {
+  id: BlockId;
+  position: SourcePosition;
+  sourceText: string;
+  segments: [];
+} => {
   const position = positionOf(node);
   const sourceText = sourceTextOf(node, context.markdown);
-  const marker = markerBefore(context.markers, position.start.offset);
+  const marker = markerBefore(
+    context.markers,
+    context.markdown,
+    position.start.offset,
+  );
   let id: BlockId;
   if (marker) {
     id = marker.id;
@@ -462,7 +562,10 @@ const baseFor = (
   return { id, position, sourceText, segments: [] };
 };
 
-const paragraphFor = (node: MarkdownNode, context: ParseContext): InlineParagraph => {
+const paragraphFor = (
+  node: MarkdownNode,
+  context: ParseContext,
+): InlineParagraph => {
   const normalized = inline(node.children ?? [], context.markdown);
   return {
     position: positionOf(node),
@@ -485,11 +588,25 @@ const listFor = (
     const paragraphs: InlineParagraph[] = [];
     const children: LegalListBlock[] = [];
     for (const child of item.children ?? []) {
-      if (child.type === "paragraph") paragraphs.push(paragraphFor(child, context));
-      else if (child.type === "list") children.push(listFor(child, context, depth + 1));
-      else if (child.type === "html" && markerBefore(context.markers, positionOf(child).start.offset)) {
+      if (child.type === "paragraph")
+        paragraphs.push(paragraphFor(child, context));
+      else if (child.type === "list")
+        children.push(listFor(child, context, depth + 1));
+      else if (
+        child.type === "html" &&
+        markerBefore(
+          context.markers,
+          context.markdown,
+          positionOf(child).start.offset,
+        )
+      ) {
         continue;
-      } else errorAt("UNSUPPORTED_MARKDOWN", `Unsupported list content: ${child.type}`, child);
+      } else
+        errorAt(
+          "UNSUPPORTED_MARKDOWN",
+          `Unsupported list content: ${child.type}`,
+          child,
+        );
     }
     if (paragraphs.length === 0)
       errorAt("UNSUPPORTED_MARKDOWN", "List item requires a paragraph", item);
@@ -511,7 +628,10 @@ const listFor = (
   };
 };
 
-const tableFor = (node: MarkdownNode, context: ParseContext): Extract<LegalBlock, { kind: "table" }> => {
+const tableFor = (
+  node: MarkdownNode,
+  context: ParseContext,
+): Extract<LegalBlock, { kind: "table" }> => {
   const base = baseFor(node, "table", context);
   const rows = (node.children ?? []).map((row) => {
     if (row.type !== "tableRow")
@@ -519,7 +639,10 @@ const tableFor = (node: MarkdownNode, context: ParseContext): Extract<LegalBlock
     return (row.children ?? []).map((cell): LegalTableCell => {
       if (cell.type !== "tableCell")
         errorAt("UNSUPPORTED_MARKDOWN", "Invalid table cell", cell);
-      return { paragraphs: [paragraphFor(cell, context)], verticalAlign: "top" };
+      return {
+        paragraphs: [paragraphFor(cell, context)],
+        verticalAlign: "top",
+      };
     });
   });
   return {
@@ -536,7 +659,12 @@ const leafDirectiveFor = (
 ): LegalBlock => {
   const base = baseFor(node, node.name ?? "directive", context);
   const name = node.name;
-  if (name === "caption" || name === "toc" || name === "toa" || name === "pagebreak") {
+  if (
+    name === "caption" ||
+    name === "toc" ||
+    name === "toa" ||
+    name === "pagebreak"
+  ) {
     requireAttributes(node, []);
     return {
       ...base,
@@ -560,7 +688,11 @@ const leafDirectiveFor = (
     };
   }
   if (name === "sectionbreak") {
-    const attributes = requireAttributes(node, ["kind"], ["pageNumberFormat", "pageNumberStart"]);
+    const attributes = requireAttributes(
+      node,
+      ["kind"],
+      ["pageNumberFormat", "pageNumberStart"],
+    );
     const breakKind = requiredAttribute(attributes, "kind", node);
     if (!["next-page", "continuous"].includes(breakKind))
       return errorAt(
@@ -571,10 +703,21 @@ const leafDirectiveFor = (
     const format = attributes.pageNumberFormat;
     const start = attributes.pageNumberStart;
     if ((format === undefined) !== (start === undefined))
-      errorAt("REFERENCE_INVALID", "Section page number attributes are paired", node);
+      errorAt(
+        "REFERENCE_INVALID",
+        "Section page number attributes are paired",
+        node,
+      );
     if (format && !["decimal", "lower-roman", "upper-roman"].includes(format))
-      errorAt("REFERENCE_INVALID", `Invalid page number format: ${format}`, node);
-    if (start && (!/^[1-9][0-9]*$/.test(start) || !Number.isSafeInteger(Number(start))))
+      errorAt(
+        "REFERENCE_INVALID",
+        `Invalid page number format: ${format}`,
+        node,
+      );
+    if (
+      start &&
+      (!/^[1-9][0-9]*$/.test(start) || !Number.isSafeInteger(Number(start)))
+    )
       errorAt("REFERENCE_INVALID", `Invalid page number start: ${start}`, node);
     return {
       ...base,
@@ -591,11 +734,25 @@ const leafDirectiveFor = (
     };
   }
   if (name === "image") {
-    const attributes = requireAttributes(node, ["source", "alt", "widthTwips", "heightTwips"]);
+    const attributes = requireAttributes(node, [
+      "source",
+      "alt",
+      "widthTwips",
+      "heightTwips",
+    ]);
     const width = Number(requiredAttribute(attributes, "widthTwips", node));
     const height = Number(requiredAttribute(attributes, "heightTwips", node));
-    if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0)
-      return errorAt("REFERENCE_INVALID", "Image dimensions must be positive twips", node);
+    if (
+      !Number.isInteger(width) ||
+      !Number.isInteger(height) ||
+      width <= 0 ||
+      height <= 0
+    )
+      return errorAt(
+        "REFERENCE_INVALID",
+        "Image dimensions must be positive twips",
+        node,
+      );
     const source = validateRelativeAssetPath(
       requiredAttribute(attributes, "source", node),
       node,
@@ -610,7 +767,11 @@ const leafDirectiveFor = (
       heightTwips: height,
     };
   }
-  return errorAt("UNSUPPORTED_MARKDOWN", `Unsupported directive: ${name ?? ""}`, node);
+  return errorAt(
+    "UNSUPPORTED_MARKDOWN",
+    `Unsupported directive: ${name ?? ""}`,
+    node,
+  );
 };
 
 const containerDirectiveFor = (
@@ -625,7 +786,11 @@ const containerDirectiveFor = (
     const sequence = requiredAttribute(attributes, "sequence", node);
     const level = requiredAttribute(attributes, "level", node);
     if (!/^[1-4]$/.test(level))
-      return errorAt("REFERENCE_INVALID", `Invalid numbered level: ${level}`, node);
+      return errorAt(
+        "REFERENCE_INVALID",
+        `Invalid numbered level: ${level}`,
+        node,
+      );
     const children = node.children ?? [];
     if (children.length !== 1 || children[0]!.type !== "paragraph")
       errorAt("UNSUPPORTED_MARKDOWN", "numbered requires one paragraph", node);
@@ -669,9 +834,17 @@ const containerDirectiveFor = (
         "local-rule",
       ].includes(kind)
     )
-      return errorAt("REFERENCE_INVALID", `Invalid length exclusion: ${attributes.kind}`, node);
+      return errorAt(
+        "REFERENCE_INVALID",
+        `Invalid length exclusion: ${attributes.kind}`,
+        node,
+      );
     if ((kind === "local-rule") !== (attributes.citation !== undefined))
-      return errorAt("REFERENCE_INVALID", "local-rule requires citation and other exclusions forbid it", node);
+      return errorAt(
+        "REFERENCE_INVALID",
+        "local-rule requires citation and other exclusions forbid it",
+        node,
+      );
     return {
       ...base,
       kind: "length-exclusion",
@@ -680,7 +853,11 @@ const containerDirectiveFor = (
       blocks: parseBlocks(node.children ?? [], context, depth),
     };
   }
-  return errorAt("UNSUPPORTED_MARKDOWN", `Unsupported directive: ${name ?? ""}`, node);
+  return errorAt(
+    "UNSUPPORTED_MARKDOWN",
+    `Unsupported directive: ${name ?? ""}`,
+    node,
+  );
 };
 
 const parseBlock = (
@@ -692,12 +869,21 @@ const parseBlock = (
     case "html": {
       const marker = markerHtmlPattern.exec(node.value ?? "");
       if (marker && isBlockId(marker[1]!)) return null;
-      return errorAt("UNSUPPORTED_MARKDOWN", "Arbitrary HTML is unsupported", node);
+      return errorAt(
+        "UNSUPPORTED_MARKDOWN",
+        "Arbitrary HTML is unsupported",
+        node,
+      );
     }
     case "paragraph": {
       const base = baseFor(node, "paragraph", context);
       const normalized = inline(node.children ?? [], context.markdown);
-      return { ...base, kind: "paragraph", runs: normalized.runs, footnoteRefs: collectRefs(normalized.runs) };
+      return {
+        ...base,
+        kind: "paragraph",
+        runs: normalized.runs,
+        footnoteRefs: collectRefs(normalized.runs),
+      };
     }
     case "heading": {
       const level = node.depth;
@@ -705,15 +891,30 @@ const parseBlock = (
         errorAt("UNSUPPORTED_MARKDOWN", "Invalid heading level", node);
       const base = baseFor(node, "heading", context);
       const normalized = inline(node.children ?? [], context.markdown);
-      return { ...base, kind: "heading", level: level as 1 | 2 | 3 | 4 | 5 | 6, runs: normalized.runs };
+      return {
+        ...base,
+        kind: "heading",
+        level: level as 1 | 2 | 3 | 4 | 5 | 6,
+        runs: normalized.runs,
+      };
     }
     case "blockquote": {
       const children = node.children ?? [];
       if (children.length !== 1 || children[0]!.type !== "paragraph")
-        errorAt("UNSUPPORTED_MARKDOWN", "Blockquotes require one paragraph", node);
+        errorAt(
+          "UNSUPPORTED_MARKDOWN",
+          "Blockquotes require one paragraph",
+          node,
+        );
       const base = baseFor(node, "blockquote", context);
       const normalized = inline(children[0]!.children ?? [], context.markdown);
-      return { ...base, kind: "blockquote", depth, runs: normalized.runs, footnoteRefs: collectRefs(normalized.runs) };
+      return {
+        ...base,
+        kind: "blockquote",
+        depth,
+        runs: normalized.runs,
+        footnoteRefs: collectRefs(normalized.runs),
+      };
     }
     case "list":
       return listFor(node, context, depth + 1);
@@ -776,7 +977,11 @@ const parseFootnotes = (
     const base = baseFor(node, "footnote", context);
     const paragraphs = (node.children ?? []).map((child) => {
       if (child.type !== "paragraph")
-        errorAt("UNSUPPORTED_MARKDOWN", "Footnotes only support paragraphs", child);
+        errorAt(
+          "UNSUPPORTED_MARKDOWN",
+          "Footnotes only support paragraphs",
+          child,
+        );
       return paragraphFor(child, context);
     });
     if (paragraphs.length === 0)
@@ -793,7 +998,9 @@ const allBlocks = (blocks: readonly LegalBlock[]): LegalBlock[] =>
     if (block.kind === "list")
       return [
         block,
-        ...block.items.flatMap((item) => item.children.flatMap((child) => allBlocks([child]))),
+        ...block.items.flatMap((item) =>
+          item.children.flatMap((child) => allBlocks([child])),
+        ),
       ];
     return [block];
   });
@@ -810,7 +1017,7 @@ export function parseLegalMarkdown(
     .use(remarkParse)
     .use(remarkGfm)
     .use(remarkDirective)
-    .parse(markdown) as unknown as MarkdownNode;
+    .parse(markdownForParser(markdown)) as unknown as MarkdownNode;
   const suppliedAssets = new Map(Object.entries(options.assets ?? {}));
   const context: ParseContext = {
     markdown,
@@ -828,13 +1035,19 @@ export function parseLegalMarkdown(
   );
   for (const marker of context.markers.values())
     if (!context.usedMarkers.has(marker.offset))
-      throw new AgentDocxError("REFERENCE_INVALID", `Orphan block marker: ${marker.id}`);
+      throw new AgentDocxError(
+        "REFERENCE_INVALID",
+        `Orphan block marker: ${marker.id}`,
+      );
 
   const labels = new Set(footnotes.map((footnote) => footnote.label));
   const ids = new Set<string>();
   for (const block of [...allBlocks(blocks), ...footnotes]) {
     if (ids.has(block.id))
-      throw new AgentDocxError("REFERENCE_INVALID", `Duplicate block ID: ${block.id}`);
+      throw new AgentDocxError(
+        "REFERENCE_INVALID",
+        `Duplicate block ID: ${block.id}`,
+      );
     ids.add(block.id);
   }
   for (const block of allBlocks(blocks)) {
@@ -844,22 +1057,32 @@ export function parseLegalMarkdown(
         : [];
     for (const footnote of refs)
       if (!labels.has(footnote))
-        throw new AgentDocxError("REFERENCE_INVALID", `Missing footnote definition: ${footnote}`);
+        throw new AgentDocxError(
+          "REFERENCE_INVALID",
+          `Missing footnote definition: ${footnote}`,
+        );
   }
   for (const footnote of footnotes)
     for (const paragraph of footnote.paragraphs)
       for (const ref of collectRefs(paragraph.runs))
         if (!labels.has(ref))
-          throw new AgentDocxError("REFERENCE_INVALID", `Missing footnote definition: ${ref}`);
+          throw new AgentDocxError(
+            "REFERENCE_INVALID",
+            `Missing footnote definition: ${ref}`,
+          );
 
   const referencedAssets = new Set<string>();
   for (const block of allBlocks(blocks)) {
-    if (block.kind === "image" || block.kind === "exhibit") referencedAssets.add(block.source);
+    if (block.kind === "image" || block.kind === "exhibit")
+      referencedAssets.add(block.source);
   }
   if (options.exactAssets)
     for (const key of suppliedAssets.keys())
       if (!referencedAssets.has(key))
-        throw new AgentDocxError("REFERENCE_INVALID", `Unexpected asset: ${key}`);
+        throw new AgentDocxError(
+          "REFERENCE_INVALID",
+          `Unexpected asset: ${key}`,
+        );
   const assets: Record<
     string,
     { sha256: `sha256:${string}`; mediaType: string; bytes: number }
@@ -896,11 +1119,19 @@ export function insertMissingBlockMarkers(
   markdown: string,
   options: ParseLegalMarkdownOptions,
 ): string {
-  const parsed = parseLegalMarkdown(markdown, { ...options, requireMarkers: false });
+  const parsed = parseLegalMarkdown(markdown, {
+    ...options,
+    requireMarkers: false,
+  });
   if (parsed.missingMarkers.length === 0) return markdown;
   let result = markdown;
-  for (const marker of [...parsed.missingMarkers].sort((a, b) => b.offset - a.offset))
-    result = `${result.slice(0, marker.offset)}<!-- agent-docx:block id="${marker.id}" -->\n${result.slice(marker.offset)}`;
+  for (const marker of [...parsed.missingMarkers].sort(
+    (left, right) => right.offset - left.offset,
+  )) {
+    const lineStart = markdown.lastIndexOf("\n", marker.offset - 1) + 1;
+    const indentation = markdown.slice(lineStart, marker.offset);
+    result = `${result.slice(0, lineStart)}${indentation}<!-- agent-docx:block id="${marker.id}" -->\n${result.slice(lineStart)}`;
+  }
   return result;
 }
 

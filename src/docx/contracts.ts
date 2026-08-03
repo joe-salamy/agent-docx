@@ -129,6 +129,14 @@ export type CompiledDocx =
       artifact: Extract<ArtifactResult, { path: string }>;
     });
 
+export type StatelessCompiledDocx = Extract<
+  CompiledDocx,
+  { artifact: { path: null } }
+>;
+export type ProjectCompiledDocx = Extract<
+  CompiledDocx,
+  { artifact: { path: string } }
+>;
 export type SerializableCompiledDocx = CompiledDocx extends infer Value
   ? Value extends unknown
     ? Omit<Value, "bytes" | "attachments">
@@ -217,7 +225,9 @@ export type DocxImportBase<
 };
 
 export type DocxImportResult =
-  | (DocxImportBase<"preserved" | "normalized" | "externalized" | "unsupported"> & {
+  | (DocxImportBase<
+      "preserved" | "normalized" | "externalized" | "unsupported"
+    > & {
       inspectOnly: true;
       mode: "inspect";
       output: null;

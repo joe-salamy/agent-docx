@@ -14,7 +14,10 @@ export {
   parseAgentRequest,
   serializeAgentValue,
 } from "./agent.js";
-export { insertMissingBlockMarkers, parseLegalMarkdown } from "./legal/parse.js";
+export {
+  insertMissingBlockMarkers,
+  parseLegalMarkdown,
+} from "./legal/parse.js";
 export { lowerLegalDocument } from "./legal/lower.js";
 export { builtInRulePacks, validateLegalDocument } from "./legal/rules.js";
 export { emptyValidationResult } from "./legal/rules.js";
@@ -68,10 +71,10 @@ export type {
   ArtifactResult,
   AttachmentInventoryEntry,
   AttachmentManifest,
-  CompiledDocx,
+  ProjectCompiledDocx,
+  StatelessCompiledDocx,
   DocxImportResult,
   ExportDocxInput,
-  ExportRendererOptions,
   ImportAttachmentBundle,
   ImportDocxInput,
   RendererProvenance,

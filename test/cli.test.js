@@ -163,7 +163,10 @@ test("explicit project and agent commands execute a revision-bound workflow", as
       { cwd: directory },
     );
     assert.equal(initialized.code, 0, initialized.stderr);
-    assert.equal(JSON.parse(initialized.stdout).manifest.defaultDocument, "motion");
+    assert.equal(
+      JSON.parse(initialized.stdout).manifest.defaultDocument,
+      "motion",
+    );
     const checkpoint = await runInProcess(
       [
         "revision",
@@ -235,6 +238,19 @@ test("agent JSONL decodes streamed requests across UTF-8 boundaries", async () =
   );
 });
 
+test("agent JSONL rejects oversized request lines", async () => {
+  const result = await runInProcess(
+    ["agent", "--input-jsonl"],
+    `x${" ".repeat(8 * 1024 * 1024 + 1)}\n`,
+  );
+  assert.equal(result.code, 0, result.stderr);
+  const response = JSON.parse(result.stdout);
+  assert.equal(response.kind, "error");
+  assert.equal(response.error.code, "INVALID_ARGUMENT");
+  assert.match(response.error.message, /JSONL input line exceeds/);
+  assert.equal(validateAgentResponse(response), true);
+});
+
 test("help and version are standalone", async () => {
   const help = await runInProcess(["--help"]);
   assert.equal(help.code, 0);
@@ -282,7 +298,10 @@ test("single JSON is clean and strict UTF-8", async () => {
     JSON.stringify(validateMeasurement.errors),
   );
 
-  const invalid = await runInProcess(["measure", "--json"], new Uint8Array([0xff]));
+  const invalid = await runInProcess(
+    ["measure", "--json"],
+    new Uint8Array([0xff]),
+  );
   assert.equal(invalid.code, 1);
   assert.match(invalid.stderr, /INPUT_NOT_UTF8/);
 });
@@ -318,14 +337,21 @@ test("boundary fixture through committed config", async () => {
 });
 
 test("usage grammar rejects leading-zero counts", async () => {
-  const result = await runInProcess(["measure", "--page-limit", "01", "--json"], "Text");
+  const result = await runInProcess(
+    ["measure", "--page-limit", "01", "--json"],
+    "Text",
+  );
   assert.equal(result.code, 2);
   assert.match(result.stderr, /INVALID_ARGUMENT/);
 });
 
 test("positional batch preserves order and resets sequence per run", async () => {
-  const args = ["measure", "--batch", "test/fixtures/27-hard-lines.md",
-  "test/fixtures/28-hard-lines.md",];
+  const args = [
+    "measure",
+    "--batch",
+    "test/fixtures/27-hard-lines.md",
+    "test/fixtures/28-hard-lines.md",
+  ];
   const first = await runInProcess(args);
   assert.equal(first.code, 0, first.stderr);
   const records = first.stdout.trim().split("\n").map(JSON.parse);
@@ -340,10 +366,14 @@ test("positional batch preserves order and resets sequence per run", async () =>
 
 test("explicit missing LibreOffice does not fall back", async () => {
   const result = await runInProcess(
-    ["measure", "--renderer", "libreoffice",
-    "--libreoffice-path",
-    "/definitely/missing/soffice",
-    "--json",],
+    [
+      "measure",
+      "--renderer",
+      "libreoffice",
+      "--libreoffice-path",
+      "/definitely/missing/soffice",
+      "--json",
+    ],
     "Text",
   );
   assert.equal(result.code, 4);
@@ -368,7 +398,10 @@ test("JSONL batch continues after structured item errors", async () => {
     JSON.stringify({ id: 3, markdown: "Third." }),
     "",
   ].join("\n");
-  const result = await runInProcess(["measure", "--batch", "--input-jsonl"], input);
+  const result = await runInProcess(
+    ["measure", "--batch", "--input-jsonl"],
+    input,
+  );
   assert.equal(result.code, 1);
   assert.equal(result.stderr, "");
   const records = result.stdout.trim().split("\n").map(JSON.parse);
@@ -408,14 +441,18 @@ test("JSONL batch decodes streamed requests across UTF-8 boundaries", async () =
     bytes.subarray(emojiStart + 2, newline + 1),
     bytes.subarray(newline + 1),
   ];
-  const result = await runInProcess(["measure", "--batch", "--input-jsonl"], "", {
-    readStdin: async () => {
-      throw new Error("JSONL batch must use streaming stdin");
+  const result = await runInProcess(
+    ["measure", "--batch", "--input-jsonl"],
+    "",
+    {
+      readStdin: async () => {
+        throw new Error("JSONL batch must use streaming stdin");
+      },
+      readStdinChunks: async function* () {
+        for (const chunk of chunks) yield chunk;
+      },
     },
-    readStdinChunks: async function* () {
-      for (const chunk of chunks) yield chunk;
-    },
-  });
+  );
   assert.equal(result.code, 0, result.stderr);
   const records = result.stdout.trim().split("\n").map(JSON.parse);
   assert.deepEqual(
@@ -492,7 +529,10 @@ test("JSONL rejects closed requests while retaining valid correlation and relati
     JSON.stringify({ id: {}, markdown: "Bad ID." }),
     JSON.stringify({ id: "empty", path: "" }),
   ].join("\n");
-  const result = await runInProcess(["measure", "--batch", "--input-jsonl"], input);
+  const result = await runInProcess(
+    ["measure", "--batch", "--input-jsonl"],
+    input,
+  );
   assert.equal(result.code, 1);
   assert.equal(result.stderr, "");
   const records = result.stdout.trim().split("\n").map(JSON.parse);
@@ -552,7 +592,10 @@ test("fatal records use INTERNAL_ERROR for unknown exceptions", async () => {
 });
 
 test("executable adapter wires real stdin and clean streams", async () => {
-  const result = await runSubprocess(["measure", "--json"], "A short filing.\n");
+  const result = await runSubprocess(
+    ["measure", "--json"],
+    "A short filing.\n",
+  );
   assert.equal(result.code, 0);
   assert.equal(result.stderr, "");
   assert.equal(JSON.parse(result.stdout).schemaVersion, 1);
@@ -666,7 +709,14 @@ test("output and discovery options enforce mode boundaries", () => {
     );
   }
   assert.throws(
-    () => parseCliArgs(["measure", "--batch", "--recursive", "--no-recursive", "x"]),
+    () =>
+      parseCliArgs([
+        "measure",
+        "--batch",
+        "--recursive",
+        "--no-recursive",
+        "x",
+      ]),
     /cannot be combined/,
   );
   assert.throws(
@@ -701,7 +751,10 @@ test("sections appear only when requested in human, JSON, and batch output", asy
   assert.match(human.stdout, /Section 1 \(H1 "Analysis"\): pages 1,2 \(2\)/);
   assert.match(human.stdout, /beyond limit 1: 2/);
 
-  const json = await runInProcess(["measure", "--sections", "--json"], "# JSON\n\nBody.");
+  const json = await runInProcess(
+    ["measure", "--sections", "--json"],
+    "# JSON\n\nBody.",
+  );
   assert.equal(
     JSON.parse(json.stdout).deterministic.sections[1].source,
     "deterministic",
@@ -732,14 +785,18 @@ test("positional batch discovers, filters, sorts, and deduplicates snapshots", a
   ]);
   try {
     const result = await runInProcess(
-      ["measure", "--batch", "--recursive",
-      "--include",
-      "*.md",
-      "--exclude",
-      "skip.md",
-      "explicit.txt",
-      "docs",
-      "docs/**/*.md",],
+      [
+        "measure",
+        "--batch",
+        "--recursive",
+        "--include",
+        "*.md",
+        "--exclude",
+        "skip.md",
+        "explicit.txt",
+        "docs",
+        "docs/**/*.md",
+      ],
       "",
       { cwd: temporary },
     );
@@ -793,9 +850,7 @@ test("positional batch discovers, filters, sorts, and deduplicates snapshots", a
 });
 
 test("batch discovery preflights failures and config overrides", async () => {
-  const temporary = await mkdtemp(
-    join(tmpdir(), "agent-docx-batch-config-"),
-  );
+  const temporary = await mkdtemp(join(tmpdir(), "agent-docx-batch-config-"));
   await mkdir(join(temporary, "docs"));
   await writeFile(join(temporary, "docs", "a.md"), "A.");
   await writeFile(join(temporary, "docs", "a.txt"), "Text.");
@@ -841,7 +896,15 @@ test("batch discovery preflights failures and config overrides", async () => {
     );
     assert.equal(JSON.parse(configured.stdout).source.path, "docs/a.txt");
     const replaced = await runInProcess(
-      ["measure", "--batch", "--config", configPath, "--include", "*.md", "docs"],
+      [
+        "measure",
+        "--batch",
+        "--config",
+        configPath,
+        "--include",
+        "*.md",
+        "docs",
+      ],
       "",
       { cwd: temporary },
     );
@@ -905,7 +968,10 @@ test("end-to-end legal project fixture exports clean and native-redline DOCX", a
   const manifest = join(directory, "agent-docx.json");
   try {
     for (const file of ["motion.md", "metadata.json", "chrome.json"])
-      await writeFile(join(directory, file), await readFile(join(fixture, file)));
+      await writeFile(
+        join(directory, file),
+        await readFile(join(fixture, file)),
+      );
 
     const initialized = await runInProcess(
       [
@@ -955,7 +1021,14 @@ test("end-to-end legal project fixture exports clean and native-redline DOCX", a
     const firstRevision = JSON.parse(first.stdout).revision.id;
 
     const validation = await runInProcess(
-      ["validate", "--project", "agent-docx.json", "--document", "motion", "--json"],
+      [
+        "validate",
+        "--project",
+        "agent-docx.json",
+        "--document",
+        "motion",
+        "--json",
+      ],
       "",
       { cwd: directory },
     );
@@ -1135,7 +1208,6 @@ test("end-to-end legal project fixture exports clean and native-redline DOCX", a
   }
 });
 
-
 test("agent protocol closes stateless, result, error, and fatal envelopes", () => {
   const inspectWithProject = {
     schemaVersion: 1,
@@ -1170,7 +1242,11 @@ test("agent protocol closes stateless, result, error, and fatal envelopes", () =
     revision: null,
     error: { code: "INPUT_NOT_UTF8", message: "Input is not valid UTF-8" },
   };
-  assert.equal(validateAgentResponse(fatal), true, JSON.stringify(validateAgentResponse.errors));
+  assert.equal(
+    validateAgentResponse(fatal),
+    true,
+    JSON.stringify(validateAgentResponse.errors),
+  );
   assert.equal(validateAgentResponse({ ...fatal, value: null }), false);
 
   const invalidMeasureResult = {
@@ -1238,7 +1314,8 @@ test("inspect-only import rejects stateful CLI options and strips binary payload
   const serialized = serializeAgentValue({
     bytes: Uint8Array.from([0x50, 0x4b]),
     attachments: {
-      manifestSha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      manifestSha256:
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       files: {
         "exhibit.pdf": {
           bytes: Uint8Array.from([1, 2, 3]),
@@ -1248,13 +1325,15 @@ test("inspect-only import rejects stateful CLI options and strips binary payload
     },
     artifact: {
       byteLength: 2,
-      sha256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      sha256:
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     },
   });
   assert.deepEqual(serialized, {
     artifact: {
       byteLength: 2,
-      sha256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      sha256:
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     },
   });
 });

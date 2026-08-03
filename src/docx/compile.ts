@@ -9,7 +9,10 @@ import type {
 } from "../legal/model.js";
 import { blockBookmark } from "../legal/model.js";
 import { parseLegalMarkdown } from "../legal/parse.js";
-import { validateLegalDocument, type ValidationResult } from "../legal/rules.js";
+import {
+  validateLegalDocument,
+  type ValidationResult,
+} from "../legal/rules.js";
 import { measureNormalizedDocument } from "../renderers/index.js";
 import { AgentDocxError, type MeasurementResult } from "../types.js";
 import {
@@ -22,12 +25,11 @@ import type {
   ArtifactResult,
   AttachmentManifest,
   BodyBlockManifestEntry,
-  CompiledDocx,
   GeneratedAttachmentBundle,
+  StatelessCompiledDocx,
 } from "./contracts.js";
 import type { CompileOptions } from "../project/contracts.js";
 import type { ChangeSet } from "../revisions/types.js";
-
 
 export type CompileMarkdownOptions = CompileOptions & {
   generation?: Pick<
@@ -64,9 +66,14 @@ export const semanticDocumentProjection = (value: unknown): unknown => {
   const projection: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
     if (
-      ["source", "sourceText", "segments", "position", "preview", "annotations"].includes(
-        key,
-      )
+      [
+        "source",
+        "sourceText",
+        "segments",
+        "position",
+        "preview",
+        "annotations",
+      ].includes(key)
     )
       continue;
     projection[key] = semanticDocumentProjection(child);
@@ -85,16 +92,18 @@ const bodyManifest = (
     const context = byBookmark.get(entry.id);
     if (!context) return [];
     const { block } = context;
-    return [{
-      id: block.id,
-      bookmark: entry.id,
-      index: entry.index,
-      parentId: context.parentId,
-      depth: context.depth + (block.kind === "blockquote" ? block.depth : 0),
-      kind: block.kind,
-      position: block.position,
-      preview: entry.preview,
-    }];
+    return [
+      {
+        id: block.id,
+        bookmark: entry.id,
+        index: entry.index,
+        parentId: context.parentId,
+        depth: context.depth + (block.kind === "blockquote" ? block.depth : 0),
+        kind: block.kind,
+        position: block.position,
+        preview: entry.preview,
+      },
+    ];
   });
 };
 
@@ -125,7 +134,9 @@ const exhibitSources = (blocks: readonly LegalBlock[]): readonly string[] => {
 
 const attachmentBundle = (
   document: LegalDocument,
-  assets: Readonly<Record<string, { bytes: Uint8Array; mediaType: string }>> | undefined,
+  assets:
+    | Readonly<Record<string, { bytes: Uint8Array; mediaType: string }>>
+    | undefined,
 ): GeneratedAttachmentBundle | null => {
   const names = exhibitSources(document.blocks);
   if (names.length === 0) return null;
@@ -226,7 +237,7 @@ export const compileMarkdown = async (
   markdown: string,
   specification: LegalDocumentSpecification,
   options: CompileMarkdownOptions = {},
-): Promise<CompiledDocx> => {
+): Promise<StatelessCompiledDocx> => {
   const template = specification.template
     ? await inspectDocxTemplate(specification.template, {
         fallbackProfile:
@@ -238,18 +249,23 @@ export const compileMarkdown = async (
   const parsed = parseLegalMarkdown(markdown, specification);
   const document = parsed.document;
   let sourceWithMarkers = markdown;
-  for (const marker of [...parsed.missingMarkers].sort((left, right) => right.offset - left.offset))
+  for (const marker of [...parsed.missingMarkers].sort(
+    (left, right) => right.offset - left.offset,
+  ))
     sourceWithMarkers = `${sourceWithMarkers.slice(0, marker.offset)}<!-- agent-docx:block id="${marker.id}" -->\n${sourceWithMarkers.slice(marker.offset)}`;
   const attachments = attachmentBundle(document, specification.assets);
   const { generation, ...measurementOptions } = options;
-  const measurement = await measureNormalizedDocument(lowerLegalDocument(document), {
-    ...measurementOptions,
-    profile: specification.profile,
-    filingKind: specification.filingKind,
-    fontSet: specification.fontSet,
-    chrome: document.chrome,
-    ...(template ? { template } : {}),
-  });
+  const measurement = await measureNormalizedDocument(
+    lowerLegalDocument(document),
+    {
+      ...measurementOptions,
+      profile: specification.profile,
+      filingKind: specification.filingKind,
+      fontSet: specification.fontSet,
+      chrome: document.chrome,
+      ...(template ? { template } : {}),
+    },
+  );
   const validation = validateLegalDocument(document, {
     ...(generation?.revision ? { revision: generation.revision.id } : {}),
     rulePack: specification.rulePack,
@@ -306,7 +322,8 @@ export const compileMarkdown = async (
     : null;
   const artifact: Extract<ArtifactResult, { path: null }> = {
     schemaVersion: 1,
-    mediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    mediaType:
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     byteLength: generated.bytes.byteLength,
     sha256: sha256(generated.bytes),
     provenanceSha256: sha256(canonicalize(provenance)!),

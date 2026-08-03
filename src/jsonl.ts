@@ -1,5 +1,6 @@
 import type { CliRuntime } from "./cli-run.js";
 import { AgentDocxError } from "./types.js";
+export const MAX_JSONL_LINE_BYTES = 8 * 1024 * 1024;
 
 export const strictUtf8 = (bytes: Uint8Array): string => {
   try {

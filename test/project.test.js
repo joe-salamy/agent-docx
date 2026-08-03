@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -35,7 +42,7 @@ test("project checkpoints source-mapped legal documents and review revisions", a
 
     const first = await project.checkpoint("motion", {
       baseRevision: null,
-      author: { name: "Drafter" },
+      author: { name: "Initial" },
       message: "Initial draft",
     });
     assert.match(first.revision.id, /^sha256:[a-f0-9]{64}$/);
@@ -56,25 +63,59 @@ test("project checkpoints source-mapped legal documents and review revisions", a
     assert.equal(latest.head, review.revision.id);
     assert.equal(latest.annotations.length, 1);
     assert.equal(latest.annotations[0].status, "open");
-    assert.match((await reopened.getRevision("motion", "HEAD")).deltaObject, /^sha256:[a-f0-9]{64}$/);
+    assert.match(
+      (await reopened.getRevision("motion", "HEAD")).deltaObject,
+      /^sha256:[a-f0-9]{64}$/,
+    );
     assert.equal((await reopened.listRevisions("motion")).items.length, 2);
     const markedSource = await readFile(sourcePath, "utf8");
-    await writeFile(sourcePath, markedSource.replace("This is the body.", "This is the revised body."));
+    await writeFile(
+      sourcePath,
+      markedSource.replace("This is the body.", "This is the revised body."),
+    );
     const edited = await reopened.checkpoint("motion", {
       baseRevision: review.revision.id,
       author: { name: "Drafter" },
       message: "Revise body",
     });
-    assert.deepEqual((await reopened.getDocument("motion", "HEAD")).annotations[0].range, {
-      start: 0,
-      end: 4,
-    });
-    const changes = await reopened.diff("motion", review.revision.id, edited.revision.id);
+    assert.deepEqual(
+      (await reopened.getDocument("motion", "HEAD")).annotations[0].range,
+      {
+        start: 0,
+        end: 4,
+      },
+    );
+    const changes = await reopened.diff(
+      "motion",
+      review.revision.id,
+      edited.revision.id,
+    );
     assert.ok(changes.changes.length > 0);
+    const composed = await reopened.diff(
+      "motion",
+      first.revision.id,
+      edited.revision.id,
+    );
+    assert.equal(composed.changes[0]?.attribution.author.name, "Drafter");
+    assert.deepEqual(
+      composed.changes[0]?.oldAttributionSpans?.map(
+        (span) => span.attribution.author?.name,
+      ),
+      ["Initial"],
+    );
+    assert.deepEqual(
+      composed.changes[0]?.newAttributionSpans?.map(
+        (span) => span.attribution.author?.name,
+      ),
+      ["Initial", "Drafter", "Initial"],
+    );
     const resolved = await reopened.resolveChanges("motion", {
       changeSet: changes,
       decisions: Object.fromEntries(
-        [...changes.changes, ...changes.annotations].map((change) => [change.id, "reject"]),
+        [...changes.changes, ...changes.annotations].map((change) => [
+          change.id,
+          "reject",
+        ]),
       ),
       author: { name: "Reviewer" },
       message: "Reject revision",
@@ -108,15 +149,78 @@ test("project diffs ignore source-offset shifts in unchanged blocks", async () =
     const markedSource = await readFile(sourcePath, "utf8");
     await writeFile(
       sourcePath,
-      markedSource.replace("First statement.", "A materially longer first statement."),
+      markedSource.replace(
+        "First statement.",
+        "A materially longer first statement.",
+      ),
     );
     const head = await project.checkpoint("motion", {
       baseRevision: base.revision.id,
       author: { name: "Drafter" },
       message: "Revise first statement",
     });
-    const changes = await project.diff("motion", base.revision.id, head.revision.id);
-    assert.deepEqual(changes.changes.map((change) => change.kind), ["replace-text"]);
+    const changes = await project.diff(
+      "motion",
+      base.revision.id,
+      head.revision.id,
+    );
+    assert.deepEqual(
+      changes.changes.map((change) => change.kind),
+      ["replace-text"],
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+test("project resolves absent optional configuration values exactly", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-docx-config-diff-"));
+  const manifestPath = join(directory, "agent-docx.json");
+  const sourcePath = join(directory, "motion.md");
+  try {
+    await writeFile(sourcePath, "# Motion\n\nBody.\n");
+    const project = await createProject(manifestPath, {
+      documentId: "motion",
+      source: "motion.md",
+      profile: "us-district-conventional",
+      metadata,
+    });
+    const base = await project.checkpoint("motion", {
+      baseRevision: null,
+      author: { name: "Drafter" },
+      message: "Initial draft",
+    });
+    const head = await project.configureDocument("motion", {
+      baseRevision: base.revision.id,
+      changes: { filingKind: "motion-document" },
+      author: { name: "Drafter" },
+      message: "Select filing kind",
+    });
+    const changeSet = await project.diff(
+      "motion",
+      base.revision.id,
+      head.revision.id,
+    );
+    assert.deepEqual(
+      changeSet.changes.map((change) => [change.kind, change.path]),
+      [["add-config", "/filingKind"]],
+    );
+    await project.resolveChanges("motion", {
+      changeSet,
+      decisions: Object.fromEntries(
+        [...changeSet.changes, ...changeSet.annotations].map((change) => [
+          change.id,
+          "reject",
+        ]),
+      ),
+      author: { name: "Reviewer" },
+      message: "Reject filing kind",
+    });
+    const state = await project.getState();
+    assert.equal(
+      (await project.getDocument("motion", "HEAD")).documentConfig.filingKind,
+      undefined,
+    );
+    assert.equal(state.documents[0].matchesHead.all, true);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -156,7 +260,10 @@ test("project restore creates a new head from a reachable revision", async () =>
     });
     assert.deepEqual(restored.revision.parents, [head.revision.id]);
     assert.match(await readFile(sourcePath, "utf8"), /Initial body\./);
-    assert.equal((await project.getDocument("motion", "HEAD")).revision, restored.revision.id);
+    assert.equal(
+      (await project.getDocument("motion", "HEAD")).revision,
+      restored.revision.id,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -222,6 +329,10 @@ test("project clean export publishes a versioned DOCX without overwriting", asyn
       author: { name: "Drafter" },
       message: "Initial draft",
     });
+    const measured = await project.measure("motion", undefined, {
+      includeGeneratedDocx: true,
+    });
+    assert.equal("generatedDocx" in measured, false);
     const exported = await project.exportDocx("motion", {
       revision: checkpoint.revision.id,
       mode: "clean",
@@ -229,7 +340,10 @@ test("project clean export publishes a versioned DOCX without overwriting", asyn
     });
     assert.equal(exported.artifact.revision, checkpoint.revision.id);
     assert.equal(exported.artifact.path, outputPath);
-    assert.equal((await readFile(outputPath)).byteLength, exported.bytes.byteLength);
+    assert.equal(
+      (await readFile(outputPath)).byteLength,
+      exported.bytes.byteLength,
+    );
     const inspected = await inspectDocxMaterial(exported.bytes);
     assert.equal(inspected.semantic?.revision, checkpoint.revision.id);
     assert.equal(inspected.semantic?.baseRevision, null);
@@ -248,6 +362,39 @@ test("project clean export publishes a versioned DOCX without overwriting", asyn
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("project export rejects symlinked output components", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-docx-export-symlink-"));
+  const outside = await mkdtemp(join(tmpdir(), "agent-docx-export-target-"));
+  const manifestPath = join(directory, "agent-docx.json");
+  const sourcePath = join(directory, "motion.md");
+  try {
+    await writeFile(sourcePath, "# Motion\n\nThe requested relief follows.\n");
+    const project = await createProject(manifestPath, {
+      documentId: "motion",
+      source: "motion.md",
+      profile: "us-district-conventional",
+      metadata,
+    });
+    await project.checkpoint("motion", {
+      baseRevision: null,
+      author: { name: "Drafter" },
+      message: "Initial draft",
+    });
+    await symlink(outside, join(directory, "linked"), "dir");
+    await assert.rejects(
+      project.exportDocx("motion", {
+        revision: "HEAD",
+        mode: "clean",
+        output: join(directory, "linked", "motion.docx"),
+      }),
+      (error) => error.code === "PATH_OUTSIDE_PROJECT",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   }
 });
 
@@ -335,7 +482,10 @@ test("project redline export carries native insertions and deletions", async () 
     assert.ok(reviewAnnotation);
     await writeFile(
       sourcePath,
-      (await readFile(sourcePath, "utf8")).replace("Old statement.", "New statement."),
+      (await readFile(sourcePath, "utf8")).replace(
+        "Old statement.",
+        "New statement.",
+      ),
     );
     const head = await project.checkpoint("motion", {
       baseRevision: reviewed.revision.id,
@@ -350,9 +500,15 @@ test("project redline export carries native insertions and deletions", async () 
     });
     assert.equal(exported.artifact.mode, "redline");
     const parts = await readDocxParts(exported.bytes);
-    const documentXml = new TextDecoder().decode(parts.get("word/document.xml"));
-    const settingsXml = new TextDecoder().decode(parts.get("word/settings.xml"));
-    const commentsXml = new TextDecoder().decode(parts.get("word/comments.xml"));
+    const documentXml = new TextDecoder().decode(
+      parts.get("word/document.xml"),
+    );
+    const settingsXml = new TextDecoder().decode(
+      parts.get("word/settings.xml"),
+    );
+    const commentsXml = new TextDecoder().decode(
+      parts.get("word/comments.xml"),
+    );
     assert.match(documentXml, /<w:ins /);
     assert.match(documentXml, /<w:del /);
     assert.match(settingsXml, /<w:trackRevisions\/>/);
@@ -366,7 +522,9 @@ test("project redline export carries native insertions and deletions", async () 
     assert.equal(inspected.semantic?.revisionMap.length, 1);
     assert.equal(inspected.semantic?.commentMap.length, 1);
     assert.equal(inspected.semantic?.commentMap[0]?.blockWide, true);
-    assert.deepEqual(inspected.result.recognized.annotations, [reviewAnnotation]);
+    assert.deepEqual(inspected.result.recognized.annotations, [
+      reviewAnnotation,
+    ]);
     assert.deepEqual(exported.artifact.rendererProvenance.verification, {
       revisionCount: 2,
       commentCount: 1,
@@ -378,8 +536,12 @@ test("project redline export carries native insertions and deletions", async () 
 });
 
 test("strict project import reconstructs a generated text redline", async () => {
-  const sourceDirectory = await mkdtemp(join(tmpdir(), "agent-docx-redline-source-"));
-  const targetDirectory = await mkdtemp(join(tmpdir(), "agent-docx-redline-target-"));
+  const sourceDirectory = await mkdtemp(
+    join(tmpdir(), "agent-docx-redline-source-"),
+  );
+  const targetDirectory = await mkdtemp(
+    join(tmpdir(), "agent-docx-redline-target-"),
+  );
   const sourceManifest = join(sourceDirectory, "agent-docx.json");
 
   const targetManifest = join(targetDirectory, "agent-docx.json");
@@ -403,7 +565,10 @@ test("strict project import reconstructs a generated text redline", async () => 
       author: { name: "Drafter" },
       message: "Initial draft",
     });
-    const baseDocument = await sourceProject.getDocument("motion", base.revision.id);
+    const baseDocument = await sourceProject.getDocument(
+      "motion",
+      base.revision.id,
+    );
     const baseBody = baseDocument.document.blocks[1];
     assert.equal(baseBody?.kind, "paragraph");
     const reviewed = await sourceProject.addReview("motion", {
@@ -418,7 +583,10 @@ test("strict project import reconstructs a generated text redline", async () => 
     assert.ok(reviewAnnotation);
     await writeFile(
       sourcePath,
-      (await readFile(sourcePath, "utf8")).replace("Old statement.", "New statement."),
+      (await readFile(sourcePath, "utf8")).replace(
+        "Old statement.",
+        "New statement.",
+      ),
     );
     const head = await sourceProject.checkpoint("motion", {
       baseRevision: reviewed.revision.id,
@@ -539,7 +707,10 @@ test("strict project import establishes a root revision from generated DOCX", as
     });
     assert.equal(imported.mode, "clean");
     assert.equal(imported.revisions.length, 1);
-    assert.equal((await project.getDocument("motion", "HEAD")).document.blocks.length, 1);
+    assert.equal(
+      (await project.getDocument("motion", "HEAD")).document.blocks.length,
+      1,
+    );
     assert.match(await readFile(sourcePath, "utf8"), /agent-docx:block/);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -585,16 +756,27 @@ test("strict project import materializes semantic embedded assets", async () => 
       author: { name: "Importer" },
       message: "Import DOCX assets",
     });
-    assert.deepEqual(await readFile(join(assetsPath, "seal.png")), Buffer.from(seal));
-    assert.equal((await project.getDocument("motion", "HEAD")).document.assets["seal.png"].mediaType, "image/png");
+    assert.deepEqual(
+      await readFile(join(assetsPath, "seal.png")),
+      Buffer.from(seal),
+    );
+    assert.equal(
+      (await project.getDocument("motion", "HEAD")).document.assets["seal.png"]
+        .mediaType,
+      "image/png",
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
 test("strict project import consumes an authorized exhibit attachment bundle", async () => {
-  const sourceDirectory = await mkdtemp(join(tmpdir(), "agent-docx-exhibit-source-"));
-  const targetDirectory = await mkdtemp(join(tmpdir(), "agent-docx-exhibit-target-"));
+  const sourceDirectory = await mkdtemp(
+    join(tmpdir(), "agent-docx-exhibit-source-"),
+  );
+  const targetDirectory = await mkdtemp(
+    join(tmpdir(), "agent-docx-exhibit-target-"),
+  );
   const sourceManifest = join(sourceDirectory, "agent-docx.json");
   const sourcePath = join(sourceDirectory, "motion.md");
   const sourceAssets = join(sourceDirectory, "assets");
@@ -660,8 +842,12 @@ test("strict project import consumes an authorized exhibit attachment bundle", a
 });
 
 test("strict clean import reconstructs native comments", async () => {
-  const sourceDirectory = await mkdtemp(join(tmpdir(), "agent-docx-clean-comments-source-"));
-  const targetDirectory = await mkdtemp(join(tmpdir(), "agent-docx-clean-comments-target-"));
+  const sourceDirectory = await mkdtemp(
+    join(tmpdir(), "agent-docx-clean-comments-source-"),
+  );
+  const targetDirectory = await mkdtemp(
+    join(tmpdir(), "agent-docx-clean-comments-target-"),
+  );
   const sourceManifest = join(sourceDirectory, "agent-docx.json");
   const sourcePath = join(sourceDirectory, "motion.md");
   const outputPath = join(sourceDirectory, "motion.docx");
@@ -687,7 +873,9 @@ test("strict clean import reconstructs native comments", async () => {
       output: outputPath,
     });
     const parts = await readDocxParts(exported.bytes);
-    const documentXml = new TextDecoder().decode(parts.get("word/document.xml"));
+    const documentXml = new TextDecoder().decode(
+      parts.get("word/document.xml"),
+    );
     const markedDocumentXml = documentXml.replace(
       /(<w:p\b[^>]*>)([\s\S]*?)(<\/w:p>)/,
       (_, open, body, close) => {
@@ -704,7 +892,10 @@ test("strict clean import reconstructs native comments", async () => {
     );
     assert.notEqual(markedDocumentXml, documentXml);
     const modified = new Map(parts);
-    modified.set("word/document.xml", new TextEncoder().encode(markedDocumentXml));
+    modified.set(
+      "word/document.xml",
+      new TextEncoder().encode(markedDocumentXml),
+    );
     modified.set(
       "word/comments.xml",
       new TextEncoder().encode(
@@ -733,7 +924,10 @@ test("strict clean import reconstructs native comments", async () => {
     assert.equal(imported.mode, "clean");
     assert.equal(imported.recognized.annotations.length, 1);
     assert.equal(imported.recognized.annotations[0].message, "Check title.");
-    assert.equal((await targetProject.getDocument("motion", "HEAD")).annotations.length, 1);
+    assert.equal(
+      (await targetProject.getDocument("motion", "HEAD")).annotations.length,
+      1,
+    );
   } finally {
     await rm(sourceDirectory, { recursive: true, force: true });
     await rm(targetDirectory, { recursive: true, force: true });
@@ -757,7 +951,10 @@ test("project evaluates and applies canonical, Unicode-safe source patches", asy
       author: { name: "Drafter" },
       message: "Initial draft",
     });
-    const guidance = await project.getDraftGuidance("motion", initial.revision.id);
+    const guidance = await project.getDraftGuidance(
+      "motion",
+      initial.revision.id,
+    );
     assert.equal(guidance.baseRevision, initial.revision.id);
     assert.ok(guidance.items.length > 0);
     const marked = await readFile(sourcePath, "utf8");
@@ -766,12 +963,14 @@ test("project evaluates and applies canonical, Unicode-safe source patches", asy
       schemaVersion: 1,
       documentId: "motion",
       baseRevision: initial.revision.id,
-      edits: [{
-        start: bodyStart,
-        end: bodyStart + "body".length,
-        expectedText: "body",
-        replacement: "submission",
-      }],
+      edits: [
+        {
+          start: bodyStart,
+          end: bodyStart + "body".length,
+          expectedText: "body",
+          replacement: "submission",
+        },
+      ],
     };
     const evaluation = await project.evaluatePatch(validPatch);
     assert.equal(evaluation.candidate.status, "ok");
@@ -791,12 +990,14 @@ test("project evaluates and applies canonical, Unicode-safe source patches", asy
       schemaVersion: 1,
       documentId: "motion",
       baseRevision: applied.revision.id,
-      edits: [{
-        start: emoji + 1,
-        end: emoji + 1,
-        expectedText: "",
-        replacement: "x",
-      }],
+      edits: [
+        {
+          start: emoji + 1,
+          end: emoji + 1,
+          expectedText: "",
+          replacement: "x",
+        },
+      ],
     };
     const unsafe = await project.evaluatePatch(unsafePatch);
     assert.equal(unsafe.candidate.status, "invalid");

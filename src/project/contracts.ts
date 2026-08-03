@@ -30,10 +30,10 @@ import type {
   SourcePatch,
 } from "../draft/types.js";
 import type {
-  CompiledDocx,
   DocxImportResult,
   ExportDocxInput,
   ImportDocxInput,
+  ProjectCompiledDocx,
 } from "../docx/contracts.js";
 
 export type ProjectFontSetConfig = {
@@ -98,7 +98,10 @@ export type ConfigureDocumentInput = {
 };
 
 export type DependencyHashes = Readonly<Record<string, RevisionId>>;
-export type SerializableMeasurementResult = Omit<MeasurementResult, "generatedDocx">;
+export type SerializableMeasurementResult = Omit<
+  MeasurementResult,
+  "generatedDocx"
+>;
 
 export type ProjectMeasurementResult = MeasurementResult & {
   documentId: string;
@@ -114,12 +117,23 @@ export type SerializableProjectMeasurementResult = Omit<
 
 export type ProjectMeasureOptions = Omit<
   MeasureOptions,
-  "profile" | "filingKind" | "template" | "layout" | "fontSet" | "pageLimit"
+  | "profile"
+  | "filingKind"
+  | "template"
+  | "layout"
+  | "fontSet"
+  | "pageLimit"
+  | "includeGeneratedDocx"
 >;
 
 export type CompileOptions = Omit<
   MeasureOptions,
-  "profile" | "filingKind" | "template" | "layout" | "fontSet" | "includeGeneratedDocx"
+  | "profile"
+  | "filingKind"
+  | "template"
+  | "layout"
+  | "fontSet"
+  | "includeGeneratedDocx"
 >;
 
 export type ProjectState = {
@@ -181,7 +195,9 @@ export type ResolveReviewInput = {
 
 export type AgentDocxProject = {
   getState(): Promise<ProjectState>;
-  addDocument(input: ProjectDocumentInput & { makeDefault?: boolean }): Promise<ProjectState>;
+  addDocument(
+    input: ProjectDocumentInput & { makeDefault?: boolean },
+  ): Promise<ProjectState>;
   configureDocument(
     documentId: string,
     input: ConfigureDocumentInput,
@@ -196,13 +212,20 @@ export type AgentDocxProject = {
   ): Promise<DraftGuidance>;
   checkpoint(
     documentId: string,
-    input: { baseRevision: RevisionId | "HEAD" | null; author: Actor; message: string },
+    input: {
+      baseRevision: RevisionId | "HEAD" | null;
+      author: Actor;
+      message: string;
+    },
   ): Promise<RevisionMutationResult>;
   listRevisions(
     documentId: string,
     input?: { limit?: number; cursor?: RevisionId },
   ): Promise<RevisionPage>;
-  getRevision(documentId: string, revision: RevisionId | "HEAD"): Promise<RevisionRecord>;
+  getRevision(
+    documentId: string,
+    revision: RevisionId | "HEAD",
+  ): Promise<RevisionRecord>;
   restore(
     documentId: string,
     input: {
@@ -223,7 +246,9 @@ export type AgentDocxProject = {
   ): Promise<RevisionMutationResult>;
   evaluatePatch(
     patch: SourcePatch,
-    options?: { renderer?: "deterministic" | "word" | "libreoffice" | "compare" },
+    options?: {
+      renderer?: "deterministic" | "word" | "libreoffice" | "compare";
+    },
   ): Promise<PatchEvaluation>;
   applyPatch(
     patch: SourcePatch,
@@ -251,8 +276,13 @@ export type AgentDocxProject = {
     documentId: string,
     revision?: RevisionId | "HEAD",
   ): Promise<ValidationResult>;
-  exportDocx(documentId: string, input: ExportDocxInput): Promise<CompiledDocx>;
-  importDocx(input: Extract<ImportDocxInput, { inspectOnly: false }>): Promise<DocxImportResult>;
+  exportDocx(
+    documentId: string,
+    input: ExportDocxInput,
+  ): Promise<ProjectCompiledDocx>;
+  importDocx(
+    input: Extract<ImportDocxInput, { inspectOnly: false }>,
+  ): Promise<DocxImportResult>;
 };
 
 export type ResolveProfileInput = BuiltInProfileId | LayoutProfile;
