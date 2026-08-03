@@ -146,7 +146,7 @@ console.log(JSON.stringify({kind:'paragraphs',protocolVersion:2,status:'ok',valu
 ]}));`;
   const manifest = [
     {
-      id: "mpc_body_000000",
+      id: "adx_body_000000",
       index: 0,
       position: {
         start: { line: 1, column: 1, offset: 0 },
@@ -155,7 +155,7 @@ console.log(JSON.stringify({kind:'paragraphs',protocolVersion:2,status:'ok',valu
       preview: "One",
     },
     {
-      id: "mpc_body_000001",
+      id: "adx_body_000001",
       index: 1,
       position: {
         start: { line: 3, column: 1, offset: 5 },
@@ -223,7 +223,7 @@ console.log(JSON.stringify({kind:'paragraphs',protocolVersion:2,status:'error',m
       10000,
       [
         {
-          id: "mpc_body_000000",
+          id: "adx_body_000000",
           index: 0,
           position: {
             start: { line: 1, column: 1, offset: 0 },

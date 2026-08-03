@@ -15,7 +15,9 @@ import chokidar from "chokidar";
 import { parseCliArgs, cliHelp, type CliOptionValues } from "./cli-args.js";
 import { inspectDocxTemplate } from "./docx/inspect.js";
 import { measureMarkdown } from "./renderers/index.js";
+import { runWorkflowCommand } from "./cli-workflow.js";
 import { builtInProfiles } from "./profiles.js";
+import { jsonlLines, strictUtf8 } from "./jsonl.js";
 import {
   AgentDocxError,
   type CliErrorPayload,
@@ -312,7 +314,8 @@ export async function resolveBatchInputs(
   }
   return output;
 }
-type SequenceState = { sequence: number };
+export type CliSequenceState = { sequence: number };
+type SequenceState = CliSequenceState;
 
 export type OutputFileHandle = {
   writeFile(bytes: Uint8Array): Promise<void>;
@@ -409,50 +412,6 @@ function decimal(value: string, name: string, positive = true) {
 const twips = (number: number, scale: number) =>
   Math.floor(number * scale + 0.5);
 
-async function strictUtf8(bytes: Uint8Array) {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    throw new AgentDocxError("INPUT_NOT_UTF8", "Input is not valid UTF-8");
-  }
-}
-
-function decodeUtf8Chunk(decoder: TextDecoder, bytes?: Uint8Array) {
-  try {
-    return bytes ? decoder.decode(bytes, { stream: true }) : decoder.decode();
-  } catch {
-    throw new AgentDocxError("INPUT_NOT_UTF8", "Input is not valid UTF-8");
-  }
-}
-
-async function* jsonlLines(
-  runtime: CliRuntime,
-): AsyncGenerator<string, void, undefined> {
-  if (!runtime.readStdinChunks) {
-    yield* (await strictUtf8(await runtime.readStdin())).split(/\r?\n/);
-    return;
-  }
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let pending = "";
-  const completeLines = (text: string) => {
-    pending += text;
-    const lines: string[] = [];
-    let newline = pending.indexOf("\n");
-    while (newline !== -1) {
-      const line = pending.slice(0, newline);
-      lines.push(line.endsWith("\r") ? line.slice(0, -1) : line);
-      pending = pending.slice(newline + 1);
-      newline = pending.indexOf("\n");
-    }
-    return lines;
-  };
-  for await (const bytes of runtime.readStdinChunks()) {
-    for (const line of completeLines(decodeUtf8Chunk(decoder, bytes)))
-      yield line;
-  }
-  for (const line of completeLines(decodeUtf8Chunk(decoder))) yield line;
-  if (pending) yield pending;
-}
 
 async function loadConfig(pathToken: string): Promise<{
   config: SerializableConfig;
@@ -999,6 +958,19 @@ function endRecord(
 function fatalRecord(error: unknown): CliFatalRecord {
   return { schemaVersion: 1, kind: "fatal", error: errorObject(error) };
 }
+function agentFatalRecord(error: unknown, sequence: number) {
+  return {
+    schemaVersion: 1,
+    kind: "fatal" as const,
+    sequence,
+    requestId: null,
+    action: null,
+    project: null,
+    documentId: null,
+    revision: null,
+    error: errorObject(error),
+  };
+}
 
 function errorStatus(error: unknown) {
   if (error instanceof AgentDocxError && error.code === "INVALID_ARGUMENT") {
@@ -1045,6 +1017,9 @@ async function executeCli(
     );
     return 0;
   }
+
+  if (command.mode === "workflow")
+    return runWorkflowCommand(command, runtime, state);
 
   if (command.mode === "batch-files" || command.mode === "batch-jsonl") {
     const values = command.values;
@@ -1414,7 +1389,13 @@ export async function runCli(
   try {
     return await executeCli(args, runtime, state);
   } catch (error) {
-    await runtime.writeStderr(`${JSON.stringify(fatalRecord(error))}\n`);
+    await runtime.writeStderr(
+      `${JSON.stringify(
+        args[0] === "agent"
+          ? agentFatalRecord(error, state.sequence + 1)
+          : fatalRecord(error),
+      )}\n`,
+    );
     return errorStatus(error);
   }
 }

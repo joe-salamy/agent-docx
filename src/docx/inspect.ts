@@ -1,7 +1,11 @@
-import yauzl, { type Entry, type ZipFile } from "yauzl";
 import { createHash } from "node:crypto";
-import { TextDecoder } from "node:util";
-import { SaxesParser, type SaxesTagNS } from "saxes";
+import {
+  decodeDocxXml as decodeXml,
+  docxXmlAttribute as attr,
+  parseDocxXml as parse,
+  readDocxParts,
+  resolveOpcTarget,
+} from "./package.js";
 import { builtInProfiles } from "../profiles.js";
 import {
   AgentDocxError,
@@ -12,239 +16,85 @@ import {
   type PageGeometry,
   type TextStyle,
 } from "../types.js";
-export const DOCX_LIMITS = Object.freeze({
-  maxCompressedInput: 25 * 1024 * 1024,
-  maxEntries: 512,
-  maxPartNameUnits: 240,
-  maxUncompressedTotal: 64 * 1024 * 1024,
-  maxEntryRatio: 100,
-  maxPackageRatio: 50,
-  maxXmlPart: 4 * 1024 * 1024,
-  maxXmlTotal: 12 * 1024 * 1024,
-  maxDepth: 64,
-  maxElements: 100000,
-  maxAttributes: 128,
-  maxText: 1024 * 1024,
-});
+
+export { DOCX_LIMITS } from "./package.js";
+
 type Parts = Record<string, Uint8Array>;
+type LoadedParts = { parts: Parts; names: readonly string[] };
+type Relationship = {
+  id: string;
+  type: string;
+  target: string;
+  external: boolean;
+};
+type HeaderFooterReference = {
+  kind: "header" | "footer";
+  variant: "default" | "first" | "even";
+  relationshipId: string;
+};
+type TemplateSection = {
+  page: PageGeometry;
+  headerFooterReferences: readonly HeaderFooterReference[];
+};
+
 const sha = (bytes: Uint8Array) =>
   createHash("sha256").update(bytes).digest("hex");
-function zipOpen(bytes: Uint8Array): Promise<ZipFile> {
-  return new Promise((resolve, reject) =>
-    yauzl.fromBuffer(
-      Buffer.from(bytes),
-      { lazyEntries: true, validateEntrySizes: true, decodeStrings: true },
-      (error, zip) => (error ? reject(error) : resolve(zip!)),
-    ),
-  );
-}
-function streamEntry(zip: ZipFile, entry: Entry): Promise<Uint8Array> {
-  return new Promise((resolve, reject) =>
-    zip.openReadStream(entry, (error, stream) => {
-      if (error || !stream) {
-        reject(error ?? new Error("No entry stream"));
-        return;
-      }
-      const chunks: Buffer[] = [];
-      let size = 0;
-      stream.on("data", (chunk: Buffer) => {
-        size += chunk.length;
-        if (size > DOCX_LIMITS.maxXmlPart)
-          stream.destroy(
-            new AgentDocxError(
-              "DOCX_XML_LIMIT",
-              "Consumed XML part exceeds 4 MiB",
-            ),
-          );
-        else chunks.push(chunk);
-      });
-      stream.on("error", reject);
-      stream.on("end", () => resolve(Buffer.concat(chunks)));
-    }),
-  );
-}
-async function readParts(bytes: Uint8Array): Promise<Parts> {
-  if (bytes.byteLength > DOCX_LIMITS.maxCompressedInput)
-    throw new AgentDocxError(
-      "DOCX_TOO_LARGE",
-      "DOCX exceeds 25 MiB compressed input limit",
+
+const relationshipPartFor = (sourcePart: string): string => {
+  if (sourcePart === "") return "_rels/.rels";
+  const components = sourcePart.split("/");
+  const name = components.pop();
+  if (!name) throw new AgentDocxError("DOCX_INVALID", "Relationship source has no name");
+  return [...components, "_rels", `${name}.rels`].join("/");
+};
+
+const readParts = async (bytes: Uint8Array): Promise<LoadedParts> => {
+  const names: string[] = [];
+  const loaded = await readDocxParts(bytes, (name) => {
+    names.push(name);
+    return (
+      name === "[Content_Types].xml" ||
+      name.endsWith(".rels") ||
+      (name.startsWith("word/") && name.endsWith(".xml"))
     );
-  const zip = await zipOpen(bytes);
-  const parts: Parts = {};
-  let entries = 0,
-    total = 0,
-    compressed = 0,
-    xmlTotal = 0;
-  try {
-    await new Promise<void>((resolve, reject) => {
-      zip.on("error", reject);
-      zip.on("end", resolve);
-      zip.on("entry", (entry: Entry) => {
-        void (async () => {
-          try {
-            entries++;
-            if (entries > DOCX_LIMITS.maxEntries)
-              throw new AgentDocxError(
-                "DOCX_TOO_LARGE",
-                "DOCX exceeds 512 entries",
-              );
-            const name = entry.fileName;
-            if (
-              name.length > DOCX_LIMITS.maxPartNameUnits ||
-              name.includes("\\") ||
-              name.startsWith("/") ||
-              name.split("/").includes("..") ||
-              Object.hasOwn(parts, name)
-            )
-              throw new AgentDocxError(
-                "DOCX_UNSAFE",
-                `Unsafe or duplicate package path: ${name}`,
-              );
-            if (/\/$/.test(name)) {
-              zip.readEntry();
-              return;
-            }
-            if (entry.compressionMethod !== 0 && entry.compressionMethod !== 8)
-              throw new AgentDocxError(
-                "DOCX_UNSAFE",
-                "Unsupported ZIP compression method",
-              );
-            total += entry.uncompressedSize;
-            compressed += entry.compressedSize;
-            if (
-              total > DOCX_LIMITS.maxUncompressedTotal ||
-              entry.uncompressedSize / Math.max(1, entry.compressedSize) >
-                DOCX_LIMITS.maxEntryRatio
-            )
-              throw new AgentDocxError(
-                "DOCX_TOO_LARGE",
-                "DOCX expansion limit exceeded",
-              );
-            const relevant =
-              name === "[Content_Types].xml" ||
-              name.endsWith(".rels") ||
-              name.endsWith("document.xml") ||
-              name.endsWith("styles.xml") ||
-              name.endsWith("theme1.xml") ||
-              name.endsWith("settings.xml");
-            if (relevant) {
-              xmlTotal += entry.uncompressedSize;
-              if (xmlTotal > DOCX_LIMITS.maxXmlTotal)
-                throw new AgentDocxError(
-                  "DOCX_XML_LIMIT",
-                  "Consumed XML exceeds 12 MiB",
-                );
-              parts[name] = await streamEntry(zip, entry);
-            }
-            zip.readEntry();
-          } catch (error) {
-            reject(error);
-          }
-        })();
-      });
-      zip.readEntry();
-    });
-    if (total / Math.max(1, compressed) > DOCX_LIMITS.maxPackageRatio)
-      throw new AgentDocxError(
-        "DOCX_TOO_LARGE",
-        "DOCX package compression ratio exceeds 50:1",
-      );
-    return parts;
-  } catch (error) {
-    throw error instanceof AgentDocxError
-      ? error
-      : new AgentDocxError(
-          "DOCX_INVALID",
-          error instanceof Error ? error.message : String(error),
-        );
-  } finally {
-    zip.close();
-  }
-}
-function decodeXml(bytes: Uint8Array): string {
-  let encoding = "utf-8",
-    offset = 0;
-  if (bytes[0] === 0xff && bytes[1] === 0xfe) {
-    encoding = "utf-16le";
-    offset = 2;
-  } else if (bytes[0] === 0xfe && bytes[1] === 0xff) {
-    const swapped = new Uint8Array(bytes.length - 2);
-    for (let i = 2; i < bytes.length; i += 2) {
-      swapped[i - 2] = bytes[i + 1] ?? 0;
-      swapped[i - 1] = bytes[i] ?? 0;
-    }
-    return new TextDecoder("utf-16le", { fatal: true }).decode(swapped);
-  }
-  try {
-    return new TextDecoder(encoding, { fatal: true }).decode(
-      bytes.subarray(offset),
-    );
-  } catch {
-    throw new AgentDocxError("DOCX_INVALID", "XML is not valid UTF-8/UTF-16");
-  }
-}
-function parse(
-  xml: string,
-  onOpen: (tag: SaxesTagNS) => void,
-  onClose?: (tag: SaxesTagNS) => void,
-) {
-  if (/<!DOCTYPE|<!ENTITY|<\?[^x]/i.test(xml))
-    throw new AgentDocxError(
-      "DOCX_UNSAFE",
-      "DTD, entity, or non-XML processing instruction is forbidden",
-    );
-  let depth = 0,
-    elements = 0,
-    text = 0;
-  const parser = new SaxesParser({ xmlns: true });
-  parser.on("opentag", (tag) => {
-    depth++;
-    elements++;
-    if (
-      depth > DOCX_LIMITS.maxDepth ||
-      elements > DOCX_LIMITS.maxElements ||
-      Object.keys(tag.attributes).length > DOCX_LIMITS.maxAttributes
-    )
-      throw new AgentDocxError(
-        "DOCX_XML_LIMIT",
-        "XML structural limit exceeded",
-      );
-    onOpen(tag);
   });
-  parser.on("closetag", (tag) => {
-    onClose?.(tag);
-    depth--;
+  return { parts: Object.fromEntries(loaded), names: names.sort() };
+};
+
+const relationships = (xml: string | undefined): readonly Relationship[] => {
+  if (!xml) return [];
+  const values: Relationship[] = [];
+  const ids = new Set<string>();
+  parse(xml, (tag) => {
+    if (tag.local !== "Relationship") return;
+    const id = attr(tag, "Id");
+    const type = attr(tag, "Type");
+    const target = attr(tag, "Target");
+    const targetMode = attr(tag, "TargetMode");
+    if (!id || !type || !target || ids.has(id))
+      throw new AgentDocxError("DOCX_INVALID", "Relationship has missing or duplicate attributes");
+    if (targetMode !== undefined && targetMode !== "External")
+      throw new AgentDocxError("DOCX_INVALID", "Relationship target mode is invalid");
+    ids.add(id);
+    values.push({ id, type, target, external: targetMode === "External" });
   });
-  parser.on("text", (value) => {
-    text += value.length;
-    if (text > DOCX_LIMITS.maxText)
-      throw new AgentDocxError("DOCX_XML_LIMIT", "XML text limit exceeded");
-  });
-  try {
-    parser.write(xml).close();
-  } catch (error) {
-    throw error instanceof AgentDocxError
-      ? error
-      : new AgentDocxError(
-          "DOCX_INVALID",
-          error instanceof Error ? error.message : String(error),
-        );
-  }
-}
-const attr = (tag: SaxesTagNS, name: string) =>
-  Object.values(tag.attributes).find((a) => a.local === name)?.value;
+  return values;
+};
+
 function sectionGeometry(
   xml: string,
-  sourcePart: string,
   fallback: PageGeometry,
-): PageGeometry[] {
-  const sections: PageGeometry[] = [];
+): readonly TemplateSection[] {
+  const sections: TemplateSection[] = [];
   let page: PageGeometry | null = null;
+  let references: HeaderFooterReference[] = [];
   parse(
     xml,
     (tag) => {
-      if (tag.local === "sectPr") page = structuredClone(fallback);
-      else if (page && tag.local === "pgSz") {
+      if (tag.local === "sectPr") {
+        page = structuredClone(fallback);
+        references = [];
+      } else if (page && tag.local === "pgSz") {
         const width = Number(attr(tag, "w")),
           height = Number(attr(tag, "h"));
         if (Number.isFinite(width) && width > 0) page.widthTwips = width;
@@ -262,17 +112,39 @@ function sectionGeometry(
           const value = Number(attr(tag, xmlKey));
           if (Number.isFinite(value) && value >= 0) page[key] = value;
         }
+      } else if (
+        page &&
+        (tag.local === "headerReference" || tag.local === "footerReference")
+      ) {
+        const relationshipId = attr(tag, "id");
+        const variant = attr(tag, "type");
+        if (
+          !relationshipId ||
+          (variant !== "default" && variant !== "first" && variant !== "even")
+        )
+          throw new AgentDocxError(
+            "DOCX_INVALID",
+            "Section header or footer reference is invalid",
+          );
+        references.push({
+          kind: tag.local === "headerReference" ? "header" : "footer",
+          variant,
+          relationshipId,
+        });
       }
     },
     (tag) => {
       if (tag.local === "sectPr" && page) {
-        sections.push(page);
+        sections.push({ page, headerFooterReferences: references });
         page = null;
       }
     },
   );
-  if (sections.length === 0) sections.push(structuredClone(fallback));
-  void sourcePart;
+  if (sections.length === 0)
+    sections.push({
+      page: structuredClone(fallback),
+      headerFooterReferences: [],
+    });
   return sections;
 }
 function fallbackStyle(style: TextStyle, family: string, id: string) {
@@ -284,42 +156,442 @@ function fallbackStyle(style: TextStyle, family: string, id: string) {
     provenance: { "": "fallback" },
   } as const;
 }
-function makeHeadings(
-  fallback: LayoutProfile,
-): DocxTemplateInspection["styles"]["headings"] {
-  return {
-    "1": fallbackStyle(
-      fallback.headings["1"],
-      fallback.requestedFontFamily,
-      "Heading1",
-    ),
-    "2": fallbackStyle(
-      fallback.headings["2"],
-      fallback.requestedFontFamily,
-      "Heading2",
-    ),
-    "3": fallbackStyle(
-      fallback.headings["3"],
-      fallback.requestedFontFamily,
-      "Heading3",
-    ),
-    "4": fallbackStyle(
-      fallback.headings["4"],
-      fallback.requestedFontFamily,
-      "Heading4",
-    ),
-    "5": fallbackStyle(
-      fallback.headings["5"],
-      fallback.requestedFontFamily,
-      "Heading5",
-    ),
-    "6": fallbackStyle(
-      fallback.headings["6"],
-      fallback.requestedFontFamily,
-      "Heading6",
-    ),
+
+type StylePatch = {
+  id: string;
+  name: string | null;
+  basedOn: string | null;
+  fontFamily: string | null;
+  values: Partial<TextStyle>;
+};
+
+const booleanValue = (value: string | undefined): boolean =>
+  value === undefined || !/^(?:0|false|off)$/i.test(value);
+
+const themeFonts = (
+  xml: string | undefined,
+): Readonly<Record<"major" | "minor", string | null>> => {
+  const result: Record<"major" | "minor", string | null> = {
+    major: null,
+    minor: null,
   };
-}
+  if (!xml) return result;
+  let scope: "major" | "minor" | null = null;
+  parse(
+    xml,
+    (tag) => {
+      if (tag.local === "majorFont") scope = "major";
+      else if (tag.local === "minorFont") scope = "minor";
+      else if (scope && tag.local === "latin") {
+        const family = attr(tag, "typeface");
+        if (family) result[scope] = family;
+      }
+    },
+    (tag) => {
+      if (
+        (tag.local === "majorFont" && scope === "major") ||
+        (tag.local === "minorFont" && scope === "minor")
+      )
+        scope = null;
+    },
+  );
+  return result;
+};
+
+const parseStyles = (
+  xml: string | undefined,
+  theme: Readonly<Record<"major" | "minor", string | null>>,
+): ReadonlyMap<string, StylePatch> => {
+  const styles = new Map<string, StylePatch>();
+  if (!xml) return styles;
+  let current: StylePatch | null = null;
+  parse(
+    xml,
+    (tag) => {
+      if (tag.local === "style") {
+        const id = attr(tag, "styleId");
+        const type = attr(tag, "type");
+        if (!id || (type !== undefined && type !== "paragraph")) return;
+        current = {
+          id,
+          name: null,
+          basedOn: null,
+          fontFamily: null,
+          values: {},
+        };
+        return;
+      }
+      if (!current) return;
+      if (tag.local === "name") current.name = attr(tag, "val") ?? null;
+      else if (tag.local === "basedOn") current.basedOn = attr(tag, "val") ?? null;
+      else if (tag.local === "rFonts") {
+        const direct =
+          attr(tag, "ascii") ??
+          attr(tag, "hAnsi") ??
+          attr(tag, "cs") ??
+          attr(tag, "eastAsia");
+        const themed =
+          attr(tag, "asciiTheme") ??
+          attr(tag, "hAnsiTheme") ??
+          attr(tag, "csTheme") ??
+          attr(tag, "eastAsiaTheme");
+        const group =
+          themed?.toLowerCase().startsWith("major") === true
+            ? "major"
+            : themed?.toLowerCase().startsWith("minor") === true
+              ? "minor"
+              : null;
+        current.fontFamily = direct ?? (group ? theme[group] : null);
+      } else if (tag.local === "sz") {
+        const halfPoints = Number(attr(tag, "val"));
+        if (Number.isFinite(halfPoints) && halfPoints > 0)
+          current.values.fontSizeTwips = Math.round(halfPoints * 10);
+      } else if (tag.local === "b")
+        current.values.bold = booleanValue(attr(tag, "val"));
+      else if (tag.local === "i")
+        current.values.italic = booleanValue(attr(tag, "val"));
+      else if (tag.local === "keepNext")
+        current.values.keepWithNext = booleanValue(attr(tag, "val"));
+      else if (tag.local === "keepLines")
+        current.values.keepLines = booleanValue(attr(tag, "val"));
+      else if (tag.local === "spacing") {
+        const before = Number(attr(tag, "before"));
+        const after = Number(attr(tag, "after"));
+        const line = Number(attr(tag, "line"));
+        const rule = attr(tag, "lineRule")?.toLowerCase();
+        if (Number.isFinite(before) && before >= 0)
+          current.values.beforeTwips = before;
+        if (Number.isFinite(after) && after >= 0)
+          current.values.afterTwips = after;
+        if (Number.isFinite(line) && line > 0)
+          current.values.lineSpacing =
+            rule === "exact"
+              ? { rule: "exact", twips: line }
+              : rule === "atleast"
+                ? { rule: "atLeast", twips: line }
+                : { rule: "auto", numerator: line, denominator: 240 };
+      } else if (tag.local === "ind") {
+        const left = Number(attr(tag, "left") ?? attr(tag, "start"));
+        const right = Number(attr(tag, "right") ?? attr(tag, "end"));
+        const firstLine = Number(attr(tag, "firstLine"));
+        const hanging = Number(attr(tag, "hanging"));
+        if (Number.isFinite(left) && left >= 0)
+          current.values.leftIndentTwips = left;
+        if (Number.isFinite(right) && right >= 0)
+          current.values.rightIndentTwips = right;
+        if (Number.isFinite(firstLine) && firstLine >= 0)
+          current.values.firstLineIndentTwips = firstLine;
+        if (Number.isFinite(hanging) && hanging >= 0)
+          current.values.hangingIndentTwips = hanging;
+      }
+    },
+    (tag) => {
+      if (tag.local === "style" && current) {
+        styles.set(current.id, current);
+        current = null;
+      }
+    },
+  );
+  return styles;
+};
+
+const styleIdFor = (
+  styles: ReadonlyMap<string, StylePatch>,
+  candidates: readonly string[],
+): string | null => {
+  for (const candidate of candidates) {
+    const exact = [...styles.values()].find(
+      (style) =>
+        style.id.toLowerCase() === candidate.toLowerCase() ||
+        style.name?.toLowerCase() === candidate.toLowerCase(),
+    );
+    if (exact) return exact.id;
+  }
+  return null;
+};
+
+const inspectStyles = (
+  styles: ReadonlyMap<string, StylePatch>,
+  fallback: LayoutProfile,
+  warnings: Diagnostic[],
+): DocxTemplateInspection["styles"] => {
+  const resolving = new Set<string>();
+  const resolved = new Map<string, DocxTemplateInspection["styles"]["body"]>();
+  const missingParents = new Set<string>();
+  const cycles = new Set<string>();
+  const resolve = (
+    id: string | null,
+    fallbackStyleValue: TextStyle,
+    fallbackFamily: string,
+    fallbackId: string,
+  ): DocxTemplateInspection["styles"]["body"] => {
+    if (!id) return fallbackStyle(fallbackStyleValue, fallbackFamily, fallbackId);
+    const cached = resolved.get(id);
+    if (cached) return cached;
+    const style = styles.get(id);
+    if (!style) return fallbackStyle(fallbackStyleValue, fallbackFamily, fallbackId);
+    if (resolving.has(id)) {
+      if (!cycles.has(id)) {
+        cycles.add(id);
+        warnings.push({
+          code: "DOCX_STYLE_CYCLE",
+          severity: "warning",
+          message: `Template style inheritance cycle includes ${id}.`,
+        });
+      }
+      return fallbackStyle(fallbackStyleValue, fallbackFamily, fallbackId);
+    }
+    resolving.add(id);
+    let parent: DocxTemplateInspection["styles"]["body"] = fallbackStyle(
+      fallbackStyleValue,
+      fallbackFamily,
+      fallbackId,
+    );
+    if (style.basedOn) {
+      if (!styles.has(style.basedOn) && !missingParents.has(style.basedOn)) {
+        missingParents.add(style.basedOn);
+        warnings.push({
+          code: "DOCX_STYLE_PARENT_MISSING",
+          severity: "warning",
+          message: `Template style ${id} references missing parent ${style.basedOn}.`,
+        });
+      } else
+        parent = resolve(
+          style.basedOn,
+          fallbackStyleValue,
+          fallbackFamily,
+          fallbackId,
+        );
+    }
+    resolving.delete(id);
+    const value: DocxTemplateInspection["styles"]["body"] = {
+      styleId: style.id,
+      name: style.name,
+      resolved: {
+        ...parent.resolved,
+        ...style.values,
+        lineSpacing: style.values.lineSpacing ?? parent.resolved.lineSpacing,
+      },
+      requestedFontFamily: style.fontFamily ?? parent.requestedFontFamily,
+      provenance: {
+        ...parent.provenance,
+        "": "template",
+      },
+    };
+    resolved.set(id, value);
+    return value;
+  };
+  const body = resolve(
+    styleIdFor(styles, ["Normal"]),
+    fallback.body,
+    fallback.requestedFontFamily,
+    "Normal",
+  );
+  const heading = (level: 1 | 2 | 3 | 4 | 5 | 6) =>
+    resolve(
+      styleIdFor(styles, [`Heading${level}`, `Heading ${level}`]),
+      fallback.headings[String(level) as "1" | "2" | "3" | "4" | "5" | "6"],
+      body.requestedFontFamily,
+      `Heading${level}`,
+    );
+  return {
+    body,
+    headings: {
+      "1": heading(1),
+      "2": heading(2),
+      "3": heading(3),
+      "4": heading(4),
+      "5": heading(5),
+      "6": heading(6),
+    },
+    quote: resolve(
+      styleIdFor(styles, ["Quote", "Intense Quote"]),
+      fallback.blockquote,
+      body.requestedFontFamily,
+      "Quote",
+    ),
+    list: resolve(
+      styleIdFor(styles, ["ListParagraph", "List Paragraph"]),
+      fallback.list,
+      body.requestedFontFamily,
+      "ListParagraph",
+    ),
+    footnote: resolve(
+      styleIdFor(styles, ["FootnoteText", "Footnote Text"]),
+      fallback.footnote,
+      body.requestedFontFamily,
+      "FootnoteText",
+    ),
+    footnoteReference: (() => {
+      const id = styleIdFor(styles, ["FootnoteReference", "Footnote Reference"]);
+      return id
+        ? resolve(id, fallback.footnote, body.requestedFontFamily, "FootnoteReference")
+        : null;
+    })(),
+  };
+};
+
+const normalizedInstruction = (value: string): string =>
+  value.replace(/\s+/g, " ").trim();
+
+const fieldKind = (instruction: string): string =>
+  normalizedInstruction(instruction).split(/\s+/, 1)[0]?.toUpperCase() ?? "UNKNOWN";
+
+const fieldsForPart = (
+  xml: string,
+  partPath: string,
+): readonly DocxTemplateInspection["fields"][number][] => {
+  const fields: DocxTemplateInspection["fields"][number][] = [];
+  let complex: string | null = null;
+  let inInstruction = false;
+  const add = (instruction: string | undefined): void => {
+    const normalized = normalizedInstruction(instruction ?? "");
+    if (!normalized) return;
+    fields.push({ partPath, instruction: normalized, kind: fieldKind(normalized) });
+  };
+  parse(
+    xml,
+    (tag) => {
+      if (tag.local === "fldSimple") {
+        add(attr(tag, "instr"));
+        return;
+      }
+      if (tag.local === "fldChar") {
+        const kind = attr(tag, "fldCharType");
+        if (kind === "begin") complex = "";
+        else if (kind === "end" && complex !== null) {
+          add(complex);
+          complex = null;
+        }
+        return;
+      }
+      if (tag.local === "instrText" && complex !== null) inInstruction = true;
+    },
+    (tag) => {
+      if (tag.local === "instrText") inInstruction = false;
+    },
+    (text) => {
+      if (complex !== null && inInstruction) complex += text;
+    },
+  );
+  return fields;
+};
+
+const textForPart = (xml: string): string => {
+  let inText = false;
+  let value = "";
+  parse(
+    xml,
+    (tag) => {
+      if (tag.local === "t" || tag.local === "delText") inText = true;
+    },
+    (tag) => {
+      if (tag.local === "t" || tag.local === "delText") inText = false;
+    },
+    (text) => {
+      if (inText) value += text;
+    },
+  );
+  return value;
+};
+
+const captionsForPart = (
+  xml: string,
+): readonly DocxTemplateInspection["captions"][number][] => {
+  const captions: DocxTemplateInspection["captions"][number][] = [];
+  let paragraph:
+    | { index: number; styleId: string | null; text: string; instruction: string }
+    | null = null;
+  let paragraphIndex = 0;
+  let inText = false;
+  let inInstruction = false;
+  parse(
+    xml,
+    (tag) => {
+      if (tag.local === "p") {
+        paragraph = { index: paragraphIndex++, styleId: null, text: "", instruction: "" };
+        return;
+      }
+      if (!paragraph) return;
+      if (tag.local === "pStyle") paragraph.styleId = attr(tag, "val") ?? null;
+      else if (tag.local === "fldSimple")
+        paragraph.instruction += ` ${attr(tag, "instr") ?? ""}`;
+      else if (tag.local === "t") inText = true;
+      else if (tag.local === "instrText") inInstruction = true;
+    },
+    (tag) => {
+      if (tag.local === "t") inText = false;
+      else if (tag.local === "instrText") inInstruction = false;
+      else if (tag.local === "p" && paragraph) {
+        const instruction = normalizedInstruction(paragraph.instruction);
+        const sequence = /\bSEQ\s+([^\s\\]+)/i.exec(instruction)?.[1] ?? null;
+        if (/caption/i.test(paragraph.styleId ?? "") || sequence)
+          captions.push({
+            paragraphIndex: paragraph.index,
+            styleId: paragraph.styleId,
+            text: paragraph.text,
+            sequence,
+          });
+        paragraph = null;
+      }
+    },
+    (text) => {
+      if (!paragraph) return;
+      if (inText) paragraph.text += text;
+      if (inInstruction) paragraph.instruction += text;
+    },
+  );
+  return captions;
+};
+
+const numberingForPart = (
+  xml: string | undefined,
+): DocxTemplateInspection["numbering"] => {
+  if (!xml) return { partPath: null, abstractNumbers: [], instances: [] };
+  const abstractNumbers: Array<{ id: string; levels: number }> = [];
+  const instances: Array<{ id: string; abstractNumberId: string | null }> = [];
+  let abstract: { id: string; levels: number } | null = null;
+  let instance: { id: string; abstractNumberId: string | null } | null = null;
+  parse(
+    xml,
+    (tag) => {
+      if (tag.local === "abstractNum") {
+        const id = attr(tag, "abstractNumId");
+        if (!id) throw new AgentDocxError("DOCX_INVALID", "Numbering abstract ID is missing");
+        abstract = { id, levels: 0 };
+      } else if (tag.local === "lvl" && abstract) abstract.levels++;
+      else if (tag.local === "num") {
+        const id = attr(tag, "numId");
+        if (!id) throw new AgentDocxError("DOCX_INVALID", "Numbering instance ID is missing");
+        instance = { id, abstractNumberId: null };
+      } else if (tag.local === "abstractNumId" && instance)
+        instance.abstractNumberId = attr(tag, "val") ?? null;
+    },
+    (tag) => {
+      if (tag.local === "abstractNum" && abstract) {
+        abstractNumbers.push(abstract);
+        abstract = null;
+      } else if (tag.local === "num" && instance) {
+        instances.push(instance);
+        instance = null;
+      }
+    },
+  );
+  return {
+    partPath: "word/numbering.xml",
+    abstractNumbers: abstractNumbers.sort((left, right) => left.id.localeCompare(right.id)),
+    instances: instances.sort((left, right) => left.id.localeCompare(right.id)),
+  };
+};
+
+const unsupportedPartReason = (name: string): string | null => {
+  if (/vbaProject|macro/i.test(name)) return "Macros are not imported from templates.";
+  if (/\/(?:embeddings|activeX)\//i.test(name))
+    return "Embedded executable content is not imported from templates.";
+  if (/oleObject|altChunk/i.test(name))
+    return "OLE or alternate content is not imported from templates.";
+  return null;
+};
 export async function inspectDocxTemplate(
   docx: Uint8Array,
   options: InspectTemplateOptions = {},
@@ -329,37 +601,49 @@ export async function inspectDocxTemplate(
       ? builtInProfiles[options.fallbackProfile]
       : (options.fallbackProfile ??
         builtInProfiles["us-district-conventional"]);
-  const parts = await readParts(docx);
+  const { parts, names } = await readParts(docx);
   const content = parts["[Content_Types].xml"];
   if (!content)
     throw new AgentDocxError("DOCX_INVALID", "Missing [Content_Types].xml");
   const contentXml = decodeXml(content);
   const macroEnabled = /macroEnabled/i.test(contentXml);
-  let mainPart = "word/document.xml";
-  const rootRels = parts["_rels/.rels"];
-  if (rootRels) {
-    parse(decodeXml(rootRels), (tag) => {
-      if (
-        tag.local === "Relationship" &&
-        /officeDocument$/.test(attr(tag, "Type") ?? "")
-      ) {
-        const target = attr(tag, "Target");
-        if (target) mainPart = target.replace(/^\//, "");
-      }
-    });
-  }
+  const rootRelationships = relationships(
+    parts[relationshipPartFor("")]
+      ? decodeXml(parts[relationshipPartFor("")]!)
+      : undefined,
+  ).filter((relationship) => /officeDocument$/.test(relationship.type));
+  if (rootRelationships.length > 1)
+    throw new AgentDocxError(
+      "DOCX_INVALID",
+      "DOCX has more than one main-document relationship",
+    );
+  const mainPart =
+    rootRelationships.length === 0
+      ? "word/document.xml"
+      : (() => {
+          const relationship = rootRelationships[0]!;
+          if (relationship.external)
+            throw new AgentDocxError(
+              "DOCX_UNSAFE",
+              "DOCX main-document relationship must be internal",
+            );
+          return resolveOpcTarget("", relationship.target);
+        })();
   const main = parts[mainPart];
   if (!main)
     throw new AgentDocxError(
       "DOCX_INVALID",
       `Missing main document part: ${mainPart}`,
     );
-  const geometries = sectionGeometry(decodeXml(main), mainPart, fallback.page);
-  const selectedSection = geometries.length - 1;
+  const mainXml = decodeXml(main);
+  const sectionDefinitions = sectionGeometry(mainXml, fallback.page);
+  const selectedSection = sectionDefinitions.length - 1;
   const warnings: Diagnostic[] = [];
   if (
-    geometries.some(
-      (g) => JSON.stringify(g) !== JSON.stringify(geometries[selectedSection]),
+    sectionDefinitions.some(
+      (section) =>
+        JSON.stringify(section.page) !==
+        JSON.stringify(sectionDefinitions[selectedSection]!.page),
     )
   )
     warnings.push({
@@ -368,14 +652,71 @@ export async function inspectDocxTemplate(
       message:
         "Template contains differing section geometries; the final section is selected.",
     });
-  if (macroEnabled)
-    warnings.push({
-      code: "DOCX_IGNORED_UNSAFE_PART",
-      severity: "warning",
-      message:
-        "Macro content is ignored; generated renderer documents are non-macro.",
+  const mainRelationships = relationships(
+    parts[relationshipPartFor(mainPart)]
+      ? decodeXml(parts[relationshipPartFor(mainPart)]!)
+      : undefined,
+  );
+  const relationshipById = new Map(
+    mainRelationships.map((relationship) => [relationship.id, relationship]),
+  );
+  const sections = sectionDefinitions.map((section, index) => {
+    const headerFooterReferences = section.headerFooterReferences.map((reference) => {
+      const relationship = relationshipById.get(reference.relationshipId);
+      if (!relationship) {
+        warnings.push({
+          code: "DOCX_UNSUPPORTED_FEATURE",
+          severity: "warning",
+          message: `Section ${index} references missing ${reference.kind} relationship ${reference.relationshipId}.`,
+        });
+        return { ...reference, partPath: null };
+      }
+      if (
+        relationship.external ||
+        !new RegExp(`/${reference.kind}$`).test(relationship.type)
+      ) {
+        warnings.push({
+          code: "DOCX_UNSUPPORTED_FEATURE",
+          severity: "warning",
+          message: `Section ${index} ${reference.kind} relationship ${reference.relationshipId} is not a supported internal ${reference.kind} part.`,
+        });
+        return { ...reference, partPath: null };
+      }
+      const partPath = resolveOpcTarget(mainPart, relationship.target);
+      if (!parts[partPath]) {
+        warnings.push({
+          code: "DOCX_UNSUPPORTED_FEATURE",
+          severity: "warning",
+          message: `Section ${index} ${reference.kind} part is missing: ${partPath}.`,
+        });
+        return { ...reference, partPath: null };
+      }
+      return { ...reference, partPath };
     });
-  const selected = geometries[selectedSection]!;
+    return {
+      index,
+      page: section.page,
+      sourcePart: mainPart,
+      headerFooterReferences,
+    };
+  });
+  const headerFooters = sections.flatMap((section) =>
+    section.headerFooterReferences.map((reference) => {
+      const xml =
+        reference.partPath === null
+          ? undefined
+          : decodeXml(parts[reference.partPath]!);
+      return {
+        sectionIndex: section.index,
+        ...reference,
+        text: xml ? textForPart(xml) : "",
+        fields: xml && reference.partPath
+          ? fieldsForPart(xml, reference.partPath)
+          : [],
+      };
+    }),
+  );
+  const selected = sectionDefinitions[selectedSection]!.page;
   if (
     selected.widthTwips -
       selected.marginsTwips.left -
@@ -391,35 +732,92 @@ export async function inspectDocxTemplate(
       "DOCX_INVALID",
       "Selected template section has non-positive usable area",
     );
-  const body = fallbackStyle(
-    fallback.body,
-    fallback.requestedFontFamily,
-    "Normal",
+  const theme = themeFonts(
+    parts["word/theme/theme1.xml"]
+      ? decodeXml(parts["word/theme/theme1.xml"]!)
+      : undefined,
   );
-  const headingEntries = makeHeadings(fallback);
+  const parsedStyles = parseStyles(
+    parts["word/styles.xml"] ? decodeXml(parts["word/styles.xml"]!) : undefined,
+    theme,
+  );
+  const styles = inspectStyles(parsedStyles, fallback, warnings);
+  const fieldPartPaths = Object.keys(parts)
+    .filter((partPath) =>
+      /^word\/(?:document|header\d+|footer\d+|footnotes)\.xml$/i.test(partPath),
+    )
+    .sort();
+  const fields = fieldPartPaths.flatMap((partPath) =>
+    fieldsForPart(decodeXml(parts[partPath]!), partPath),
+  );
+  const unsupportedParts = [
+    ...names.flatMap((partPath) => {
+      const reason = unsupportedPartReason(partPath);
+      return reason ? [{ partPath, reason }] : [];
+    }),
+    ...Object.entries(parts)
+      .filter(([partPath]) => partPath.endsWith(".rels"))
+      .flatMap(([partPath, bytes]) =>
+        relationships(decodeXml(bytes))
+          .filter((relationship) => relationship.external)
+          .map((relationship) => ({
+            partPath: `${partPath}#${relationship.id}`,
+            reason: `External ${relationship.type} relationship is not copied from templates.`,
+          })),
+      ),
+  ].sort((left, right) => left.partPath.localeCompare(right.partPath));
+  if (macroEnabled || unsupportedParts.length > 0)
+    warnings.push({
+      code: "DOCX_IGNORED_UNSAFE_PART",
+      severity: "warning",
+      message:
+        "Unsafe, embedded, or external template parts are reported but never copied into generated documents.",
+    });
+  const families = new Map<string, string>();
+  if (theme.major) families.set(theme.major, "word/theme/theme1.xml");
+  if (theme.minor) families.set(theme.minor, "word/theme/theme1.xml");
+  for (const style of [
+    styles.body,
+    ...Object.values(styles.headings),
+    styles.quote,
+    styles.list,
+    styles.footnote,
+    ...(styles.footnoteReference ? [styles.footnoteReference] : []),
+  ])
+    families.set(style.requestedFontFamily, "word/styles.xml");
   return {
-    imported: { page: selected },
-    sections: geometries.map((page, index) => ({
-      index,
-      page,
-      sourcePart: mainPart,
-    })),
-    selectedSection,
-    styles: {
-      body,
-      headings: headingEntries,
-      quote: fallbackStyle(
-        fallback.blockquote,
-        fallback.requestedFontFamily,
-        "Quote",
+    imported: {
+      page: selected,
+      requestedFontFamily: styles.body.requestedFontFamily,
+      body: styles.body.resolved,
+      headings: Object.fromEntries(
+        Object.entries(styles.headings).map(([level, style]) => [
+          level,
+          style.resolved,
+        ]),
       ),
-      footnote: fallbackStyle(
-        fallback.footnote,
-        fallback.requestedFontFamily,
-        "FootnoteText",
-      ),
-      footnoteReference: null,
+      blockquote: styles.quote.resolved,
+      list: styles.list.resolved,
+      footnote: styles.footnote.resolved,
     },
+    sections,
+    selectedSection,
+    styles,
+    numbering: numberingForPart(
+      parts["word/numbering.xml"]
+        ? decodeXml(parts["word/numbering.xml"]!)
+        : undefined,
+    ),
+    headerFooters,
+    fields,
+    captions: captionsForPart(mainXml),
+    fonts: {
+      theme,
+      families: [...families.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([family, sourcePart]) => ({ family, sourcePart })),
+    },
+    unsupportedParts,
     package: { sha256: sha(docx), mainPart, macroEnabled },
     warnings,
   };

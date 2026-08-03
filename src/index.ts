@@ -3,6 +3,97 @@ export { measureMarkdown } from "./renderers/index.js";
 export { inspectDocxTemplate, DOCX_LIMITS } from "./docx/inspect.js";
 export { builtInProfiles } from "./profiles.js";
 export { AgentDocxError } from "./types.js";
+export { compileMarkdown } from "./docx/compile.js";
+export { generateDocx } from "./docx/generate.js";
+export { generateRedlineDocx } from "./docx/redline.js";
+export { inspectDocx } from "./docx/import.js";
+export { createProject, openProject } from "./project/index.js";
+export {
+  agentActions,
+  dispatchAgentRequest,
+  parseAgentRequest,
+  serializeAgentValue,
+} from "./agent.js";
+export { insertMissingBlockMarkers, parseLegalMarkdown } from "./legal/parse.js";
+export { lowerLegalDocument } from "./legal/lower.js";
+export { builtInRulePacks, validateLegalDocument } from "./legal/rules.js";
+export { emptyValidationResult } from "./legal/rules.js";
+export type {
+  AddReviewInput,
+  AgentDocxDocumentConfig,
+  AgentDocxManifest,
+  AgentDocxProject,
+  CompileOptions,
+  ConfigureDocumentInput,
+  DependencyHashes,
+  DocumentConfigUpdate,
+  DocumentSnapshot,
+  ProjectDocumentInput,
+  ProjectFontSetConfig,
+  ProjectMeasureOptions,
+  ProjectMeasurementResult,
+  ProjectState,
+  ResolveChangesInput,
+  ResolveReviewInput,
+  SerializableMeasurementResult,
+  SerializableProjectMeasurementResult,
+} from "./project/contracts.js";
+export type {
+  Actor,
+  AnnotationId,
+  BlockId,
+  DocumentChrome,
+  LegalBlock,
+  LegalDocument,
+  LegalDocumentSpecification,
+  LitigationMetadata,
+  RevisionId,
+  RulePackId,
+  ReviewAnnotation,
+} from "./legal/model.js";
+export type {
+  AnnotationChange,
+  AttributionSpan,
+  Change,
+  ChangeAttribution,
+  ChangeSet,
+  ResolutionRecord,
+  RevisionDeltaRecord,
+  RevisionMutationResult,
+  RevisionPage,
+  RevisionRecord,
+} from "./revisions/types.js";
+export type {
+  ArtifactAttachmentBundle,
+  ArtifactResult,
+  AttachmentInventoryEntry,
+  AttachmentManifest,
+  CompiledDocx,
+  DocxImportResult,
+  ExportDocxInput,
+  ExportRendererOptions,
+  ImportAttachmentBundle,
+  ImportDocxInput,
+  RendererProvenance,
+  SerializableCompiledDocx,
+} from "./docx/contracts.js";
+export type {
+  BuiltInRulePack,
+  RuleCheckKind,
+  ValidationFinding,
+  ValidationResult,
+} from "./legal/rules.js";
+export type {
+  DraftGuidance,
+  PatchDeltas,
+  PatchEvaluation,
+  SourcePatch,
+} from "./draft/types.js";
+export type {
+  AgentAction,
+  AgentDispatchResult,
+  AgentRequest,
+} from "./agent.js";
 export type {
   Budget,
   CliErrorPayload,

@@ -51,6 +51,12 @@ export type TextFlowBlock = {
   position: SourcePosition;
   level?: number;
   footnoteRefs: string[];
+  image?: {
+    source: string;
+    alt: string;
+    widthTwips: number;
+    heightTwips: number;
+  };
 };
 export type TableCell = InlineNormalization & {
   position: SourcePosition;

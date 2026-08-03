@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agent-docx.dev/schemas/cli-jsonl-v1.json",
-  "title": "agent-docx JSONL response record version 1",
+  "$id": "https://agent-docx.dev/schemas/measurement-stream-v1.json",
+  "title": "agent-docx measurement JSONL response record version 1",
   "oneOf": [
     { "$ref": "#/$defs/result" },
     { "$ref": "#/$defs/errorRecord" },

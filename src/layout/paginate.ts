@@ -682,6 +682,7 @@ export function paginate(
   profile: LayoutProfile,
   fonts: LoadedFonts,
   sectionIndex?: SectionIndex,
+  usableHeightOverride?: number,
 ): PaginationOutput {
   if (document.blocks.length === 0) {
     return {
@@ -721,9 +722,10 @@ export function paginate(
     profile.page.marginsTwips.right -
     profile.page.gutterTwips;
   const usableHeight =
+    usableHeightOverride ??
     profile.page.heightTwips -
-    profile.page.marginsTwips.top -
-    profile.page.marginsTwips.bottom;
+      profile.page.marginsTwips.top -
+      profile.page.marginsTwips.bottom;
   const warnings: Diagnostic[] = [];
   const headerRepeatWarnings = new Set<FlowBlock>();
   const bodyBlocks: WrappedBlock[] = document.blocks.map((block) => {

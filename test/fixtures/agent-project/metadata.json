@@ -1,0 +1,34 @@
+{
+  "court": "United States District Court",
+  "jurisdiction": "Northern District of California",
+  "caseName": "Example Holdings, Inc. v. Example Systems, LLC",
+  "docketNumber": "3:26-cv-00001",
+  "documentTitle": "Motion for Illustrative Relief",
+  "filingDate": "2026-08-02",
+  "parties": [
+    { "id": "movant", "name": "Example Holdings, Inc.", "role": "Plaintiff" },
+    { "id": "respondent", "name": "Example Systems, LLC", "role": "Defendant" }
+  ],
+  "counsel": [
+    {
+      "id": "jane-counsel",
+      "name": "Jane Counsel",
+      "barNumber": "123456",
+      "firm": "Example Law LLP",
+      "addressLines": ["100 Market Street", "San Francisco, CA 94105"],
+      "phone": "415-555-0100",
+      "email": "jane@example.test"
+    }
+  ],
+  "certificates": [
+    {
+      "id": "service",
+      "kind": "service",
+      "statement": "I certify that this document was served electronically.",
+      "servedOn": ["Example Systems, LLC"],
+      "method": "electronic filing",
+      "date": "2026-08-02",
+      "signerCounselId": "jane-counsel"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-docx.dev/schemas/change-set-v1.json",
+  "title": "agent-docx semantic change set version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "documentId", "baseRevision", "headRevision", "changes", "annotations"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "$ref": "#/$defs/revisionId" },
+    "documentId": { "$ref": "#/$defs/documentId" },
+    "baseRevision": { "$ref": "#/$defs/revisionId" },
+    "headRevision": { "$ref": "#/$defs/revisionId" },
+    "changes": { "type": "array", "items": { "$ref": "#/$defs/change" } },
+    "annotations": { "type": "array", "items": { "$ref": "#/$defs/annotationChange" } }
+  },
+  "$defs": {
+    "revisionId": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "changeId": { "type": "string", "pattern": "^c_[0-9a-f]{64}$" },
+    "blockId": { "type": "string", "pattern": "^b_[0-9a-f-]{36}$" },
+    "documentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "actor": { "type": "object", "additionalProperties": false, "required": ["name"], "properties": { "name": { "type": "string" }, "email": { "type": "string" } } },
+    "attribution": { "type": "object", "additionalProperties": false, "required": ["author", "createdAt"], "properties": { "author": { "anyOf": [{ "$ref": "#/$defs/actor" }, { "type": "null" }] }, "createdAt": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }] }, "sourceRevisionId": { "type": "string" } } },
+    "range": { "type": "object", "additionalProperties": false, "required": ["start", "end", "text"], "properties": { "start": { "type": "integer", "minimum": 0 }, "end": { "type": "integer", "minimum": 0 }, "text": { "type": "string" } } },
+    "location": { "type": "object", "additionalProperties": false, "required": ["collection", "parentId", "index", "sourceOffset"], "properties": { "collection": { "enum": ["body", "footnotes"] }, "parentId": { "anyOf": [{ "$ref": "#/$defs/blockId" }, { "type": "null" }] }, "index": { "type": "integer", "minimum": 0 }, "sourceOffset": { "type": "integer", "minimum": 0 } } },
+    "span": { "type": "object", "additionalProperties": false, "required": ["start", "end", "attribution"], "properties": { "start": { "type": "integer", "minimum": 0 }, "end": { "type": "integer", "minimum": 0 }, "attribution": { "$ref": "#/$defs/attribution" } } },
+    "change": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "attribution"],
+      "properties": {
+        "id": { "$ref": "#/$defs/changeId" }, "kind": { "enum": ["insert-block", "delete-block", "move-block", "replace-block", "replace-container-shell", "insert-text", "delete-text", "replace-text", "add-config", "remove-config", "replace-config", "add-dependency", "remove-dependency", "replace-dependency"] }, "attribution": { "$ref": "#/$defs/attribution" },
+        "blockId": { "$ref": "#/$defs/blockId" }, "from": { "$ref": "#/$defs/location" }, "to": { "$ref": "#/$defs/location" }, "oldSource": { "$ref": "#/$defs/range" }, "newSource": { "$ref": "#/$defs/range" }, "oldOffset": { "type": "integer", "minimum": 0 }, "newOffset": { "type": "integer", "minimum": 0 }, "oldText": { "type": "string" }, "newText": { "type": "string" }, "oldAttributionSpans": { "type": "array", "items": { "$ref": "#/$defs/span" } }, "newAttributionSpans": { "type": "array", "items": { "$ref": "#/$defs/span" } }, "block": {}, "oldBlock": {}, "newBlock": {}, "oldShell": {}, "newShell": {}, "path": { "type": "string" }, "oldValue": {}, "newValue": {}, "key": { "type": "string" }, "oldObject": { "$ref": "#/$defs/revisionId" }, "newObject": { "$ref": "#/$defs/revisionId" }
+      }
+    },
+    "annotation": { "type": "object", "additionalProperties": false, "required": ["id", "blockId", "author", "createdAt", "message", "status"], "properties": { "id": { "type": "string", "pattern": "^a_[0-9a-f-]{36}$" }, "blockId": { "$ref": "#/$defs/blockId" }, "range": { "type": "object", "additionalProperties": false, "required": ["start", "end"], "properties": { "start": { "type": "integer", "minimum": 0 }, "end": { "type": "integer", "minimum": 0 } } }, "author": { "anyOf": [{ "$ref": "#/$defs/actor" }, { "type": "null" }] }, "createdAt": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }] }, "message": { "type": "string" }, "status": { "enum": ["open", "resolved"] } } },
+    "annotationChange": { "type": "object", "additionalProperties": false, "required": ["id", "kind"], "properties": { "id": { "$ref": "#/$defs/changeId" }, "kind": { "enum": ["add", "replace", "remove"] }, "oldValue": { "$ref": "#/$defs/annotation" }, "newValue": { "$ref": "#/$defs/annotation" } } }
+  }
+}

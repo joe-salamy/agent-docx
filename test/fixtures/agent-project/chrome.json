@@ -1,0 +1,20 @@
+{
+  "headers": {
+    "default": "{{caseName}} — {{documentTitle}}"
+  },
+  "footers": {
+    "default": "{{docketNumber}} — Page {{page}} of {{pages}}"
+  },
+  "pageNumber": {
+    "story": "footer",
+    "alignment": "center",
+    "format": "decimal",
+    "start": 1
+  },
+  "lineNumbers": {
+    "countBy": 1,
+    "start": 1,
+    "distanceTwips": 360,
+    "restart": "continuous"
+  }
+}

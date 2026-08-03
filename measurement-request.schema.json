@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agent-docx.dev/schemas/cli-request-v1.json",
-  "title": "agent-docx JSONL request version 1",
+  "$id": "https://agent-docx.dev/schemas/measurement-request-v1.json",
+  "title": "agent-docx measurement JSONL request version 1",
   "oneOf": [
     {
       "type": "object",

@@ -76,6 +76,7 @@ for (const document of documents) {
     );
 
     const invocation = await runCli([
+      "measure",
       fixturePath(document),
       "--paragraphs",
       "--json",
@@ -92,9 +93,10 @@ for (const document of documents) {
 
 test(
   "real Markdown corpus: CLI page and last-page lines agree exactly with Word",
-  { timeout: 600_000 },
+  { timeout: 600_000, skip: process.env.AGENT_DOCX_TEST_WORD !== "1" },
   async (t) => {
     const invocation = await runCli([
+      "measure",
       "--batch",
       ...documents.map(fixturePath),
       "--paragraphs",

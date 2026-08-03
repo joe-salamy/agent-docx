@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-docx.dev/schemas/revision-v1.json",
+  "title": "agent-docx immutable revision version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "documentId", "parents", "createdAt", "author", "message", "sourceObject", "documentConfigObject", "dependencyObjects", "workingTreeHash", "legalDocumentObject", "annotationsObject", "tool"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "$ref": "#/$defs/revisionId" },
+    "documentId": { "$ref": "#/$defs/documentId" },
+    "parents": { "type": "array", "items": { "$ref": "#/$defs/revisionId" } },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "author": { "$ref": "#/$defs/actor" },
+    "message": { "type": "string", "minLength": 1 },
+    "sourceObject": { "$ref": "#/$defs/revisionId" },
+    "documentConfigObject": { "$ref": "#/$defs/revisionId" },
+    "dependencyObjects": { "$ref": "#/$defs/dependencyObjects" },
+    "workingTreeHash": { "$ref": "#/$defs/revisionId" },
+    "legalDocumentObject": { "$ref": "#/$defs/revisionId" },
+    "annotationsObject": { "$ref": "#/$defs/revisionId" },
+    "deltaObject": { "$ref": "#/$defs/revisionId" },
+    "resolutionObject": { "$ref": "#/$defs/revisionId" },
+    "tool": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "version", "schemaVersion"],
+      "properties": { "name": { "const": "agent-docx" }, "version": { "type": "string" }, "schemaVersion": { "const": 1 } }
+    }
+  },
+  "$defs": {
+    "revisionId": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "documentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "actor": { "type": "object", "additionalProperties": false, "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "email": { "type": "string", "minLength": 1 } } },
+    "dependencyObjects": { "type": "object", "additionalProperties": { "$ref": "#/$defs/revisionId" } }
+  }
+}

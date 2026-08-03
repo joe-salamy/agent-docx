@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-docx.dev/schemas/agent-response-v1.json",
+  "title": "agent-docx stateful agent response version 1",
+  "oneOf": [
+    { "$ref": "#/$defs/result" },
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/fatal" }
+  ],
+  "$defs": {
+    "json": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/$defs/json" } },
+        { "type": "object", "additionalProperties": { "$ref": "#/$defs/json" } }
+      ]
+    },
+    "jsonObject": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/json" }
+    },
+    "requestId": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "null" }
+      ]
+    },
+    "revisionId": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "revision": {
+      "anyOf": [
+        { "$ref": "#/$defs/revisionId" },
+        { "type": "null" }
+      ]
+    },
+    "documentId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "action": {
+      "enum": [
+        "project.init",
+        "project.add",
+        "project.get",
+        "document.configure",
+        "document.get",
+        "document.measure",
+        "document.validate",
+        "revision.checkpoint",
+        "revision.list",
+        "revision.get",
+        "revision.restore",
+        "revision.diff",
+        "revision.resolve",
+        "draft.guidance",
+        "draft.evaluate",
+        "draft.apply",
+        "review.add",
+        "review.resolve",
+        "docx.export",
+        "docx.import",
+        "docx.inspect"
+      ]
+    },
+    "errorPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "details": { "$ref": "#/$defs/jsonObject" }
+      }
+    },
+    "dependencyObjects": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/revisionId" }
+    },
+    "projectDocumentState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "documentId",
+        "head",
+        "headWorkingTreeHash",
+        "workingTreeHash",
+        "sourceSha256",
+        "documentConfigSha256",
+        "dependencyObjects",
+        "matchesHead"
+      ],
+      "properties": {
+        "documentId": { "$ref": "#/$defs/documentId" },
+        "head": { "$ref": "#/$defs/revision" },
+        "headWorkingTreeHash": { "$ref": "#/$defs/revision" },
+        "workingTreeHash": { "$ref": "#/$defs/revisionId" },
+        "sourceSha256": { "$ref": "#/$defs/revisionId" },
+        "documentConfigSha256": { "$ref": "#/$defs/revisionId" },
+        "dependencyObjects": { "$ref": "#/$defs/dependencyObjects" },
+        "matchesHead": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "documentConfig", "dependencies", "all"],
+          "properties": {
+            "source": { "type": "boolean" },
+            "documentConfig": { "type": "boolean" },
+            "dependencies": { "type": "boolean" },
+            "all": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "projectState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "manifestPath", "manifest", "documents"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "manifestPath": { "type": "string" },
+        "manifest": { "$ref": "https://agent-docx.dev/schemas/project-v1.json" },
+        "documents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/projectDocumentState" }
+        }
+      }
+    },
+    "projectMeasurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "documentId",
+        "revision",
+        "workingTreeHash",
+        "dependencyObjects",
+        "mode",
+        "pageCount",
+        "pageCountSource",
+        "deterministic",
+        "renderers"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "documentId": { "$ref": "#/$defs/documentId" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "workingTreeHash": { "$ref": "#/$defs/revisionId" },
+        "dependencyObjects": { "$ref": "#/$defs/dependencyObjects" },
+        "mode": { "enum": ["deterministic", "word", "libreoffice", "compare"] },
+        "pageCount": { "type": "integer", "minimum": 1 },
+        "pageCountSource": { "enum": ["deterministic", "word", "libreoffice"] },
+        "deterministic": { "$ref": "#/$defs/jsonObject" },
+        "renderers": { "$ref": "#/$defs/jsonObject" },
+        "budget": { "$ref": "#/$defs/jsonObject" },
+        "budgetBySource": { "$ref": "#/$defs/jsonObject" }
+      }
+    },
+    "revisionMutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "revision",
+        "head",
+        "sourceSha256",
+        "workingTreeHash",
+        "measurement",
+        "validation"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "revision": { "$ref": "https://agent-docx.dev/schemas/revision-v1.json" },
+        "head": { "$ref": "#/$defs/revisionId" },
+        "sourceSha256": { "$ref": "#/$defs/revisionId" },
+        "workingTreeHash": { "$ref": "#/$defs/revisionId" },
+        "measurement": { "$ref": "#/$defs/projectMeasurement" },
+        "validation": { "$ref": "https://agent-docx.dev/schemas/validation-result-v1.json" }
+      }
+    },
+    "documentSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "documentId",
+        "revision",
+        "head",
+        "source",
+        "sourceSha256",
+        "workingTreeHash",
+        "documentConfig",
+        "dependencyObjects",
+        "document",
+        "annotations"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "documentId": { "$ref": "#/$defs/documentId" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "head": { "$ref": "#/$defs/revision" },
+        "source": { "type": "string" },
+        "sourceSha256": { "$ref": "#/$defs/revisionId" },
+        "workingTreeHash": { "$ref": "#/$defs/revisionId" },
+        "documentConfig": {
+          "$ref": "https://agent-docx.dev/schemas/project-v1.json#/$defs/document"
+        },
+        "dependencyObjects": { "$ref": "#/$defs/dependencyObjects" },
+        "document": { "$ref": "#/$defs/jsonObject" },
+        "annotations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/jsonObject" }
+        }
+      }
+    },
+    "revisionPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "items", "nextCursor"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "https://agent-docx.dev/schemas/revision-v1.json" }
+        },
+        "nextCursor": { "$ref": "#/$defs/revision" }
+      }
+    },
+    "draftGuidance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "documentId",
+        "revision",
+        "baseRevision",
+        "workingTreeHash",
+        "items"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "documentId": { "$ref": "#/$defs/documentId" },
+        "revision": { "$ref": "#/$defs/revisionId" },
+        "baseRevision": { "$ref": "#/$defs/revisionId" },
+        "workingTreeHash": { "$ref": "#/$defs/revisionId" },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/jsonObject" } }
+      }
+    },
+    "patchEvaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "documentId",
+        "patchHash",
+        "baseRevision",
+        "before",
+        "candidate",
+        "passesConstraints",
+        "canApply",
+        "state"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "documentId": { "$ref": "#/$defs/documentId" },
+        "patchHash": { "$ref": "#/$defs/revisionId" },
+        "baseRevision": { "$ref": "#/$defs/revisionId" },
+        "before": { "$ref": "#/$defs/jsonObject" },
+        "candidate": { "$ref": "#/$defs/jsonObject" },
+        "passesConstraints": { "type": "boolean" },
+        "canApply": { "type": "boolean" },
+        "state": { "$ref": "#/$defs/jsonObject" }
+      }
+    },
+    "revisionDiff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["changeSet"],
+      "properties": {
+        "changeSet": { "$ref": "https://agent-docx.dev/schemas/change-set-v1.json" },
+        "compiled": { "$ref": "https://agent-docx.dev/schemas/compiled-docx-v1.json" }
+      }
+    },
+    "resultBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "sequence",
+        "requestId",
+        "action",
+        "project",
+        "documentId",
+        "revision",
+        "value"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "result" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "action": { "$ref": "#/$defs/action" },
+        "project": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "documentId": { "anyOf": [{ "$ref": "#/$defs/documentId" }, { "type": "null" }] },
+        "revision": { "$ref": "#/$defs/revision" },
+        "value": { "$ref": "#/$defs/json" }
+      }
+    },
+    "resultValue": {
+      "oneOf": [
+        { "type": "object", "properties": { "action": { "const": "project.init" }, "value": { "$ref": "#/$defs/projectState" } } },
+        { "type": "object", "properties": { "action": { "const": "project.add" }, "value": { "$ref": "#/$defs/projectState" } } },
+        { "type": "object", "properties": { "action": { "const": "project.get" }, "value": { "$ref": "#/$defs/projectState" } } },
+        { "type": "object", "properties": { "action": { "const": "document.configure" }, "value": { "$ref": "#/$defs/revisionMutation" } } },
+        { "type": "object", "properties": { "action": { "const": "document.get" }, "value": { "$ref": "#/$defs/documentSnapshot" } } },
+        { "type": "object", "properties": { "action": { "const": "document.measure" }, "value": { "$ref": "#/$defs/projectMeasurement" } } },
+        { "type": "object", "properties": { "action": { "const": "document.validate" }, "value": { "$ref": "https://agent-docx.dev/schemas/validation-result-v1.json" } } },
+        { "type": "object", "properties": { "action": { "const": "revision.checkpoint" }, "value": { "$ref": "#/$defs/revisionMutation" } } },
+        { "type": "object", "properties": { "action": { "const": "revision.list" }, "value": { "$ref": "#/$defs/revisionPage" } } },
+        { "type": "object", "properties": { "action": { "const": "revision.get" }, "value": { "$ref": "https://agent-docx.dev/schemas/revision-v1.json" } } },
+        { "type": "object", "properties": { "action": { "const": "revision.restore" }, "value": { "$ref": "#/$defs/revisionMutation" } } },
+        { "type": "object", "properties": { "action": { "const": "revision.diff" }, "value": { "$ref": "#/$defs/revisionDiff" } } },
+        { "type": "object", "properties": { "action": { "const": "revision.resolve" }, "value": { "$ref": "#/$defs/revisionMutation" } } },
+        { "type": "object", "properties": { "action": { "const": "draft.guidance" }, "value": { "$ref": "#/$defs/draftGuidance" } } },
+        { "type": "object", "properties": { "action": { "const": "draft.evaluate" }, "value": { "$ref": "#/$defs/patchEvaluation" } } },
+        { "type": "object", "properties": { "action": { "const": "draft.apply" }, "value": { "$ref": "#/$defs/revisionMutation" } } },
+        { "type": "object", "properties": { "action": { "const": "review.add" }, "value": { "$ref": "#/$defs/revisionMutation" } } },
+        { "type": "object", "properties": { "action": { "const": "review.resolve" }, "value": { "$ref": "#/$defs/revisionMutation" } } },
+        { "type": "object", "properties": { "action": { "const": "docx.export" }, "value": { "$ref": "https://agent-docx.dev/schemas/compiled-docx-v1.json" } } },
+        { "type": "object", "properties": { "action": { "const": "docx.import" }, "value": { "$ref": "https://agent-docx.dev/schemas/docx-import-result-v1.json" } } },
+        { "type": "object", "properties": { "action": { "const": "docx.inspect" }, "value": { "$ref": "https://agent-docx.dev/schemas/docx-template-inspection-v1.json" } } }
+      ]
+    },
+    "result": {
+      "allOf": [
+        { "$ref": "#/$defs/resultBase" },
+        { "$ref": "#/$defs/resultValue" }
+      ]
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "sequence",
+        "requestId",
+        "action",
+        "project",
+        "documentId",
+        "revision",
+        "error"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "error" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "action": { "anyOf": [{ "$ref": "#/$defs/action" }, { "type": "null" }] },
+        "project": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "documentId": { "anyOf": [{ "$ref": "#/$defs/documentId" }, { "type": "null" }] },
+        "revision": { "$ref": "#/$defs/revision" },
+        "error": { "$ref": "#/$defs/errorPayload" }
+      }
+    },
+    "fatal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "sequence",
+        "requestId",
+        "action",
+        "project",
+        "documentId",
+        "revision",
+        "error"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "fatal" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "requestId": { "type": "null" },
+        "action": { "type": "null" },
+        "project": { "type": "null" },
+        "documentId": { "type": "null" },
+        "revision": { "type": "null" },
+        "error": { "$ref": "#/$defs/errorPayload" }
+      }
+    }
+  }
+}

@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-docx.dev/schemas/agent-stream-v1.json",
+  "title": "agent-docx agent watch stream version 1",
+  "oneOf": [
+    { "$ref": "#/$defs/ready" },
+    { "$ref": "#/$defs/result" },
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/end" }
+  ],
+  "$defs": {
+    "revision": {
+      "anyOf": [
+        { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        { "type": "null" }
+      ]
+    },
+    "documentId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "errorPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "details": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "https://agent-docx.dev/schemas/agent-response-v1.json#/$defs/json"
+          }
+        }
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "path", "byteLength", "sha256"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "byteLength": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "ready": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "sequence",
+        "requestId",
+        "action",
+        "project",
+        "documentId",
+        "revision",
+        "value"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "ready" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "requestId": { "type": "null" },
+        "action": { "const": "project.watch" },
+        "project": { "type": "string", "minLength": 1 },
+        "documentId": { "$ref": "#/$defs/documentId" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "value": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["protocolVersion", "capabilities", "dependencies"],
+          "properties": {
+            "protocolVersion": { "const": 1 },
+            "capabilities": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "dependencies": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/dependency" }
+            }
+          }
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "sequence",
+        "requestId",
+        "action",
+        "project",
+        "documentId",
+        "revision",
+        "value"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "result" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "requestId": { "type": "null" },
+        "action": { "const": "document.measure" },
+        "project": { "type": "string", "minLength": 1 },
+        "documentId": { "$ref": "#/$defs/documentId" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "value": {
+          "$ref": "https://agent-docx.dev/schemas/agent-response-v1.json#/$defs/projectMeasurement"
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "sequence",
+        "requestId",
+        "action",
+        "project",
+        "documentId",
+        "revision",
+        "error"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "error" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "requestId": { "type": "null" },
+        "action": { "const": "document.measure" },
+        "project": { "type": "string", "minLength": 1 },
+        "documentId": { "$ref": "#/$defs/documentId" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "error": { "$ref": "#/$defs/errorPayload" }
+      }
+    },
+    "end": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "sequence",
+        "requestId",
+        "action",
+        "project",
+        "documentId",
+        "revision",
+        "reason"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "end" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "requestId": { "type": "null" },
+        "action": { "const": "project.watch" },
+        "project": { "type": "string", "minLength": 1 },
+        "documentId": { "$ref": "#/$defs/documentId" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "reason": { "enum": ["SIGINT", "SIGTERM"] }
+      }
+    }
+  }
+}

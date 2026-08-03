@@ -1,50 +1,241 @@
 # agent-docx
 
-Deterministic DOCX-equivalent pagination for legal-prose Markdown, with opt-in measurements from locally installed Microsoft Word and LibreOffice Writer.
+**Agent-first legal Markdown-to-DOCX compiler with deterministic page and line constraints, native redlines, embedded revisions, and optional Word validation.**
 
-## Install and run
+agent-docx is a local-first drafting suite for litigation documents and court filings. It owns Markdown parsing, legal-document compilation, OOXML package generation, deterministic pagination, revision records, semantic diffs, native tracked changes, and rule-pack validation. It generates DOCX itself—Pandoc and any other Markdown-to-DOCX converter are not required.
+
+> Filing-rule findings are evidence-backed software results, not legal advice or filing certification. Confirm current court, local, judge, document-type, and case-specific requirements before filing.
+
+## Install
 
 Requires Node.js 24 or newer.
 
 ```sh
 pnpm add agent-docx
-agent-docx --list-profiles
-agent-docx filing.md
-agent-docx filing.md --profile frap-32 --paragraphs --trim
-agent-docx filing.md --renderer compare --json
+agent-docx --version
+agent-docx --help
 ```
 
-Standard input is accepted by omitting the file or passing `-`. Human-readable output is the default. Use `--json` for one machine-readable result, `--list-profiles` to discover bundled profiles, `--output FILE.docx` to export the exact generated package for a single input, `--batch INPUT...` for ordered JSONL, `--watch FILE --jsonl` for change streams, and `--inspect-template FILE.docx --json` for bounded, read-only template inspection. Positional batch inputs may be explicit files, directories, or glob patterns; directory discovery is recursive with `*.md` by default and supports repeatable `--include`/`--exclude` patterns plus `--no-recursive`.
+## Quick start: a revision-bound filing workflow
 
-## Agent JSON and JSONL protocol
+Create `metadata.json` with the litigation metadata required by the chosen rule pack, then initialize a project:
 
-Single-input `--json` writes one unwrapped version-1 `MeasurementResult`; `--inspect-template --json` writes one unwrapped `DocxTemplateInspection`; `--list-profiles --json` writes one unwrapped profile catalog. Batch and watch streams use one version-1 JSON object per line. Successful machine modes keep stderr empty.
+```sh
+agent-docx project init \
+  --project agent-docx.json \
+  --document motion \
+  --source motion.md \
+  --profile cand-civil \
+  --filing-kind motion-document \
+  --rule-pack cand-civil@2026-05-01 \
+  --metadata metadata.json
 
-`--batch --input-jsonl` accepts file and inline requests:
+agent-docx revision checkpoint \
+  --project agent-docx.json \
+  --document motion \
+  --base HEAD \
+  --author "Drafter" \
+  --message "Initial motion"
 
-```jsonl
-{"id":"motion","path":"drafts/motion.md"}
-{"id":42,"name":"reply","markdown":"# Reply\n\nArgument."}
+agent-docx draft guidance --project agent-docx.json --document motion
+agent-docx validate --project agent-docx.json --document motion
+
+agent-docx export \
+  --project agent-docx.json \
+  --document motion \
+  --revision HEAD \
+  --mode clean \
+  --output motion.docx
 ```
 
-Each request is closed: unknown keys, an empty path, invalid IDs, and requests containing both or neither `path` and `markdown` are rejected. Shared CLI/config layout, renderer, diagnostics, trim, and limit options apply to every batch item. Result and per-item error records preserve a valid request `id` as `requestId` and any derivable source. Public paths are `/`-separated and relative to the invocation directory, including `../` paths for external dependencies; internal absolute paths are never emitted.
-`--batch --input-jsonl` decodes and processes each complete line as it arrives, so pipeline memory is bounded by the largest request rather than the entire stream.
+A project manifest owns document configuration; `.agent-docx/` is a private, content-addressed object store. Revision operations are optimistic and revision-bound: a mutation must identify the expected base revision, and a stale base is rejected instead of silently overwriting another draft.
 
-JSONL records are discriminated by `kind`: `result`, `error`, `ready`, or `end`. Every invocation starts `sequence` at 1 and increments it in emission order. Batch records have `mode:"batch"` and `trigger:null`. Watch JSONL emits `ready`, the initial `result` or `error`, source/dependency update records, then `end` on `SIGINT` or `SIGTERM`; watch `requestId` is always `null`, and update records include a source-relative trigger. Fatal setup or argument failures write exactly one `kind:"fatal"` record to stderr.
+## Who it is for
 
-`--trim` exposes deterministic, heuristic width measurements, not generated edits: candidates are eligible soft-wrapped tails ranked by ascending `oneLineReduction.estimatedRemovalTwips`, with normalized UTF-16 text ranges and exact-or-node source provenance. Re-run pagination after editing.
+- Agent developers building controlled drafting, review, and filing workflows.
+- Litigation teams keeping source in Markdown while delivering DOCX.
+- Legal operations teams requiring reproducible local artifacts, revision records, and machine-readable diagnostics.
+- Lawyers who want optional Microsoft Word or LibreOffice checks without making either application a generation dependency.
 
-Exit statuses are 0 for success, 1 for processing/internal failure, 2 for invalid arguments, 3 for `--fail-over-limit`, 4 for Office renderer failure, 130 for `SIGINT`, and 143 for `SIGTERM`.
+## Core workflow
 
-Runtime Draft 2020-12 schemas are exported as `agent-docx/cli-request.schema.json`, `agent-docx/measurement-result.schema.json`, `agent-docx/docx-template-inspection.schema.json`, `agent-docx/cli-jsonl.schema.json`, `agent-docx/cli-error.schema.json`, and `agent-docx/profile-catalog.schema.json`. Configuration remains `agent-docx/config.schema.json`.
+1. **Draft** source-mapped legal Markdown.
+2. **Checkpoint** an immutable revision with author and message provenance.
+3. **Evaluate** a proposed `SourcePatch` before changing the working copy.
+4. **Apply** a verified patch only when its base revision and deterministic checks still match.
+5. **Validate** the selected revision against the pinned rule pack and source-mapped structure.
+6. **Export** either a clean DOCX or a native-redline DOCX; optionally verify it with a local Office renderer.
+
+`draft guidance` reports page, section, paragraph-tail, last-page, and counted-line budgets. `draft evaluate` returns a canonical patch hash and preflight evidence; `draft apply` requires that hash and can gate on a passing evaluation. This prevents an agent from applying a differently measured patch.
+
+## Commands
+
+```text
+agent-docx measure [FILE.md|-] [options]
+agent-docx profiles [--json]
+agent-docx template inspect FILE.docx [--json]
+
+agent-docx project init|add ...
+agent-docx document configure ...
+agent-docx revision checkpoint|list|show|restore|diff|resolve ...
+agent-docx draft guidance|evaluate|apply ...
+agent-docx review add|resolve ...
+agent-docx validate ...
+agent-docx export ...
+agent-docx import ...
+agent-docx agent --input-jsonl
+agent-docx agent --watch --project FILE --document ID --jsonl
+```
+
+All workflow commands accept `--project FILE`; project creation and document addition use `--document`, `--source`, `--profile`, and `--metadata`. `project init` creates the manifest and first document; `project add` adds another document and accepts `--default` to make it the default document. Custom font input requires `--font-family` and `--font-regular` together; bold, italic, and bold-italic files are optional.
+
+```sh
+# Inspect a supported template without copying arbitrary package parts.
+agent-docx template inspect court-template.docx --json
+
+# Add a review annotation to an immutable revision.
+agent-docx review add \
+  --project agent-docx.json --document motion --revision HEAD \
+  --block blk-argument --start 0 --end 18 \
+  --author "Reviewer" --message "Confirm authority"
+
+# See a semantic revision change set.
+agent-docx revision diff \
+  --project agent-docx.json --document motion BASE_REVISION HEAD
+
+# Export a native tracked-change document. --base identifies the comparison revision.
+agent-docx export \
+  --project agent-docx.json --document motion --revision HEAD \
+  --base BASE_REVISION --mode redline --output motion-redline.docx
+```
+
+`revision restore` creates a new revision restoring a target revision; it does not mutate historical records. `revision resolve` applies explicit accept/reject decisions to a change set. `document configure` records configuration changes as a revision. `import --inspect-only` is stateless; normal import requires a target document, output Markdown path, author, and message.
+
+## Agent protocol
+
+`agent-docx agent --input-jsonl` accepts one closed JSON request per stdin line and emits one closed JSON result or error record per accepted line. It is designed for stateful tools rather than shell parsing.
+
+```sh
+printf '%s\n' \
+  '{"schemaVersion":1,"id":"measure-1","action":"document.measure","project":"agent-docx.json","params":{"documentId":"motion"}}' \
+  '{"schemaVersion":1,"id":"validate-1","action":"document.validate","project":"agent-docx.json","params":{"documentId":"motion","revision":"HEAD"}}' \
+  | agent-docx agent --input-jsonl
+```
+
+Actions include `project.init`, `project.add`, `project.get`, `document.configure`, `document.get`, `document.measure`, `document.validate`, `revision.checkpoint`, `revision.list`, `revision.get`, `revision.restore`, `revision.diff`, `revision.resolve`, `draft.guidance`, `draft.evaluate`, `draft.apply`, `review.add`, `review.resolve`, `docx.export`, `docx.import`, and `docx.inspect`.
+
+The response envelope always contains `schemaVersion`, `kind`, `sequence`, `requestId`, `action`, `project`, `documentId`, and `revision`. Generated binary DOCX bytes are never embedded in CLI JSON; serializable responses provide public artifact paths, SHA-256 values, block manifests, validation, and renderer provenance instead.
+
+For continuous local feedback:
+
+```sh
+agent-docx agent --watch \
+  --project agent-docx.json --document motion --jsonl
+```
+
+The watch stream emits `ready`, debounced `document.measure` results or errors, and `end` on `SIGINT` or `SIGTERM`. Its ready record inventories the source, template, custom fonts, and assets used by the revision. Changing the manifest, source, template, font, an existing asset, or an asset-directory membership refreshes the measurement and watch set.
+
+## Markdown and legal structure
+
+agent-docx supports source-mapped paragraphs, headings, blockquotes, ordered and unordered lists, GFM tables, thematic breaks, hard breaks, emphasis, strong emphasis, strikethrough, inline code, safe absolute links, footnotes, and controlled directives.
+
+Supported directives are deliberately narrow:
+
+- `caption`, `toc`, `toa`, and `pagebreak`.
+- `signature` with a known counsel ID; `certificate` with a known certificate ID.
+- `sectionbreak` with `kind="next-page"|"continuous"`, plus paired page-number format and start when needed.
+- `numbered` paragraphs with a sequence and level 1–4.
+- `exhibit` and `image` with project-relative assets; images require positive twip dimensions and alt text.
+- `length-exclusion` for the closed set of supported filing-length exclusions.
+- Inline legal references and authorities with validated metadata.
+
+The parser rejects arbitrary HTML, YAML front matter, code blocks, math, unsafe or relative ordinary links, remote asset fetching, unknown directives or attributes, and unsupported document structures. It reports source-aware errors rather than silently approximating content.
+
+### Source markers
+
+Legal blocks have stable IDs and source positions. Existing markers are preserved; missing markers can be inserted through the project workflow. This source map drives diagnostics, review annotations, semantic diffs, DOCX bookmarks, redline attribution, and validation evidence.
+
+## Revisions, diffs, and native redlines
+
+A checkpoint stores canonical source, document configuration, resolved dependency object IDs, annotations, a source SHA-256, and a working-tree hash. Revision IDs are content hashes. The store deduplicates immutable objects and writes through locks and atomic swaps.
+
+`revision diff` produces a semantic `ChangeSet`, not a raw line diff. It identifies additions, removals, replacements, moves, configuration changes, dependency changes, and annotation changes using legal-block identities and source ranges. `revision resolve` records explicit decisions against that set.
+
+A redline export converts the resolved semantic diff into native OOXML insertions and deletions, and emits review annotations as native Word comments anchored to their source block. It is a generated comparison artifact—not a substitute for checking the final document in the filing environment. Redline output has revision and comparison provenance, including native tracked-change and comment counts.
+
+Native redline export currently supports body paragraphs, headings, blockquotes, and controlled numbered paragraphs without footnotes. Comments are block-anchored; exact subrange anchors remain source-side review metadata. It rejects lists, tables, images, exhibits, length-exclusion containers, breaks, captions, TOC/TOA fields, and footnotes with `DOCX_REDLINE_UNSUPPORTED` rather than emitting a misleading partial redline. Use clean export for documents containing those constructs.
+
+## Rule packs and validation
+
+Layout profiles control geometry and styles. Rule packs control legal validation. Built-in packs are versioned snapshots:
+
+- `frap-32@2024-12-01`
+- `cand-civil@2026-05-01`
+
+Each pack records its official URL, effective date, checked-in source excerpt, SHA-256, exact predicates modeled by the software, and unmodeled provisions. Validation findings include check ID, status, severity, source/evidence, remediation where available, and the rule-pack snapshot. A changing court website cannot silently change existing validation semantics.
+
+The current closed check family covers length alternatives, page size, minimum margins, typeface, line spacing, maximum counted lines, required metadata, required blocks, required footer content, and reference integrity. An `unknown` result means the deterministic compiler cannot establish the relevant native behavior; it is not a passing filing result.
+
+## Layout, pagination, and profiles
+
+The default `us-district-conventional` profile is a product baseline: U.S. Letter, one-inch margins, 12-point Times-compatible serif metrics, and double spacing. It is not a filing certification. `frap-32` and `cand-civil` add source metadata and filing constraints.
+
+```sh
+agent-docx profiles
+agent-docx profiles --json
+agent-docx measure filing.md --profile cand-civil --paragraphs --sections --trim
+```
+
+Portable estimates use pinned Liberation Serif 2.1.5 bytes as metrics while reporting the requested `Times New Roman` family and explicit substitution. Provide legally obtained custom font files through project configuration when a different deterministic metric source is required.
+
+Deterministic pagination runs entirely in process:
+
+1. Markdown is normalized into source-mapped legal blocks and footnotes.
+2. Profile, supported template input, and configuration determine geometry, indentation, styles, line spacing, and page rules.
+3. `fontkit` shapes runs with pinned font bytes; Unicode line breaking wraps text to usable width.
+4. The paginator places lines, table rows, paragraph spacing, keeps, widow/orphan controls, explicit breaks, and counted-line caps.
+5. Footnotes reserve bottom-page space when first referenced and report a relaxed constraint if an intrinsic split is unavoidable.
+6. Results report physical pages, fractional equivalent-page use, visual and counted lines, paragraph-tail diagnostics, section attribution, and last-page metrics.
+
+The same Markdown, configuration, and metric-font bytes produce the same deterministic result. The model reports unsupported content instead of guessing.
+
+## DOCX templates and import
+
+`template inspect` uses a bounded ZIP/XML reader to inspect supported style inheritance, numbering, theme/font information, sections, header/footer relationships, fields, and caption components. Unsafe or unsupported package features—including macros, external relationships, embedded objects, scripts, encrypted parts, and arbitrary package copying—are not executed or copied into output.
+
+Supported inspected layout/style data can be consumed by project configuration. A template is input for supported style and geometry semantics, not a host document to merge into an output package.
+
+`import` reads supported DOCX material into legal Markdown and returns fidelity classifications: `preserved`, `normalized`, `externalized`, or `unsupported`. Import is explicit about information it cannot preserve; inspect-only import does not write a project revision.
+
+## Optional Microsoft Word and LibreOffice validation
+
+The default renderer is `deterministic`: it neither discovers nor starts Office applications. `word`, `libreoffice`, and `compare` are explicit local opt-ins after agent-docx generates its DOCX.
+
+```sh
+agent-docx measure filing.md --renderer word --json
+agent-docx measure filing.md --renderer libreoffice --json
+agent-docx export \
+  --project agent-docx.json --document motion --revision HEAD \
+  --mode clean --renderer compare --output motion.docx
+```
+
+- **Word** runs a hardened, noninteractive Windows PowerShell/COM bridge with macros disabled, a local mutex, absolute executable paths, temporary DOCX input, and generated bookmark diagnostics.
+- **LibreOffice** runs headlessly with an isolated user profile, fixed locale and timezone, and validates a generated PDF page tree. It is never labeled as Word.
+- **Compare** retains the deterministic result as the stable top-level baseline and records each successful Office result or structured error.
+
+Office versions, installed fonts, active printer, and layout engines can change pagination. Those applications are useful validation engines, not hidden dependencies or portable goldens. Native behaviors agent-docx cannot verify without Office remain explicitly unknown or warned rather than blocking deterministic output.
+The corpus-level Word parity check is opt-in: set `AGENT_DOCX_TEST_WORD=1` when running the native comparison. The normal `pnpm test` suite does not require Microsoft Word or LibreOffice.
 
 ## JavaScript API
 
 ```ts
 import {
+  createProject,
+  openProject,
+  compileMarkdown,
   estimateMarkdown,
-  inspectDocxTemplate,
   measureMarkdown,
+  inspectDocxTemplate,
 } from "agent-docx";
 
 const estimate = await estimateMarkdown(markdown, {
@@ -53,117 +244,67 @@ const estimate = await estimateMarkdown(markdown, {
   paragraphDiagnostics: true,
 });
 
-const measured = await measureMarkdown(markdown, {
+const compiled = await compileMarkdown(markdown, {
+  documentId: "motion",
   profile: "cand-civil",
-  renderer: "compare",
-  includeGeneratedDocx: true,
+  metadata,
 });
+
+const project = await createProject("agent-docx.json", {
+  documentId: "motion",
+  source: "motion.md",
+  profile: "cand-civil",
+  metadata,
+});
+const state = await project.getState();
 ```
 
-`estimateMarkdown` runs only the portable deterministic paginator. `measureMarkdown` always computes that estimate and optionally invokes an Office renderer. Both return structured provenance, warnings, physical page count, fractional equivalent-page usage, total and per-page visual-line counts, and last-page metrics; page-limit options also add budget information. `sectionDiagnostics: true` adds inclusive, source-ordered heading-section page and line attribution under the deterministic result. `includeGeneratedDocx: true` adds the generated `Uint8Array`; Office renderers consume that same buffer. The CLI never serializes these bytes into JSON. Exported TypeScript types describe the complete result.
+`estimateMarkdown` is portable deterministic pagination. `measureMarkdown` always computes that estimate and can optionally invoke Office. `compileMarkdown` returns generated DOCX bytes, a block manifest, validation, and deterministic measurement. `createProject` and `openProject` provide revision-bound project operations. See exported TypeScript declarations for complete option and result types.
 
-## Profiles, fonts, and templates
+## Published machine contracts
 
-The default `us-district-conventional` profile is a product baseline: U.S. Letter, one-inch margins, 12-point Times-compatible serif metrics, and double spacing. It does not certify filing compliance. Verify current court, local, judge, document-type, and case-specific rules. The `frap-32` and `cand-civil` profiles carry source citations and effective dates.
+All published schemas are JSON Schema Draft 2020-12 and are exported from the package:
 
-Discover profile IDs, source metadata, requested font families, and built-in filing limits without loading the JavaScript API:
+- `agent-docx/project.schema.json`
+- `agent-docx/rule-pack.schema.json`
+- `agent-docx/revision.schema.json`
+- `agent-docx/change-set.schema.json`
+- `agent-docx/source-patch.schema.json`
+- `agent-docx/validation-result.schema.json`
+- `agent-docx/artifact-result.schema.json`
+- `agent-docx/compiled-docx.schema.json`
+- `agent-docx/docx-import-result.schema.json`
+- `agent-docx/agent-request.schema.json`
+- `agent-docx/agent-response.schema.json`
+- `agent-docx/agent-stream.schema.json`
+- `agent-docx/measurement-request.schema.json`
+- `agent-docx/measurement-result.schema.json`
+- `agent-docx/measurement-stream.schema.json`
+- `agent-docx/docx-template-inspection.schema.json`
+- `agent-docx/profile-catalog.schema.json`
+- `agent-docx/config.schema.json`
+
+Schemas are closed where a protocol or stored record needs a stable contract. The generic JSON value definitions intentionally permit valid JSON payload content only where the format requires extensibility.
+
+## Security and local data handling
+
+- Project source, template, font, and asset paths must be contained within the project and resolve to regular non-symlink files.
+- Dependency bytes are stored by SHA-256 in `.agent-docx`; immutable revisions refer to those objects.
+- DOCX ZIP/XML reading enforces entry, compressed/uncompressed-size, expansion-ratio, path, UTF-8, and entity/DTD boundaries.
+- Generation does not call a shell or fetch remote content.
+- Word and LibreOffice run only when requested. Their paths are explicit or hardened discovery results, and their outputs are provenance rather than source of truth.
+- CLI machine output never contains binary DOCX data or internal absolute paths.
+
+## Development
 
 ```sh
-agent-docx --list-profiles
-agent-docx --list-profiles --json
+pnpm test
+pnpm verify:pack
+pnpm social:preview
 ```
 
-Portable estimates use pinned Liberation Serif 2.1.5 bytes as metrics while reporting `Times New Roman` as the requested family and the substitution explicitly. Supply legally obtained font bytes with `fontSet` or `--font-regular` and the related font flags when a different deterministic metric source is required. Missing bold or italic faces are reused and reported.
+`pnpm social:preview` deterministically regenerates `docs/assets/agent-docx-social-preview.png`. Launch copy, release template, social posts, repository metadata, social-preview alt text, and upload instructions live in [`docs/marketing-kit.md`](docs/marketing-kit.md).
 
-Layout can be adjusted through API overrides or CLI flags for page size, dimensions, margins, body font size, and line spacing. `--template FILE.docx` inspects a template and uses its supported final-section geometry and styles as layout input; it does not execute macros or embed the source document. `inspectDocxTemplate` exposes that inspection separately.
+## License
 
-API/config layout overrides also expose `thematicBreak` spacing/thickness/keep behavior and `table` header/body styles, cell padding, border width, and repeated-header behavior. Built-in profiles derive these from the body style; DOCX template inspection does not infer unmodeled table or rule properties.
-
-## How page calculation works
-
-Without an Office opt-in, pagination is calculated in-process and does not create or open a document in desktop software:
-
-1. Markdown is normalized into source-mapped text, table, thematic-break, and page-break blocks plus an ordered map of paragraph-only footnote definitions.
-2. The selected profile, template inspection, and overrides determine page geometry, indents, paragraph spacing, font sizes, line spacing, and pagination rules. Usable width and height are the page dimensions minus margins and gutter.
-3. `fontkit` shapes each text run with the selected deterministic font bytes. The paginator uses the resulting glyph advance widths and Unicode line-break opportunities to wrap text into the available width; bold and italic runs use their corresponding font faces.
-4. Each wrapped line receives a height from the font's ascent, descent, and line-gap metrics, adjusted by the configured line-spacing rule. Lines and paragraph spacing are placed vertically until the usable height or a profile-specific counted-line cap is reached. Feasible keep-with-next chains move together; keep-lines, widow/orphan, and explicit page-break rules can also move content to the next page.
-5. A footnote definition reserves bottom space on the page containing its first reference. Repeated references do not reserve it again. An intrinsically oversized definition continues at the bottom of following pages and reports `FOOTNOTE_SPLIT_CONSTRAINT_RELAXED`; the deterministic model does not claim pixel-identical native separator metrics.
-6. `pageCount` is the number of physical pages produced. `equivalentPages` adds the full pages before the last page to the fraction of usable height consumed on the last page: `full pages + last-page used height / usable height`.
-
-This is a deterministic layout model, not a hidden Word or Writer process. The same Markdown and resolved styles produce the same result when the metric font bytes are unchanged. It models the supported DOCX layout features directly and reports unsupported content rather than guessing.
-
-With `word`, `libreoffice`, or `compare`, this deterministic calculation still runs first. The library then generates a DOCX from the normalized blocks and resolved styles. Word measures that DOCX with Word's own pagination engine; Writer converts it with Writer's engine and the exported PDF page count is measured. Those applications can differ from the deterministic model and from each other because their layout engines, installed fonts, versions, and environment differ.
-
-## Microsoft Word and LibreOffice measurements
-
-Office rendering is opt-in. The default renderer is `deterministic`, which neither discovers nor starts Word or LibreOffice. For every opt-in mode, the library first resolves the same profile and Markdown flow used by the deterministic paginator, generates a temporary DOCX, and then passes that DOCX to the selected local application. These measurements are renderer- and machine-specific, not replacements for filing-rule review.
-
-Select a mode with the CLI or API:
-
-```sh
-agent-docx filing.md --renderer word --json
-agent-docx filing.md --renderer libreoffice --json
-agent-docx filing.md --renderer compare --json
-```
-
-```ts
-await measureMarkdown(markdown, { renderer: "word" });
-await measureMarkdown(markdown, {
-  renderer: "libreoffice",
-  libreoffice: { executablePath: "/usr/bin/soffice" },
-  officeTimeoutMs: 90_000,
-});
-```
-
-The modes differ as follows:
-
-- `word`: returns Word's page count as the top-level `pageCount` and sets `pageCountSource` to `word`. Word must render successfully; it never falls back to another renderer.
-- `libreoffice`: returns Writer's page count as the top-level value and source. Writer must render successfully; it never falls back to Word or the estimate.
-- `compare`: attempts Word and Writer, records each result or structured error under `renderers`, and leaves the top-level page count sourced from the deterministic estimate so comparisons have a stable baseline. It fails only if neither Office renderer succeeds.
-
-### Microsoft Word
-
-The Word adapter requires desktop Microsoft Word on Windows. It also works from WSL by invoking Windows PowerShell through the mounted Windows installation. A custom `word.powerShellPath` can be supplied through the API or config and must be absolute.
-
-The adapter:
-
-1. sends the generated DOCX to a bundled noninteractive PowerShell script;
-2. serializes concurrent runs with a local mutex and starts a hidden Word COM instance with macros disabled;
-3. verifies that each requested font family appears in Word's installed-font list;
-4. opens the DOCX read-only, forces repagination, and reads Word's page count plus total, per-page, and last-page body-line statistics;
-5. when paragraph diagnostics or trim analysis is requested, maps generated body-paragraph bookmarks back to source positions and reports each paragraph's Word line count, page span, and final rendered line text; and
-6. closes Word and deletes the temporary document.
-
-The result includes Word's line statistics, Word version/build, active printer, requested fonts, generated-DOCX SHA-256, duration, and cleanup state. Requested paragraph measurements appear under `renderers.word.value.paragraphDiagnostics`. Paragraph extraction is best-effort: a bookmark or extraction failure is reported there as a nested renderer error while a valid Word page-count summary remains usable. Word pagination can vary with the installed Word build, fonts, and active printer, which is why that provenance is retained. The default timeout is 120 seconds. Generated DOCX input to this adapter is limited to 25 MiB.
-
-### LibreOffice Writer
-
-The Writer adapter requires a local LibreOffice executable. It discovers `soffice`/`libreoffice` on `PATH` on Linux, the standard application path on macOS, and standard Program Files paths on Windows. Override discovery with `--libreoffice-path` or `libreoffice.executablePath`; explicit API paths must be absolute.
-
-Writer runs headlessly with a fresh isolated user profile, fixed `C` locale, and UTC timezone. It converts the generated DOCX to PDF with Writer's PDF export filter; the library validates that PDF and counts its page tree. Temporary input, output, and profile directories are removed afterward. The result includes the LibreOffice version, executable/platform/architecture, requested fonts, DOCX and PDF SHA-256 values, duration, and font-environment calibration flag. The default timeout is 60 seconds.
-
-LibreOffice does not guarantee the requested font is installed and may substitute another font. The optional `libreoffice.installedFonts` config is provenance supplied by the caller; it marks the environment as calibrated but does not install fonts or independently verify those files. Without it, the result carries `LIBREOFFICE_FONT_ENVIRONMENT_UNVERIFIED`. A Writer measurement is deliberately never labeled as a Word measurement.
-
-`officeTimeoutMs` / `--office-timeout` overrides the render timeout for either adapter and accepts 1,000 through 600,000 milliseconds. Office-mode failures use structured codes such as `WORD_NOT_FOUND`, `WORD_TIMEOUT`, `LIBREOFFICE_NOT_FOUND`, and `LIBREOFFICE_RENDER_FAILED`; the CLI exits with status 4 for renderer availability or execution failures.
-
-## Accuracy testing
-
-`pnpm test` includes unit and boundary coverage plus deterministic golden tests over six committed, real-world Markdown lecture-note documents. All corpus cases invoke the CLI with `--paragraphs`. Three documents were used while correcting pagination; three distinct documents were selected and hash-locked without reading their contents before a one-shot Word comparison. When desktop Word is available, `pnpm test` also invokes `--renderer word` and requires exact physical-page and last-page-line agreement across all six documents; hosts without Word report that live test as skipped.
-
-`pnpm accuracy` runs all six documents together with the synthetic boundary matrix. Pass `--renderer word` or `--renderer libreoffice` with the corresponding `AGENT_DOCX_TEST_WORD=1` or `AGENT_DOCX_TEST_LIBREOFFICE=1` opt-in to compare the same inputs with a native renderer. The release gate evaluates exact-match rate, mean absolute page error, and worst page error across the corpus; native output is not a portable per-document golden because Office versions, fonts, and printer state can change pagination.
-
-## Supported Markdown
-
-Supported block content includes paragraphs, headings, blockquotes, ordered and unordered lists, GFM tables, thematic breaks, paragraph-only multi-paragraph GFM footnotes, and the explicit `<!-- pagebreak -->` marker. Inline text may use emphasis, strong emphasis, links, strikethrough, hard breaks, same-style literal inline code, and footnote references. Table cells support those text styles and GFM alignment, except footnote references. Link destinations do not affect layout.
-
-Code blocks, images, arbitrary HTML, YAML front matter, math, non-paragraph footnote children, and block/media content in table cells are rejected with source-aware `UNSUPPORTED_MARKDOWN` instead of being silently approximated.
-
-## Diagnostics and configuration
-
-Use `--paragraphs` for per-paragraph line and last-line-fill diagnostics. `--sections` reports inclusive heading-section page and line usage; with a page limit it also identifies each section touching pages beyond that limit. `--trim` reports advisory candidates whose final line is short; `--trim-limit` and `--trim-threshold` tune that report. `--page-limit` adds remaining/over-limit budget data, and `--fail-over-limit` makes an over-limit CLI result fail.
-
-Deterministic paragraph diagnostics include final-line text, normalized UTF-16 range, exact-or-node source ranges, used/available/unused widths, overflow state, and the previous line. `oneLineReduction` is present only for eligible multi-line soft wraps and reports the estimated width that must be removed or rephrased; it is heuristic, never an edit. Human `--trim` output ranks these candidates by that width. `--paragraphs --trim` additionally shows the generic fill bars.
-
-Pass `--config path/to/config.json` to use a JSON configuration file. Paths inside it are resolved relative to that file; explicit CLI options override config values. Top-level `sectionDiagnostics` enables section output, while `batch.recursive`, `batch.include`, and `batch.exclude` configure positional batch discovery. Configuration is validated against the exported `agent-docx/config.schema.json` schema. No parent-directory, home-directory, or environment configuration is discovered.
-
-Widow/orphan control is enabled by default. Set `layout.pagination.widowOrphanControl` to `false` to disable it in both deterministic pagination and generated DOCX paragraphs; `widowLines` and `orphanLines` continue to configure the enabled minimums and must each be integers of at least 1.
+MIT. See [LICENSE](LICENSE). Third-party notices are in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).

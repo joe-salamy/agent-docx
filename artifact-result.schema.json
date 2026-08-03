@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-docx.dev/schemas/artifact-result-v1.json",
+  "title": "agent-docx artifact result version 1",
+  "oneOf": [
+    { "$ref": "#/$defs/stateless" },
+    { "$ref": "#/$defs/clean" },
+    { "$ref": "#/$defs/redline" }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "manifest": { "type": "object", "additionalProperties": false, "required": ["schemaVersion", "entries"], "properties": { "schemaVersion": { "const": 1 }, "entries": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["name", "mediaType", "byteLength", "sha256", "payloadPath"], "properties": { "name": { "type": "string" }, "mediaType": { "type": "string" }, "byteLength": { "type": "integer", "minimum": 0 }, "sha256": { "$ref": "#/$defs/sha" }, "payloadPath": { "type": "string" } } } } } },
+    "attachmentsNull": { "type": "object", "additionalProperties": false, "required": ["path", "storePath", "manifestSha256", "manifest"], "properties": { "path": { "type": "null" }, "storePath": { "type": "null" }, "manifestSha256": { "$ref": "#/$defs/sha" }, "manifest": { "$ref": "#/$defs/manifest" } } },
+    "attachmentsPath": { "type": "object", "additionalProperties": false, "required": ["path", "storePath", "manifestSha256", "manifest"], "properties": { "path": { "type": "string" }, "storePath": { "type": "string" }, "manifestSha256": { "$ref": "#/$defs/sha" }, "manifest": { "$ref": "#/$defs/manifest" } } },
+    "renderer": { "type": "object", "additionalProperties": false, "required": ["generator", "requested", "pageCountSource"], "properties": { "generator": { "const": "agent-docx" }, "requested": { "enum": ["deterministic", "word", "libreoffice", "compare"] }, "pageCountSource": { "enum": ["deterministic", "word", "libreoffice"] }, "wordVersion": { "type": "string" }, "libreOfficeVersion": { "type": "string" }, "verification": { "type": "object", "additionalProperties": false, "required": ["revisionCount", "commentCount", "fieldCount"], "properties": { "revisionCount": { "type": "integer", "minimum": 0 }, "commentCount": { "type": "integer", "minimum": 0 }, "fieldCount": { "type": "integer", "minimum": 0 } } } } },
+    "base": { "type": "object", "additionalProperties": false, "required": ["schemaVersion", "mediaType", "byteLength", "sha256", "provenanceSha256", "documentId", "profile", "rulePack", "rendererProvenance", "path", "storePath", "attachments", "revision", "mode", "baseRevision"], "properties": { "schemaVersion": { "const": 1 }, "mediaType": { "const": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }, "byteLength": { "type": "integer", "minimum": 0 }, "sha256": { "$ref": "#/$defs/sha" }, "provenanceSha256": { "$ref": "#/$defs/sha" }, "documentId": { "type": "string" }, "profile": { "type": "string" }, "rulePack": { "anyOf": [{ "type": "string" }, { "type": "null" }] }, "rendererProvenance": { "$ref": "#/$defs/renderer" }, "path": {}, "storePath": {}, "attachments": {}, "revision": {}, "mode": {}, "baseRevision": {} } },
+    "stateless": { "allOf": [{ "$ref": "#/$defs/base" }, { "type": "object", "properties": { "path": { "type": "null" }, "storePath": { "type": "null" }, "attachments": { "anyOf": [{ "$ref": "#/$defs/attachmentsNull" }, { "type": "null" }] }, "revision": { "type": "null" }, "mode": { "const": "clean" }, "baseRevision": { "type": "null" } } }] },
+    "clean": { "allOf": [{ "$ref": "#/$defs/base" }, { "type": "object", "properties": { "path": { "type": "string" }, "storePath": { "type": "string" }, "attachments": { "anyOf": [{ "$ref": "#/$defs/attachmentsPath" }, { "type": "null" }] }, "revision": { "$ref": "#/$defs/sha" }, "mode": { "const": "clean" }, "baseRevision": { "type": "null" } } }] },
+    "redline": { "allOf": [{ "$ref": "#/$defs/base" }, { "type": "object", "properties": { "path": { "type": "string" }, "storePath": { "type": "string" }, "attachments": { "anyOf": [{ "$ref": "#/$defs/attachmentsPath" }, { "type": "null" }] }, "revision": { "$ref": "#/$defs/sha" }, "mode": { "const": "redline" }, "baseRevision": { "$ref": "#/$defs/sha" } } }] }
+  }
+}

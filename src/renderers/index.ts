@@ -1,5 +1,5 @@
-import { estimateMarkdown } from "../estimate.js";
-import { normalizeMarkdown } from "../markdown.js";
+import { estimateNormalizedDocument } from "../estimate.js";
+import { normalizeMarkdown, type NormalizedDocument } from "../markdown.js";
 import { renderLibreOffice, renderWord } from "./office.js";
 import {
   AgentDocxError,
@@ -56,8 +56,8 @@ function validateRenderer(mode: string): RendererMode {
   return mode as RendererMode;
 }
 
-export async function measureMarkdown(
-  markdown: string,
+export async function measureNormalizedDocument(
+  flow: NormalizedDocument,
   options: MeasureOptions = {},
 ): Promise<MeasurementResult> {
   const mode = validateRenderer(options.renderer ?? "deterministic");
@@ -70,7 +70,7 @@ export async function measureMarkdown(
       "INVALID_ARGUMENT",
       "officeTimeoutMs must be an integer from 1000 through 600000",
     );
-  const deterministic = await estimateMarkdown(markdown, options);
+  const deterministic = await estimateNormalizedDocument(flow, options);
   const output: MeasurementResult = {
     schemaVersion: 1,
     mode,
@@ -83,7 +83,6 @@ export async function measureMarkdown(
   const needsDocx =
     options.includeGeneratedDocx === true || mode !== "deterministic";
   if (!needsDocx) return output;
-  const flow = normalizeMarkdown(markdown);
   // Load DOCX generation only when bytes or Office rendering are requested.
   const { generateDocx } = await import("../docx/generate.js");
   const generated = await generateDocx(flow, deterministic.profile);
@@ -192,4 +191,13 @@ export async function measureMarkdown(
     output.budget = budgets[output.pageCountSource];
   }
   return output;
+}
+
+export async function measureMarkdown(
+  markdown: string,
+  options: MeasureOptions = {},
+): Promise<MeasurementResult> {
+  if (typeof markdown !== "string")
+    throw new AgentDocxError("INVALID_ARGUMENT", "markdown must be a string");
+  return measureNormalizedDocument(normalizeMarkdown(markdown), options);
 }

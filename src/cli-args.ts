@@ -20,6 +20,20 @@ export type CliCommand =
         | { kind: "file"; path: string }
         | { kind: "stdin"; explicit: boolean };
       values: CliOptionValues;
+    }
+  | {
+      mode: "workflow";
+      command:
+        | "project"
+        | "document"
+        | "revision"
+        | "draft"
+        | "review"
+        | "validate"
+        | "export"
+        | "import"
+        | "agent";
+      args: readonly string[];
     };
 
 const specs = {
@@ -70,19 +84,30 @@ const specs = {
   "list-profiles": { type: "boolean" },
 } as const;
 
-export const cliHelp = `Usage: agent-docx [options] [FILE.md|-]
+export const cliHelp = `Usage:
+  agent-docx --help
+  agent-docx --version
+  agent-docx measure [FILE.md|-] [options]
+  agent-docx profiles [--json]
+  agent-docx template inspect FILE.docx [--json]
 
-Estimate DOCX-equivalent pages for legal Markdown.
+Project workflow:
+  agent-docx project init|add ...
+  agent-docx document configure ...
+  agent-docx revision checkpoint|list|show|restore|diff|resolve ...
+  agent-docx draft guidance|evaluate|apply ...
+  agent-docx review add|resolve ...
+  agent-docx validate ...
+  agent-docx export ...
+  agent-docx import ...
+  agent-docx agent --input-jsonl
+  agent-docx agent --watch --project FILE --document ID --jsonl
 
-Modes: --list-profiles, --inspect-template FILE.docx, --batch FILE..., --batch --input-jsonl, --watch FILE
-Output: --json (unwrapped single/inspect/profile catalog), --jsonl (watch), --output FILE.docx (single)
-Batch discovery: --recursive, --no-recursive, --include GLOB, --exclude GLOB
-JSONL request: {"id"?:string|number|null,"path":string} or {"id"?:string|number|null,"name"?:string,"markdown":string}
-JSONL lifecycle: batch result|error; watch ready, result|error updates, end. Sequence starts at 1; request IDs correlate batch records.
-Machine output: JSON/JSONL on stdout; fatal records on stderr. Exit: 0 success, 1 failure, 2 arguments, 3 over limit, 4 renderer failure.
+Measure options retain batch, watch, layout, diagnostics, renderer, and --output support after the measure command.
+Machine output is JSON/JSONL on stdout; fatal records are JSON on stderr.
 `;
 
-export function parseCliArgs(args: readonly string[]): CliCommand {
+function parseMeasureArgs(args: readonly string[]): CliCommand {
   const parsed = parseArgs({
     args: [...args],
     options: specs,
@@ -105,6 +130,17 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
   }
 
   if (
+    values.help ||
+    values.version ||
+    values["list-profiles"] ||
+    values["inspect-template"]
+  ) {
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "Use an explicit command; --help and --version are global forms only",
+    );
+  }
+  if (
     values.output === "" ||
     values.output === "-" ||
     (typeof values.output === "string" && values.output.length === 0)
@@ -125,53 +161,6 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
     values["no-recursive"] === true ||
     values.include !== undefined ||
     values.exclude !== undefined;
-
-  if (values.help || values.version) {
-    const selected = values.help ? "help" : "version";
-    if (
-      parsed.positionals.length ||
-      Object.keys(values).some((key) => key !== selected)
-    ) {
-      throw new AgentDocxError(
-        "INVALID_ARGUMENT",
-        "--help and --version must be used alone",
-      );
-    }
-    return { mode: selected };
-  }
-  if (values["list-profiles"]) {
-    if (
-      parsed.positionals.length ||
-      Object.keys(values).some(
-        (key) => !["list-profiles", "json"].includes(key),
-      )
-    ) {
-      throw new AgentDocxError(
-        "INVALID_ARGUMENT",
-        "--list-profiles accepts only optional --json",
-      );
-    }
-    return { mode: "profiles", json: values.json === true };
-  }
-
-  if (values["inspect-template"]) {
-    if (
-      parsed.positionals.length !== 1 ||
-      Object.keys(values).some(
-        (key) => !["inspect-template", "json"].includes(key),
-      )
-    ) {
-      throw new AgentDocxError(
-        "INVALID_ARGUMENT",
-        "Inspect mode requires exactly one DOCX path and optional --json",
-      );
-    }
-    return {
-      mode: "inspect",
-      path: parsed.positionals[0]!,
-      json: values.json === true,
-    };
-  }
 
   if (values.batch) {
     if (values.json || values.jsonl || values.watch || values.output) {
@@ -226,7 +215,7 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
     ) {
       throw new AgentDocxError(
         "INVALID_ARGUMENT",
-        "Watch requires exactly one file and no batch/JSON/inspect options",
+        "Watch requires exactly one file and no batch/JSON/output/discovery options",
       );
     }
     return { mode: "watch", path: parsed.positionals[0]!, values };
@@ -265,4 +254,108 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
         : { kind: "file", path: token },
     values,
   };
+}
+
+type WorkflowCommandName = Extract<
+  CliCommand,
+  { mode: "workflow" }
+>["command"];
+
+const workflowSubcommands: Record<WorkflowCommandName, readonly string[]> = {
+  project: ["init", "add"],
+  document: ["configure"],
+  revision: ["checkpoint", "list", "show", "restore", "diff", "resolve"],
+  draft: ["guidance", "evaluate", "apply"],
+  review: ["add", "resolve"],
+  validate: [],
+  export: [],
+  import: [],
+  agent: [],
+};
+
+export function parseCliArgs(args: readonly string[]): CliCommand {
+  if (args.length === 1 && args[0] === "--help") return { mode: "help" };
+  if (args.length === 1 && args[0] === "--version") return { mode: "version" };
+  if (args.includes("--help") || args.includes("--version")) {
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "--help and --version must be used alone",
+    );
+  }
+
+  const [command, ...rest] = args;
+  if (!command || command.startsWith("-")) {
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "Expected an explicit command; use agent-docx --help",
+    );
+  }
+  if (command === "measure") return parseMeasureArgs(rest);
+  if (command === "profiles") {
+    const parsed = parseArgs({
+      args: rest,
+      options: specs,
+      strict: true,
+      allowPositionals: true,
+    });
+    const values = parsed.values as CliOptionValues;
+    if (
+      parsed.positionals.length ||
+      Object.keys(values).some((key) => key !== "json")
+    ) {
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        "profiles accepts only optional --json",
+      );
+    }
+    return { mode: "profiles", json: values.json === true };
+  }
+  if (command === "template") {
+    if (rest[0] !== "inspect") {
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        "template requires the inspect subcommand",
+      );
+    }
+    const parsed = parseArgs({
+      args: rest.slice(1),
+      options: specs,
+      strict: true,
+      allowPositionals: true,
+    });
+    const values = parsed.values as CliOptionValues;
+    if (
+      parsed.positionals.length !== 1 ||
+      Object.keys(values).some((key) => key !== "json")
+    ) {
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        "template inspect requires one DOCX path and optional --json",
+      );
+    }
+    return {
+      mode: "inspect",
+      path: parsed.positionals[0]!,
+      json: values.json === true,
+    };
+  }
+
+  if (!(command in workflowSubcommands)) {
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      `Unknown command: ${command}; use agent-docx --help`,
+    );
+  }
+  const workflow = command as WorkflowCommandName;
+  const allowed = workflowSubcommands[workflow];
+  if (
+    allowed.length > 0 &&
+    (rest[0] === undefined || !allowed.includes(rest[0]))
+  ) {
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      `${workflow} requires one of: ${allowed.join(", ")}`,
+    );
+  }
+  return { mode: "workflow", command: workflow, args: rest };
 }

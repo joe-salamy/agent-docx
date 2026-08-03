@@ -17,19 +17,37 @@ const expectedMetricFonts = manifest.fonts.map(({ sha256 }, index) => ({
   sha256,
 }));
 const schemaNames = [
-  "cli-request.schema.json",
+  "config.schema.json",
+  "measurement-request.schema.json",
   "measurement-result.schema.json",
   "docx-template-inspection.schema.json",
-  "cli-jsonl.schema.json",
+  "measurement-stream.schema.json",
   "cli-error.schema.json",
   "profile-catalog.schema.json",
+  "project.schema.json",
+  "rule-pack.schema.json",
+  "agent-request.schema.json",
+  "agent-response.schema.json",
+  "agent-stream.schema.json",
+  "revision.schema.json",
+  "change-set.schema.json",
+  "source-patch.schema.json",
+  "validation-result.schema.json",
+  "artifact-result.schema.json",
+  "compiled-docx.schema.json",
+  "docx-import-result.schema.json",
 ];
 const fontPrefix = "assets/fonts/liberation-serif-2.1.5/";
+const requiredRuleAssets = [
+  "assets/rules/cand-civil-2026-05-01.txt",
+  "assets/rules/frap-32-2024-12-01.txt",
+];
 const requiredAssets = [
   "assets/word/render.ps1",
   ...manifest.fonts.map(({ file }) => `${fontPrefix}${file}`),
   `${fontPrefix}manifest.json`,
   `${fontPrefix}OFL-1.1.txt`,
+  ...requiredRuleAssets,
   ...schemaNames,
 ];
 const npmCli = process.env.npm_execpath;
@@ -37,7 +55,6 @@ const usesNpmCli =
   npmCli !== undefined && /(?:^|[/\\])npm-cli\.js$/.test(npmCli);
 const npmExecutable = usesNpmCli ? process.execPath : "npm";
 const npmArguments = usesNpmCli ? [npmCli] : [];
-
 function run(command, args, cwd) {
   const { promise, resolve: done, reject } = Promise.withResolvers();
   const child = spawn(command, args, {
@@ -91,7 +108,7 @@ try {
     );
   }
   const allowed = (path) =>
-    /^(?:package\.json|README\.md|LICENSE|THIRD_PARTY_NOTICES\.txt|(?:config|cli-request|measurement-result|docx-template-inspection|cli-jsonl|cli-error|profile-catalog)\.schema\.json|dist\/)/.test(
+    /^(?:package\.json|README\.md|LICENSE|THIRD_PARTY_NOTICES\.txt|(?:config|measurement-request|measurement-result|docx-template-inspection|measurement-stream|cli-error|profile-catalog|project|rule-pack|agent-request|agent-response|agent-stream|revision|change-set|source-patch|validation-result|artifact-result|compiled-docx|docx-import-result)\.schema\.json|dist\/)/.test(
       path,
     ) || requiredAssets.includes(path);
   const unexpected = paths.filter((path) => !allowed(path));
@@ -124,7 +141,7 @@ try {
     [
       "--input-type=module",
       "-e",
-      `import {estimateMarkdown,measureMarkdown,inspectDocxTemplate} from "agent-docx"; if (![estimateMarkdown,measureMarkdown,inspectDocxTemplate].every(x=>typeof x==="function")) process.exit(1); const r=await estimateMarkdown("Smoke."); if(r.pageCount!==1) process.exit(2); const actual=r.profile.metricFonts.map(({role,metricsFamily,sha256})=>({role,metricsFamily,sha256})); if(JSON.stringify(actual)!==${JSON.stringify(expected)}) throw new Error(JSON.stringify(actual));`,
+      `import {AgentDocxError,compileMarkdown,createProject,estimateMarkdown,inspectDocx,inspectDocxTemplate,measureMarkdown,openProject} from "agent-docx"; if (![AgentDocxError,compileMarkdown,createProject,estimateMarkdown,inspectDocx,inspectDocxTemplate,measureMarkdown,openProject].every(x=>typeof x==="function")) process.exit(1); const r=await estimateMarkdown("Smoke."); if(r.pageCount!==1) process.exit(2); const actual=r.profile.metricFonts.map(({role,metricsFamily,sha256})=>({role,metricsFamily,sha256})); if(JSON.stringify(actual)!==${JSON.stringify(expected)}) throw new Error(JSON.stringify(actual));`,
     ],
     installDir,
   );
@@ -133,7 +150,7 @@ try {
     [
       "--input-type=module",
       "-e",
-      `import {readFile} from "node:fs/promises"; import {createRequire} from "node:module"; import {Ajv2020} from "ajv/dist/2020.js"; const require=createRequire(import.meta.url); const names=${JSON.stringify(schemaNames)}; const schemas=await Promise.all(names.map(async name=>JSON.parse(await readFile(require.resolve("agent-docx/"+name),"utf8")))); const ajv=new Ajv2020({strict:true,allowUnionTypes:true}); for(const schema of schemas) ajv.addSchema(schema); for(const schema of schemas) ajv.getSchema(schema.$id);`,
+      `import {readFile} from "node:fs/promises"; import {createRequire} from "node:module"; import {Ajv2020} from "ajv/dist/2020.js"; const require=createRequire(import.meta.url); const names=${JSON.stringify(schemaNames)}; const schemas=await Promise.all(names.map(async name=>JSON.parse(await readFile(require.resolve("agent-docx/"+name),"utf8")))); const ajv=new Ajv2020({strict:true,allowUnionTypes:true,formats:{date:true,"date-time":true,uri:true}}); for(const schema of schemas) ajv.addSchema(schema); for(const schema of schemas) ajv.getSchema(schema.$id);`,
     ],
     installDir,
   );

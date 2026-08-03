@@ -1,0 +1,37 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1280"
+  height="640"
+  viewBox="0 0 1280 640"
+  role="img"
+  aria-labelledby="title description"
+>
+  <title id="title">agent-docx social preview</title>
+  <desc id="description">Draft legal DOCX with agents that know the page. Markdown to measured legal DOCX to native redline.</desc>
+  <rect width="1280" height="640" fill="#0b172a" />
+  <rect x="80" y="72" width="8" height="496" rx="4" fill="#3b9cff" />
+  <text
+    x="176"
+    y="244"
+    fill="#f7f2e8"
+    font-family="Liberation Serif"
+    font-size="96"
+    font-weight="700"
+    letter-spacing="-3"
+  >agent-docx</text>
+  <text
+    x="180"
+    y="342"
+    fill="#c5d2e0"
+    font-family="Liberation Serif"
+    font-size="38"
+  >Draft legal DOCX with agents that know the page.</text>
+  <text
+    x="180"
+    y="430"
+    fill="#8fa8c1"
+    font-family="Liberation Serif"
+    font-size="30"
+    letter-spacing="0.6"
+  >Markdown → measured legal DOCX → native redline</text>
+</svg>

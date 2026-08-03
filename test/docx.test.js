@@ -167,8 +167,8 @@ test("DOCX emits bookmarks, paragraph footnote children, native tables, and rule
       preview,
     })),
     [
-      { id: "mpc_body_000000", index: 0, preview: "Main.⁎" },
-      { id: "mpc_body_000001", index: 1, preview: "Tail." },
+      { id: "adx_body_000000", index: 0, preview: "Main.⁎" },
+      { id: "adx_body_000001", index: 1, preview: "Tail." },
     ],
   );
   const entries = await zipEntries(generated.bytes, [
@@ -177,9 +177,9 @@ test("DOCX emits bookmarks, paragraph footnote children, native tables, and rule
   ]);
   const documentXml = entries["word/document.xml"];
   const footnotesXml = entries["word/footnotes.xml"];
-  assert.match(documentXml, /w:bookmarkStart[^>]+w:name="mpc_body_000000"/);
-  assert.match(documentXml, /w:bookmarkStart[^>]+w:name="mpc_body_000001"/);
-  assert.equal((documentXml.match(/w:name="mpc_body_/g) ?? []).length, 2);
+  assert.match(documentXml, /w:bookmarkStart[^>]+w:name="adx_body_000000"/);
+  assert.match(documentXml, /w:bookmarkStart[^>]+w:name="adx_body_000001"/);
+  assert.equal((documentXml.match(/w:name="adx_body_/g) ?? []).length, 2);
   assert.match(documentXml, /<w:tbl>/);
   assert.match(documentXml, /<w:tblGrid>/);
   assert.match(documentXml, /<w:tblHeader\/>/);

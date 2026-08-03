@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-docx.dev/schemas/agent-request-v1.json",
+  "title": "agent-docx stateful agent request version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "action", "params"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "anyOf": [{ "type": "string" }, { "type": "number" }, { "type": "null" }] },
+    "action": { "$ref": "#/$defs/action" },
+    "project": { "type": "string", "minLength": 1 },
+    "params": { "$ref": "#/$defs/jsonObject" }
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        { "type": "object", "properties": { "action": { "const": "project.init" }, "params": { "$ref": "#/$defs/projectInit" } } },
+        { "type": "object", "properties": { "action": { "const": "project.add" }, "params": { "$ref": "#/$defs/projectAdd" } } },
+        { "type": "object", "properties": { "action": { "const": "project.get" }, "params": { "$ref": "#/$defs/empty" } } },
+        { "type": "object", "properties": { "action": { "const": "document.configure" }, "params": { "$ref": "#/$defs/configure" } } },
+        { "type": "object", "properties": { "action": { "const": "document.get" }, "params": { "$ref": "#/$defs/documentRevision" } } },
+        { "type": "object", "properties": { "action": { "const": "document.measure" }, "params": { "$ref": "#/$defs/documentMeasure" } } },
+        { "type": "object", "properties": { "action": { "const": "document.validate" }, "params": { "$ref": "#/$defs/documentRevision" } } },
+        { "type": "object", "properties": { "action": { "const": "revision.checkpoint" }, "params": { "$ref": "#/$defs/checkpoint" } } },
+        { "type": "object", "properties": { "action": { "const": "revision.list" }, "params": { "$ref": "#/$defs/revisionList" } } },
+        { "type": "object", "properties": { "action": { "const": "revision.get" }, "params": { "$ref": "#/$defs/requiredRevision" } } },
+        { "type": "object", "properties": { "action": { "const": "revision.restore" }, "params": { "$ref": "#/$defs/restore" } } },
+        { "type": "object", "properties": { "action": { "const": "revision.diff" }, "params": { "$ref": "#/$defs/revisionDiff" } } },
+        { "type": "object", "properties": { "action": { "const": "revision.resolve" }, "params": { "$ref": "#/$defs/resolve" } } },
+        { "type": "object", "properties": { "action": { "const": "draft.guidance" }, "params": { "$ref": "#/$defs/documentRevision" } } },
+        { "type": "object", "properties": { "action": { "const": "draft.evaluate" }, "params": { "$ref": "#/$defs/draftEvaluate" } } },
+        { "type": "object", "properties": { "action": { "const": "draft.apply" }, "params": { "$ref": "#/$defs/draftApply" } } },
+        { "type": "object", "properties": { "action": { "const": "review.add" }, "params": { "$ref": "#/$defs/reviewAdd" } } },
+        { "type": "object", "properties": { "action": { "const": "review.resolve" }, "params": { "$ref": "#/$defs/reviewResolve" } } },
+        { "type": "object", "properties": { "action": { "const": "docx.export" }, "params": { "$ref": "#/$defs/export" } } },
+        {
+          "type": "object",
+          "properties": {
+            "action": { "const": "docx.import" },
+            "params": { "$ref": "#/$defs/docxImportInspect" }
+          },
+          "not": { "type": "object", "properties": { "project": {} }, "required": ["project"] }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": { "const": "docx.import" },
+            "params": { "$ref": "#/$defs/docxImportStrict" }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": { "const": "docx.inspect" },
+            "params": { "$ref": "#/$defs/docxInspect" }
+          },
+          "not": { "type": "object", "properties": { "project": {} }, "required": ["project"] }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "json": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/$defs/json" } },
+        { "type": "object", "additionalProperties": { "$ref": "#/$defs/json" } }
+      ]
+    },
+    "jsonObject": { "type": "object", "additionalProperties": { "$ref": "#/$defs/json" } },
+    "action": { "enum": ["project.init", "project.add", "project.get", "document.configure", "document.get", "document.measure", "document.validate", "revision.checkpoint", "revision.list", "revision.get", "revision.restore", "revision.diff", "revision.resolve", "draft.guidance", "draft.evaluate", "draft.apply", "review.add", "review.resolve", "docx.export", "docx.import", "docx.inspect"] },
+    "documentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "blockId": { "type": "string", "pattern": "^b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "annotationId": { "type": "string", "pattern": "^a_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "revisionId": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "revision": { "anyOf": [{ "const": "HEAD" }, { "$ref": "#/$defs/revisionId" }] },
+    "nullableRevision": { "anyOf": [{ "$ref": "#/$defs/revision" }, { "type": "null" }] },
+    "actor": { "type": "object", "additionalProperties": false, "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "email": { "type": "string", "minLength": 1 } } },
+    "party": { "type": "object", "additionalProperties": false, "required": ["id", "name", "role"], "properties": { "id": { "$ref": "#/$defs/documentId" }, "name": { "type": "string" }, "role": { "type": "string" } } },
+    "counsel": { "type": "object", "additionalProperties": false, "required": ["id", "name"], "properties": { "id": { "$ref": "#/$defs/documentId" }, "name": { "type": "string" }, "barNumber": { "type": "string" }, "firm": { "type": "string" }, "addressLines": { "type": "array", "items": { "type": "string" } }, "phone": { "type": "string" }, "email": { "type": "string" } } },
+    "certificate": { "oneOf": [
+      { "type": "object", "additionalProperties": false, "required": ["id", "kind", "statement", "servedOn", "method", "signerCounselId"], "properties": { "id": { "$ref": "#/$defs/documentId" }, "kind": { "const": "service" }, "statement": { "type": "string" }, "servedOn": { "type": "array", "items": { "type": "string" } }, "method": { "type": "string" }, "date": { "type": "string", "format": "date" }, "signerCounselId": { "$ref": "#/$defs/documentId" } } },
+      { "type": "object", "additionalProperties": false, "required": ["id", "kind", "basis", "signerCounselId"], "properties": { "id": { "$ref": "#/$defs/documentId" }, "kind": { "const": "compliance" }, "basis": { "enum": ["words", "monospaced-lines"] }, "signerCounselId": { "$ref": "#/$defs/documentId" } } }
+    ] },
+    "metadata": { "type": "object", "additionalProperties": false, "required": ["court", "jurisdiction", "caseName", "docketNumber", "documentTitle", "parties", "counsel", "certificates"], "properties": { "court": { "type": "string" }, "jurisdiction": { "type": "string" }, "caseName": { "type": "string" }, "docketNumber": { "type": "string" }, "documentTitle": { "type": "string" }, "filingDate": { "type": "string", "format": "date" }, "parties": { "type": "array", "items": { "$ref": "#/$defs/party" } }, "counsel": { "type": "array", "items": { "$ref": "#/$defs/counsel" } }, "certificates": { "type": "array", "items": { "$ref": "#/$defs/certificate" } } } },
+    "stories": { "type": "object", "additionalProperties": false, "properties": { "default": { "type": "string" }, "first": { "type": "string" }, "even": { "type": "string" } } },
+    "chrome": { "type": "object", "additionalProperties": false, "properties": { "headers": { "$ref": "#/$defs/stories" }, "footers": { "$ref": "#/$defs/stories" }, "pageNumber": { "type": "object", "additionalProperties": false, "required": ["story", "alignment", "format", "start"], "properties": { "story": { "enum": ["header", "footer"] }, "alignment": { "enum": ["left", "center", "right"] }, "format": { "enum": ["decimal", "lower-roman", "upper-roman"] }, "start": { "type": "integer", "minimum": 1 } } }, "lineNumbers": { "type": "object", "additionalProperties": false, "required": ["countBy", "start", "distanceTwips", "restart"], "properties": { "countBy": { "type": "integer", "minimum": 1 }, "start": { "type": "integer", "minimum": 1 }, "distanceTwips": { "type": "integer", "minimum": 0 }, "restart": { "enum": ["continuous", "new-page", "new-section"] } } } } },
+    "fontSet": { "type": "object", "additionalProperties": false, "required": ["family", "regularPath"], "properties": { "family": { "type": "string", "minLength": 1 }, "regularPath": { "type": "string", "minLength": 1 }, "boldPath": { "type": "string", "minLength": 1 }, "italicPath": { "type": "string", "minLength": 1 }, "boldItalicPath": { "type": "string", "minLength": 1 } } },
+    "projectInputBase": { "type": "object", "additionalProperties": false, "required": ["documentId", "source", "profile", "metadata"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "source": { "type": "string", "minLength": 1 }, "createSource": { "type": "boolean" }, "profile": { "enum": ["us-district-conventional", "frap-32", "cand-civil"] }, "filingKind": { "enum": ["principal-brief", "reply-brief", "motion-document", "opposition-text", "reply-text"] }, "rulePack": { "enum": ["frap-32@2024-12-01", "cand-civil@2026-05-01"] }, "template": { "type": "string", "minLength": 1 }, "assetsDir": { "type": "string", "minLength": 1 }, "fontSet": { "$ref": "#/$defs/fontSet" }, "metadata": { "$ref": "#/$defs/metadata" }, "chrome": { "$ref": "#/$defs/chrome" }, "makeDefault": { "type": "boolean" } } },
+    "projectInit": { "allOf": [{ "$ref": "#/$defs/projectInputBase" }, { "type": "object", "properties": { "makeDefault": {} }, "not": { "type": "object", "properties": { "makeDefault": {} }, "required": ["makeDefault"] } }] },
+    "projectAdd": { "$ref": "#/$defs/projectInputBase" },
+    "empty": { "type": "object", "additionalProperties": false, "maxProperties": 0 },
+    "documentRevision": { "type": "object", "additionalProperties": false, "required": ["documentId"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "revision": { "$ref": "#/$defs/revision" } } },
+    "measureOptions": { "type": "object", "additionalProperties": false, "properties": { "renderer": { "enum": ["deterministic", "word", "libreoffice", "compare"] }, "officeTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 600000 }, "paragraphDiagnostics": { "type": "boolean" }, "sectionDiagnostics": { "type": "boolean" }, "trim": { "anyOf": [{ "const": false }, { "type": "object", "additionalProperties": false, "properties": { "maxCandidates": { "type": "integer", "minimum": 1 }, "maxLastLineRatio": { "type": "number", "minimum": 0, "maximum": 1 } } }] }, "word": { "type": "object", "additionalProperties": false, "properties": { "powerShellPath": { "type": "string", "minLength": 1 } } }, "libreoffice": { "type": "object", "additionalProperties": false, "properties": { "executablePath": { "type": "string", "minLength": 1 }, "installedFonts": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["family", "path"], "properties": { "family": { "type": "string", "minLength": 1 }, "path": { "type": "string", "minLength": 1 } } } } } } } },
+    "documentMeasure": { "type": "object", "additionalProperties": false, "required": ["documentId"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "revision": { "$ref": "#/$defs/revision" }, "options": { "$ref": "#/$defs/measureOptions" } } },
+    "configUpdate": { "type": "object", "additionalProperties": false, "minProperties": 1, "properties": { "profile": { "enum": ["us-district-conventional", "frap-32", "cand-civil"] }, "filingKind": { "anyOf": [{ "enum": ["principal-brief", "reply-brief", "motion-document", "opposition-text", "reply-text"] }, { "type": "null" }] }, "rulePack": { "anyOf": [{ "enum": ["frap-32@2024-12-01", "cand-civil@2026-05-01"] }, { "type": "null" }] }, "template": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] }, "assetsDir": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] }, "fontSet": { "anyOf": [{ "$ref": "#/$defs/fontSet" }, { "type": "null" }] }, "metadata": { "$ref": "#/$defs/metadata" }, "chrome": { "anyOf": [{ "$ref": "#/$defs/chrome" }, { "type": "null" }] } } },
+    "configure": { "type": "object", "additionalProperties": false, "required": ["documentId", "baseRevision", "changes", "author", "message"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "baseRevision": { "$ref": "#/$defs/nullableRevision" }, "changes": { "$ref": "#/$defs/configUpdate" }, "author": { "$ref": "#/$defs/actor" }, "message": { "type": "string", "minLength": 1 } } },
+    "checkpoint": { "type": "object", "additionalProperties": false, "required": ["documentId", "baseRevision", "author", "message"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "baseRevision": { "$ref": "#/$defs/nullableRevision" }, "author": { "$ref": "#/$defs/actor" }, "message": { "type": "string", "minLength": 1 } } },
+    "revisionList": { "type": "object", "additionalProperties": false, "required": ["documentId"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 }, "cursor": { "$ref": "#/$defs/revisionId" } } },
+    "requiredRevision": { "type": "object", "additionalProperties": false, "required": ["documentId", "revision"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "revision": { "$ref": "#/$defs/revision" } } },
+    "restore": { "type": "object", "additionalProperties": false, "required": ["documentId", "baseRevision", "targetRevision", "author", "message"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "baseRevision": { "$ref": "#/$defs/revision" }, "targetRevision": { "$ref": "#/$defs/revision" }, "author": { "$ref": "#/$defs/actor" }, "message": { "type": "string", "minLength": 1 } } },
+    "revisionDiff": { "type": "object", "additionalProperties": false, "required": ["documentId", "baseRevision", "headRevision"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "baseRevision": { "$ref": "#/$defs/revision" }, "headRevision": { "$ref": "#/$defs/revision" }, "output": { "type": "string", "minLength": 1 } } },
+    "resolve": { "type": "object", "additionalProperties": false, "required": ["documentId", "changeSet", "decisions", "author", "message"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "changeSet": { "$ref": "https://agent-docx.dev/schemas/change-set-v1.json" }, "decisions": { "type": "object", "propertyNames": { "pattern": "^c_[0-9a-f]{64}$" }, "additionalProperties": { "enum": ["accept", "reject"] } }, "author": { "$ref": "#/$defs/actor" }, "message": { "type": "string", "minLength": 1 } } },
+    "sourcePatch": { "$ref": "https://agent-docx.dev/schemas/source-patch-v1.json" },
+    "draftEvaluate": { "type": "object", "additionalProperties": false, "required": ["patch"], "properties": { "patch": { "$ref": "#/$defs/sourcePatch" }, "renderer": { "enum": ["deterministic", "word", "libreoffice", "compare"] } } },
+    "draftApply": { "type": "object", "additionalProperties": false, "required": ["patch", "patchHash", "author", "message"], "properties": { "patch": { "$ref": "#/$defs/sourcePatch" }, "patchHash": { "$ref": "#/$defs/revisionId" }, "gate": { "enum": ["report", "not-worse", "pass"] }, "author": { "$ref": "#/$defs/actor" }, "message": { "type": "string", "minLength": 1 } } },
+    "reviewRange": { "type": "object", "additionalProperties": false, "required": ["start", "end"], "properties": { "start": { "type": "integer", "minimum": 0 }, "end": { "type": "integer", "minimum": 0 } } },
+    "reviewAdd": { "type": "object", "additionalProperties": false, "required": ["documentId", "revision", "blockId", "author", "message"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "revision": { "$ref": "#/$defs/revision" }, "blockId": { "$ref": "#/$defs/blockId" }, "range": { "$ref": "#/$defs/reviewRange" }, "author": { "$ref": "#/$defs/actor" }, "message": { "type": "string", "minLength": 1 } } },
+    "reviewResolve": { "type": "object", "additionalProperties": false, "required": ["documentId", "revision", "annotationId", "author", "message"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "revision": { "$ref": "#/$defs/revision" }, "annotationId": { "$ref": "#/$defs/annotationId" }, "author": { "$ref": "#/$defs/actor" }, "message": { "type": "string", "minLength": 1 } } },
+    "exportOptions": { "type": "object", "additionalProperties": false, "properties": { "renderer": { "enum": ["deterministic", "word", "libreoffice", "compare"] }, "officeTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 600000 }, "word": { "type": "object", "additionalProperties": false, "properties": { "powerShellPath": { "type": "string", "minLength": 1 } } }, "libreoffice": { "$ref": "#/$defs/measureOptions/properties/libreoffice" } } },
+    "export": { "oneOf": [
+      { "type": "object", "additionalProperties": false, "required": ["documentId", "revision", "mode", "output"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "revision": { "$ref": "#/$defs/revision" }, "mode": { "const": "clean" }, "output": { "type": "string", "minLength": 1 }, "options": { "$ref": "#/$defs/exportOptions" } } },
+      { "type": "object", "additionalProperties": false, "required": ["documentId", "revision", "mode", "baseRevision", "output"], "properties": { "documentId": { "$ref": "#/$defs/documentId" }, "revision": { "$ref": "#/$defs/revision" }, "mode": { "const": "redline" }, "baseRevision": { "$ref": "#/$defs/revision" }, "output": { "type": "string", "minLength": 1 }, "options": { "$ref": "#/$defs/exportOptions" } } }
+    ] },
+    "docxImportInspect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "inspectOnly"],
+      "properties": {
+        "input": { "type": "string", "minLength": 1 },
+        "attachments": { "type": "string", "minLength": 1 },
+        "inspectOnly": { "const": true }
+      }
+    },
+    "docxImportStrict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "inspectOnly", "documentId", "output", "author", "message"],
+      "properties": {
+        "input": { "type": "string", "minLength": 1 },
+        "attachments": { "type": "string", "minLength": 1 },
+        "inspectOnly": { "const": false },
+        "documentId": { "$ref": "#/$defs/documentId" },
+        "output": { "type": "string", "minLength": 1 },
+        "author": { "$ref": "#/$defs/actor" },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    },
+    "docxInspect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input"],
+      "properties": {
+        "input": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

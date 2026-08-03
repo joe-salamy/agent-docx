@@ -1,5 +1,10 @@
-import { indexSections, normalizeMarkdown } from "./markdown.js";
+import {
+  indexSections,
+  normalizeMarkdown,
+  type NormalizedDocument,
+} from "./markdown.js";
 import { paginate } from "./layout/paginate.js";
+import { conservativeBodyBounds } from "./layout/body.js";
 import { loadFonts, resolveProfile, resolvedProfile } from "./resolve.js";
 import {
   AgentDocxError,
@@ -8,12 +13,10 @@ import {
   type EstimateOptions,
   type TrimOpportunity,
 } from "./types.js";
-export async function estimateMarkdown(
-  markdown: string,
+export async function estimateNormalizedDocument(
+  document: NormalizedDocument,
   options: EstimateOptions = {},
 ): Promise<DeterministicResult> {
-  if (typeof markdown !== "string")
-    throw new AgentDocxError("INVALID_ARGUMENT", "markdown must be a string");
   if (
     options.pageLimit !== undefined &&
     (!Number.isInteger(options.pageLimit) || options.pageLimit <= 0)
@@ -51,12 +54,50 @@ export async function estimateMarkdown(
       ? profile.filingPageLimits[options.filingKind]
       : undefined);
   const fonts = await loadFonts(options.fontSet, profile.requestedFontFamily);
-  const document = normalizeMarkdown(markdown);
   const sectionIndex =
     options.sectionDiagnostics === true
       ? indexSections(document.blocks)
       : undefined;
-  const layout = paginate(document, profile, fonts, sectionIndex);
+  const chromeTemplates = [
+    ...Object.values(options.chrome?.headers ?? {}),
+    ...Object.values(options.chrome?.footers ?? {}),
+  ].filter((template): template is string => template !== undefined);
+  const hasPageFields = chromeTemplates.some((template) =>
+    /\{\{(?:page|pages)\}\}/.test(template),
+  );
+  let expectedPageCount = 1;
+  let bodyBounds = conservativeBodyBounds(profile, options.chrome, 1);
+  let layout = paginate(
+    document,
+    profile,
+    fonts,
+    sectionIndex,
+    bodyBounds.usableHeightTwips,
+  );
+  const maximumIterations = hasPageFields ? 8 : 1;
+  let converged = !hasPageFields || layout.pageCount === expectedPageCount;
+  for (let iteration = 1; !converged && iteration < maximumIterations; iteration++) {
+    expectedPageCount = layout.pageCount;
+    bodyBounds = conservativeBodyBounds(
+      profile,
+      options.chrome,
+      String(expectedPageCount).length,
+    );
+    layout = paginate(
+      document,
+      profile,
+      fonts,
+      sectionIndex,
+      bodyBounds.usableHeightTwips,
+    );
+    converged = layout.pageCount === expectedPageCount;
+  }
+  if (!converged)
+    throw new AgentDocxError(
+      "PAGINATION_DID_NOT_CONVERGE",
+      "Header/footer page fields did not converge on a deterministic page count",
+      { maximumIterations, lastPageCount: layout.pageCount },
+    );
   const warnings = [
     ...profile.warnings,
     ...(options.template?.warnings ?? []),
@@ -114,10 +155,7 @@ export async function estimateMarkdown(
         : profile.body.fontSizeTwips;
     const bodyRemaining =
       ((selectedLimit - result.equivalentPages) *
-        (result.lastPage?.usableTwips ??
-          profile.page.heightTwips -
-            profile.page.marginsTwips.top -
-            profile.page.marginsTwips.bottom)) /
+        (result.lastPage?.usableTwips ?? bodyBounds.usableHeightTwips)) /
       pitch;
     const budget: Budget = {
       limitPages: selectedLimit,
@@ -145,4 +183,13 @@ export async function estimateMarkdown(
     }
   }
   return result;
+}
+
+export async function estimateMarkdown(
+  markdown: string,
+  options: EstimateOptions = {},
+): Promise<DeterministicResult> {
+  if (typeof markdown !== "string")
+    throw new AgentDocxError("INVALID_ARGUMENT", "markdown must be a string");
+  return estimateNormalizedDocument(normalizeMarkdown(markdown), options);
 }

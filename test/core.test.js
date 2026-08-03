@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { Document, Packer, Paragraph } from "docx";
 import {
   builtInProfiles,
+  compileMarkdown,
   estimateMarkdown,
   inspectDocxTemplate,
   measureMarkdown,
@@ -474,6 +475,67 @@ test("generated DOCX inspection imports section geometry", async () => {
   assert.equal(inspected.package.macroEnabled, false);
   assert.equal(inspected.sections.at(-1).page.widthTwips, 11907);
   assert.equal(inspected.imported.page.marginsTwips.left, 1300);
+});
+
+test("template inspection resolves paragraph style inheritance into pagination", async () => {
+  const template = await inspectDocxTemplate(
+    await readFile("test/fixtures/docx/theme-inheritance.docx"),
+  );
+  assert.equal(template.styles.headings["1"].resolved.fontSizeTwips, 320);
+  assert.equal(template.styles.headings["1"].provenance[""], "template");
+  const measured = await estimateMarkdown("# Heading\n", { template });
+  assert.equal(measured.profile.headings["1"].fontSizeTwips, 320);
+  assert.equal(measured.profile.requestedFontFamily, "Times New Roman");
+});
+
+test("template inspection reports numbering, chrome fields, and captions", async () => {
+  const compiled = await compileMarkdown("::caption\n\n- One\n- Two\n", {
+    documentId: "motion",
+    profile: "us-district-conventional",
+    metadata: {
+      court: "United States District Court",
+      jurisdiction: "Northern District of California",
+      caseName: "Example v. Example",
+      docketNumber: "3:26-cv-00001",
+      documentTitle: "Motion",
+      parties: [],
+      counsel: [],
+      certificates: [],
+    },
+    chrome: {
+      headers: { default: "{{caseName}} {{page}}" },
+      footers: { default: "{{documentTitle}} {{pages}}" },
+    },
+  });
+  const inspected = await inspectDocxTemplate(compiled.bytes);
+  assert.ok(inspected.numbering.abstractNumbers.length > 0);
+  assert.ok(inspected.numbering.instances.length > 0);
+  assert.ok(
+    inspected.headerFooters.some(
+      (entry) =>
+        entry.kind === "header" &&
+        entry.text.includes("Example v. Example") &&
+        entry.fields.some((field) => field.kind === "PAGE"),
+    ),
+  );
+  assert.ok(inspected.fields.some((field) => field.kind === "NUMPAGES"));
+  assert.ok(inspected.captions.some((caption) => caption.styleId === "AgentDocxCaption"));
+  assert.equal(inspected.styles.list.resolved.leftIndentTwips, 720);
+  assert.deepEqual(inspected.unsupportedParts, []);
+});
+
+test("page fields converge body bounds across a page-count digit boundary", async () => {
+  const result = await estimateMarkdown(
+    Array.from({ length: 20 }, () => "Line.").join("\n\n"),
+    {
+      layout: tinyLayout(2400),
+      chrome: {
+        headers: { default: `${"x".repeat(101)}{{pages}}` },
+      },
+    },
+  );
+  assert.equal(result.pageCount, 20);
+  assert.equal(result.lastPage.usableTwips, 720);
 });
 
 function tinyLayout(heightTwips = 960, overrides = {}) {

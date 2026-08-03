@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-docx.dev/schemas/source-patch-v1.json",
+  "title": "agent-docx source patch version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "documentId", "baseRevision", "edits"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "documentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "baseRevision": { "$ref": "#/$defs/revisionId" },
+    "edits": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edit" }
+    }
+  },
+  "$defs": {
+    "revisionId": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "edit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "expectedText", "replacement"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "expectedText": { "type": "string" },
+        "replacement": { "type": "string" }
+      }
+    }
+  }
+}

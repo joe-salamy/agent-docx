@@ -1,3 +1,5 @@
+import type { DocumentChrome } from "./legal/model.js";
+
 export type JsonValue =
   | null
   | boolean
@@ -154,10 +156,42 @@ export type LayoutProfile = {
   >;
   warnings: readonly Diagnostic[];
 };
+export type InspectedHeaderFooterReference = {
+  kind: "header" | "footer";
+  variant: "default" | "first" | "even";
+  relationshipId: string;
+  partPath: string | null;
+};
 export type InspectedSection = {
   index: number;
   page: PageGeometry;
   sourcePart: string;
+  headerFooterReferences: readonly InspectedHeaderFooterReference[];
+};
+export type InspectedField = {
+  partPath: string;
+  instruction: string;
+  kind: string;
+};
+export type InspectedHeaderFooter = InspectedHeaderFooterReference & {
+  sectionIndex: number;
+  text: string;
+  fields: readonly InspectedField[];
+};
+export type InspectedNumbering = {
+  partPath: string | null;
+  abstractNumbers: readonly { id: string; levels: number }[];
+  instances: readonly { id: string; abstractNumberId: string | null }[];
+};
+export type InspectedCaptionComponent = {
+  paragraphIndex: number;
+  styleId: string | null;
+  text: string;
+  sequence: string | null;
+};
+export type UnsupportedTemplatePart = {
+  partPath: string;
+  reason: string;
 };
 export type InspectedStyle = {
   styleId: string | null;
@@ -176,9 +210,19 @@ export type DocxTemplateInspection = {
       Record<"1" | "2" | "3" | "4" | "5" | "6", InspectedStyle>
     >;
     quote: InspectedStyle;
+    list: InspectedStyle;
     footnote: InspectedStyle;
     footnoteReference: InspectedStyle | null;
   };
+  numbering: InspectedNumbering;
+  headerFooters: readonly InspectedHeaderFooter[];
+  fields: readonly InspectedField[];
+  captions: readonly InspectedCaptionComponent[];
+  fonts: {
+    theme: Readonly<{ major: string | null; minor: string | null }>;
+    families: readonly { family: string; sourcePart: string }[];
+  };
+  unsupportedParts: readonly UnsupportedTemplatePart[];
   package: { sha256: string; mainPart: string; macroEnabled: boolean };
   warnings: readonly Diagnostic[];
 };
@@ -211,6 +255,7 @@ export type EstimateOptions = {
   template?: DocxTemplateInspection;
   layout?: LayoutOverrides;
   fontSet?: FontSetInput;
+  chrome?: DocumentChrome;
   filingKind?: FilingKind;
   pageLimit?: number;
   paragraphDiagnostics?: boolean;
@@ -350,7 +395,27 @@ export type ErrorCode =
   | "LIBREOFFICE_NOT_FOUND"
   | "LIBREOFFICE_RENDER_FAILED"
   | "LIBREOFFICE_TIMEOUT"
-  | "NO_OFFICE_RENDERER";
+  | "NO_OFFICE_RENDERER"
+  | "PROJECT_NOT_FOUND"
+  | "PROJECT_INVALID"
+  | "PROJECT_LOCKED"
+  | "DOCUMENT_NOT_FOUND"
+  | "DOCUMENT_EXISTS"
+  | "PATH_OUTSIDE_PROJECT"
+  | "REVISION_NOT_FOUND"
+  | "REVISION_CONFLICT"
+  | "WORKING_COPY_CONFLICT"
+  | "PATCH_INVALID"
+  | "PATCH_MISMATCH"
+  | "PATCH_FAILED_VALIDATION"
+  | "CHANGESET_INVALID"
+  | "ANNOTATION_CONFLICT"
+  | "REFERENCE_INVALID"
+  | "RULE_PACK_INVALID"
+  | "PAGINATION_DID_NOT_CONVERGE"
+  | "DOCX_IMPORT_UNSUPPORTED"
+  | "DOCX_REDLINE_UNSUPPORTED"
+  | "DOCX_GENERATED_INVALID";
 export type RendererError = {
   code: ErrorCode;
   message: string;

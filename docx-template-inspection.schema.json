@@ -9,6 +9,12 @@
     "sections",
     "selectedSection",
     "styles",
+    "numbering",
+    "headerFooters",
+    "fields",
+    "captions",
+    "fonts",
+    "unsupportedParts",
     "package",
     "warnings"
   ],
@@ -23,6 +29,7 @@
         "body",
         "headings",
         "quote",
+        "list",
         "footnote",
         "footnoteReference"
       ],
@@ -42,11 +49,24 @@
           }
         },
         "quote": { "$ref": "#/$defs/style" },
+        "list": { "$ref": "#/$defs/style" },
         "footnote": { "$ref": "#/$defs/style" },
         "footnoteReference": {
           "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/style" }]
         }
       }
+    },
+    "numbering": { "$ref": "#/$defs/numbering" },
+    "headerFooters": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/headerFooter" }
+    },
+    "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } },
+    "captions": { "type": "array", "items": { "$ref": "#/$defs/caption" } },
+    "fonts": { "$ref": "#/$defs/fonts" },
+    "unsupportedParts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/unsupportedPart" }
     },
     "package": {
       "type": "object",
@@ -104,11 +124,138 @@
     "section": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["index", "page", "sourcePart"],
+      "required": ["index", "page", "sourcePart", "headerFooterReferences"],
       "properties": {
         "index": { "type": "integer" },
         "page": { "$ref": "#/$defs/page" },
-        "sourcePart": { "type": "string" }
+        "sourcePart": { "type": "string" },
+        "headerFooterReferences": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/headerFooterReference" }
+        }
+      }
+    },
+    "headerFooterReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "variant", "relationshipId", "partPath"],
+      "properties": {
+        "kind": { "enum": ["header", "footer"] },
+        "variant": { "enum": ["default", "first", "even"] },
+        "relationshipId": { "type": "string" },
+        "partPath": { "type": ["string", "null"] }
+      }
+    },
+    "headerFooter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sectionIndex",
+        "kind",
+        "variant",
+        "relationshipId",
+        "partPath",
+        "text",
+        "fields"
+      ],
+      "properties": {
+        "sectionIndex": { "type": "integer", "minimum": 0 },
+        "kind": { "enum": ["header", "footer"] },
+        "variant": { "enum": ["default", "first", "even"] },
+        "relationshipId": { "type": "string" },
+        "partPath": { "type": ["string", "null"] },
+        "text": { "type": "string" },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["partPath", "instruction", "kind"],
+      "properties": {
+        "partPath": { "type": "string" },
+        "instruction": { "type": "string" },
+        "kind": { "type": "string" }
+      }
+    },
+    "caption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["paragraphIndex", "styleId", "text", "sequence"],
+      "properties": {
+        "paragraphIndex": { "type": "integer", "minimum": 0 },
+        "styleId": { "type": ["string", "null"] },
+        "text": { "type": "string" },
+        "sequence": { "type": ["string", "null"] }
+      }
+    },
+    "numbering": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["partPath", "abstractNumbers", "instances"],
+      "properties": {
+        "partPath": { "type": ["string", "null"] },
+        "abstractNumbers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "levels"],
+            "properties": {
+              "id": { "type": "string" },
+              "levels": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "instances": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "abstractNumberId"],
+            "properties": {
+              "id": { "type": "string" },
+              "abstractNumberId": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "fonts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["theme", "families"],
+      "properties": {
+        "theme": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["major", "minor"],
+          "properties": {
+            "major": { "type": ["string", "null"] },
+            "minor": { "type": ["string", "null"] }
+          }
+        },
+        "families": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["family", "sourcePart"],
+            "properties": {
+              "family": { "type": "string" },
+              "sourcePart": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "unsupportedPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["partPath", "reason"],
+      "properties": {
+        "partPath": { "type": "string" },
+        "reason": { "type": "string" }
       }
     },
     "style": {
