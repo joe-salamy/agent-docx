@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-docx.dev/schemas/redline-import-result-v1.json",
+  "title": "agent-docx reviewer redline import result version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "documentId", "baseRevision", "headRevision", "changeSet", "decisions", "resolution", "annotations", "fidelity"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "documentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "baseRevision": { "$ref": "https://agent-docx.dev/schemas/change-set-v1.json#/$defs/revisionId" },
+    "headRevision": { "$ref": "https://agent-docx.dev/schemas/change-set-v1.json#/$defs/revisionId" },
+    "changeSet": { "$ref": "https://agent-docx.dev/schemas/change-set-v1.json" },
+    "decisions": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^c_[0-9a-f]{64}$": { "enum": ["accept", "reject"] }
+      }
+    },
+    "resolution": { "enum": ["none", "complete"] },
+    "annotations": { "type": "array", "items": { "$ref": "#/$defs/annotation" } },
+    "fidelity": { "$ref": "#/$defs/fidelity" }
+  },
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" }
+      }
+    },
+    "annotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "blockId", "author", "createdAt", "message", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^a_[0-9a-f-]{36}$" },
+        "blockId": { "type": "string", "pattern": "^b_[0-9a-f-]{36}$" },
+        "range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "properties": {
+            "start": { "type": "integer", "minimum": 0 },
+            "end": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "author": { "anyOf": [{ "$ref": "#/$defs/actor" }, { "type": "null" }] },
+        "createdAt": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }] },
+        "message": { "type": "string" },
+        "status": { "enum": ["open", "resolved"] }
+      }
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "column", "offset"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 },
+        "offset": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/point" },
+        "end": { "$ref": "#/$defs/point" }
+      }
+    },
+    "fidelityItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "partPath", "relationshipId", "ooxmlKind", "count", "blockIds", "sourcePositions", "explanation"],
+      "properties": {
+        "status": { "enum": ["preserved", "normalized", "externalized", "unsupported"] },
+        "partPath": { "type": "string" },
+        "relationshipId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "ooxmlKind": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0 },
+        "blockIds": { "type": "array", "items": { "type": "string", "pattern": "^b_[0-9a-f-]{36}$" } },
+        "sourcePositions": { "type": "array", "items": { "$ref": "#/$defs/position" } },
+        "explanation": { "type": "string" }
+      }
+    },
+    "fidelity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["overall", "items"],
+      "properties": {
+        "overall": { "enum": ["preserved", "normalized", "unsupported"] },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/fidelityItem" } }
+      }
+    }
+  }
+}

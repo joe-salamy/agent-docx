@@ -251,6 +251,7 @@ export async function renderLibreOffice(
       generatedDocxSha256: sha(docx),
       pdfSha256: sha(pdf),
       durationMs: performance.now() - start,
+      ...(options.includePdfBytes === true ? { pdf } : {}),
     };
   } finally {
     await rm(root, {
@@ -332,10 +333,7 @@ export async function renderWord(
       converted.stdoutOverflow ||
       converted.stderrOverflow
     )
-      throw new AgentDocxError(
-        "WORD_WSL_BRIDGE_UNAVAILABLE",
-        "wslpath failed",
-      );
+      throw new AgentDocxError("WORD_WSL_BRIDGE_UNAVAILABLE", "wslpath failed");
     script = converted.stdout.trim();
   }
   const start = performance.now();

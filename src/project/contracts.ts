@@ -32,8 +32,10 @@ import type {
 import type {
   DocxImportResult,
   ExportDocxInput,
+  ImportAttachmentBundle,
   ImportDocxInput,
   ProjectCompiledDocx,
+  RedlineImportResult,
 } from "../docx/contracts.js";
 
 export type ProjectFontSetConfig = {
@@ -50,6 +52,7 @@ export type AgentDocxDocumentConfig = {
   profile: BuiltInProfileId;
   filingKind?: FilingKind;
   rulePack?: RulePackId;
+  rulePacks?: readonly string[];
   template?: string;
   assetsDir?: string;
   fontSet?: ProjectFontSetConfig;
@@ -63,6 +66,7 @@ export type AgentDocxManifest = {
   defaultDocument: string;
   storeDir: ".agent-docx";
   documents: AgentDocxDocumentConfig[];
+  filingSets?: readonly FilingSet[];
 };
 
 export type ProjectDocumentInput = {
@@ -75,6 +79,7 @@ export type ProjectDocumentInput = {
   profile: BuiltInProfileId;
   filingKind?: FilingKind;
   rulePack?: RulePackId;
+  rulePacks?: readonly string[];
   metadata: LitigationMetadata;
   chrome?: DocumentChrome;
 };
@@ -83,6 +88,7 @@ export type DocumentConfigUpdate = {
   profile?: BuiltInProfileId;
   filingKind?: FilingKind | null;
   rulePack?: RulePackId | null;
+  rulePacks?: readonly string[] | null;
   template?: string | null;
   assetsDir?: string | null;
   fontSet?: ProjectFontSetConfig | null;
@@ -155,6 +161,7 @@ export type ProjectState = {
       all: boolean;
     };
   }[];
+  filingSets: readonly FilingSet[];
 };
 
 export type DocumentSnapshot = {
@@ -283,7 +290,62 @@ export type AgentDocxProject = {
   importDocx(
     input: Extract<ImportDocxInput, { inspectOnly: false }>,
   ): Promise<DocxImportResult>;
+  importRedline(input: {
+    documentId: string;
+    input: string | Uint8Array;
+    attachments?: ImportAttachmentBundle;
+    author: Actor;
+    message: string;
+  }): Promise<RedlineImportResult>;
+  addFilingSet(input: {
+    id: string;
+    label?: string;
+    documentIds: readonly string[];
+    pageCap?: number;
+  }): Promise<ProjectState>;
+  removeFilingSet(id: string): Promise<ProjectState>;
+  getFilingSet(id: string): Promise<FilingSetSnapshot>;
+  validateFilingSet(id: string): Promise<FilingSetValidation>;
 };
 
 export type ResolveProfileInput = BuiltInProfileId | LayoutProfile;
 export type ResolvedProjectFontSet = FontSetInput;
+
+export type FilingSet = {
+  id: string;
+  label?: string;
+  documentIds: readonly string[];
+  pageCap?: number;
+};
+
+export type FilingSetSnapshot = {
+  schemaVersion: 1;
+  id: string;
+  label: string | null;
+  documentIds: readonly string[];
+  pageCap: number | null;
+  documents: readonly {
+    documentId: string;
+    head: RevisionId | null;
+    workingTreeHash: RevisionId;
+    matchesHead: boolean;
+  }[];
+};
+
+export type FilingSetValidation = {
+  schemaVersion: 1;
+  id: string;
+  documents: readonly {
+    documentId: string;
+    head: RevisionId | null;
+    validation: ValidationResult | null;
+    pageCount: number | null;
+  }[];
+  pageCap: {
+    limit: number;
+    totalPages: number;
+    status: "pass" | "fail" | "unknown";
+    detail: string;
+  } | null;
+  status: "pass" | "fail" | "unknown";
+};

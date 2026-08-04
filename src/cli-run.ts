@@ -18,6 +18,7 @@ import { measureMarkdown } from "./renderers/index.js";
 import { runWorkflowCommand } from "./cli-workflow.js";
 import { builtInProfiles } from "./profiles.js";
 import { jsonlLines, strictUtf8 } from "./jsonl.js";
+import { runMcpServer, type McpRuntime } from "./mcp.js";
 import {
   AgentDocxError,
   type CliErrorPayload,
@@ -411,7 +412,6 @@ function decimal(value: string, name: string, positive = true) {
 
 const twips = (number: number, scale: number) =>
   Math.floor(number * scale + 0.5);
-
 
 async function loadConfig(pathToken: string): Promise<{
   config: SerializableConfig;
@@ -1017,6 +1017,9 @@ async function executeCli(
     );
     return 0;
   }
+
+  if (command.mode === "mcp")
+    return runMcpServer(runtime as unknown as McpRuntime);
 
   if (command.mode === "workflow")
     return runWorkflowCommand(command, runtime, state);

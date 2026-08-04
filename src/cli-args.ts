@@ -9,6 +9,7 @@ export type CliOptionValues = Record<
 export type CliCommand =
   | { mode: "help" }
   | { mode: "version" }
+  | { mode: "mcp" }
   | { mode: "profiles"; json: boolean }
   | { mode: "inspect"; path: string; json: boolean }
   | { mode: "batch-files"; paths: readonly string[]; values: CliOptionValues }
@@ -32,6 +33,8 @@ export type CliCommand =
         | "validate"
         | "export"
         | "import"
+        | "import-redline"
+        | "filing-set"
         | "agent";
       args: readonly string[];
     };
@@ -98,10 +101,17 @@ Project workflow:
   agent-docx draft guidance|evaluate|apply ...
   agent-docx review add|resolve ...
   agent-docx validate ...
-  agent-docx export ...
+  agent-docx export ... [--mode clean|redline|pdf]
   agent-docx import ...
+  agent-docx import-redline ...
+  agent-docx filing-set add|remove|get|validate ...
   agent-docx agent --input-jsonl
   agent-docx agent --watch --project FILE --document ID --jsonl
+
+MCP:
+  agent-docx mcp
+  Serves the version-1 agent protocol as a Model Context Protocol server
+  over stdio (newline-delimited JSON-RPC).
 
 Measure options retain batch, watch, layout, diagnostics, renderer, and --output support after the measure command.
 Machine output is JSON/JSONL on stdout; fatal records are JSON on stderr.
@@ -256,10 +266,7 @@ function parseMeasureArgs(args: readonly string[]): CliCommand {
   };
 }
 
-type WorkflowCommandName = Extract<
-  CliCommand,
-  { mode: "workflow" }
->["command"];
+type WorkflowCommandName = Extract<CliCommand, { mode: "workflow" }>["command"];
 
 const workflowSubcommands: Record<WorkflowCommandName, readonly string[]> = {
   project: ["init", "add"],
@@ -270,6 +277,8 @@ const workflowSubcommands: Record<WorkflowCommandName, readonly string[]> = {
   validate: [],
   export: [],
   import: [],
+  "import-redline": [],
+  "filing-set": ["add", "remove", "get", "validate"],
   agent: [],
 };
 
@@ -338,6 +347,12 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
       path: parsed.positionals[0]!,
       json: values.json === true,
     };
+  }
+
+  if (command === "mcp") {
+    if (rest.length > 0)
+      throw new AgentDocxError("INVALID_ARGUMENT", "mcp accepts no arguments");
+    return { mode: "mcp" };
   }
 
   if (!(command in workflowSubcommands)) {

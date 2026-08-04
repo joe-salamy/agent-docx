@@ -3,6 +3,7 @@ import type {
   PageCountSource,
   RendererMode,
   SourcePosition,
+  LibreOfficeRendererOptions,
 } from "../types.js";
 import type {
   Actor,
@@ -83,6 +84,27 @@ export type ArtifactResultBase = {
   profile: string;
   rulePack: string | null;
   rendererProvenance: RendererProvenance;
+  pdf?: ArtifactPdf | null;
+};
+
+export type ArtifactPdf = {
+  sha256: `sha256:${string}`;
+  pageCount: number;
+  deterministicPageCount: number;
+  delta: number;
+  rendererProvenance: {
+    versionRaw: string;
+    executablePath: string;
+    platform: string;
+    arch: string;
+    calibratedFontEnvironment: boolean;
+    requestedFontFamilies: readonly string[];
+    durationMs: number;
+    generatedDocxSha256: `sha256:${string}`;
+    pdfSha256: `sha256:${string}`;
+  };
+  path: string | null;
+  storePath: string | null;
 };
 
 export type ArtifactResult =
@@ -98,6 +120,7 @@ export type ArtifactResult =
       path: string;
       storePath: string;
       attachments: Extract<ArtifactAttachmentBundle, { path: string }> | null;
+      pdf: ArtifactPdf | null;
       revision: RevisionId;
       mode: "clean";
       baseRevision: null;
@@ -106,10 +129,46 @@ export type ArtifactResult =
       path: string;
       storePath: string;
       attachments: Extract<ArtifactAttachmentBundle, { path: string }> | null;
+      pdf: ArtifactPdf;
+      revision: RevisionId;
+      mode: "pdf";
+      baseRevision: null;
+    })
+  | (ArtifactResultBase & {
+      path: string;
+      storePath: string;
+      attachments: Extract<ArtifactAttachmentBundle, { path: string }> | null;
+      pdf: ArtifactPdf | null;
       revision: RevisionId;
       mode: "redline";
       baseRevision: RevisionId;
     });
+export type ExportRendererOptions = {
+  renderer?: RendererMode;
+  officeTimeoutMs?: number;
+  word?: { powerShellPath?: string };
+  libreoffice?: LibreOfficeRendererOptions;
+};
+export type ExportDocxInput =
+  | {
+      revision: RevisionId | "HEAD";
+      mode: "clean";
+      output: string;
+      options?: ExportRendererOptions;
+    }
+  | {
+      revision: RevisionId | "HEAD";
+      mode: "pdf";
+      output: string;
+      options?: ExportRendererOptions;
+    }
+  | {
+      revision: RevisionId | "HEAD";
+      mode: "redline";
+      baseRevision: RevisionId | "HEAD";
+      output: string;
+      options?: ExportRendererOptions;
+    };
 
 export type CompiledDocxBase = {
   schemaVersion: 1;
@@ -142,31 +201,6 @@ export type SerializableCompiledDocx = CompiledDocx extends infer Value
     ? Omit<Value, "bytes" | "attachments">
     : never
   : never;
-
-export type ExportRendererOptions = {
-  renderer?: RendererMode;
-  officeTimeoutMs?: number;
-  word?: { powerShellPath?: string };
-  libreoffice?: {
-    executablePath?: string;
-    installedFonts?: readonly { family: string; path: string }[];
-  };
-};
-
-export type ExportDocxInput =
-  | {
-      revision: RevisionId | "HEAD";
-      mode: "clean";
-      output: string;
-      options?: ExportRendererOptions;
-    }
-  | {
-      revision: RevisionId | "HEAD";
-      mode: "redline";
-      baseRevision: RevisionId | "HEAD";
-      output: string;
-      options?: ExportRendererOptions;
-    };
 
 export type ImportAttachmentBundle =
   | { directory: string }
@@ -264,4 +298,15 @@ export type GeneratedDocxOptions = {
     string,
     { sha256: RevisionId; mediaType: string; bytes: Uint8Array }
   >;
+};
+export type RedlineImportResult = {
+  schemaVersion: 1;
+  documentId: string;
+  baseRevision: RevisionId;
+  headRevision: RevisionId;
+  changeSet: ChangeSet;
+  decisions: Readonly<Record<`c_${string}`, "accept" | "reject">>;
+  resolution: "none" | "complete";
+  annotations: readonly ReviewAnnotation[];
+  fidelity: DocxImportResult["fidelity"];
 };

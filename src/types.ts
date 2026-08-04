@@ -1,3 +1,4 @@
+import type { RuleCheckKind } from "./legal/rules.js";
 import type { DocumentChrome } from "./legal/model.js";
 
 export type JsonValue =
@@ -13,6 +14,66 @@ export type FilingKind =
   | "motion-document"
   | "opposition-text"
   | "reply-text";
+export type UserRulePackLengthAlternative = {
+  byFilingKind: Partial<
+    Record<
+      FilingKind | "default",
+      {
+        pages?: number;
+        words?: number;
+        monospacedLines?: number;
+        complianceCertificateRequired?: boolean;
+      }
+    >
+  >;
+};
+export type UserRulePackPageSize = {
+  widthTwips: number;
+  heightTwips: number;
+};
+export type UserRulePackMarginMinimum = { minimumTwips: number };
+export type UserRulePackTypeface = {
+  minimumTwips: number;
+  mode: "proportional" | "monospaced";
+  requireVerifiedPitch?: boolean;
+};
+export type UserRulePackLineSpacing = { doubleSpacedOrdinary?: boolean };
+export type UserRulePackCountedLinesMaximum = { perPageMaximum: number };
+export type UserRulePackRequiredMetadata = {
+  fields: readonly string[];
+  requireCounselComplete?: boolean;
+  requireComplianceCertificate?: boolean;
+};
+export type UserRulePackRequiredBlock = { kinds: readonly string[] };
+export type UserRulePackRequiredFooter = { requiredTokens: readonly string[] };
+export type UserRulePackReferenceIntegrity = {};
+export type RuleCheckParams =
+  | UserRulePackLengthAlternative
+  | UserRulePackPageSize
+  | UserRulePackMarginMinimum
+  | UserRulePackTypeface
+  | UserRulePackLineSpacing
+  | UserRulePackCountedLinesMaximum
+  | UserRulePackRequiredMetadata
+  | UserRulePackRequiredBlock
+  | UserRulePackRequiredFooter
+  | UserRulePackReferenceIntegrity;
+export type UserRulePackCheck = {
+  id: string;
+  kind: RuleCheckKind;
+  citation: string;
+  predicate: string;
+  params: RuleCheckParams;
+};
+export type UserRulePack = {
+  id: string;
+  sourceUrl: string;
+  effectiveDate: string;
+  sourceSha256: `sha256:${string}`;
+  sourceExcerpt: string;
+  checks: readonly UserRulePackCheck[];
+  unmodeledProvisions: readonly string[];
+};
 export type RendererMode = "deterministic" | "word" | "libreoffice" | "compare";
 export type PageCountSource = "deterministic" | "word" | "libreoffice";
 export type ProvenanceSource =
@@ -300,6 +361,7 @@ export type WordRendererOptions = { powerShellPath?: string };
 export type LibreOfficeRendererOptions = {
   executablePath?: string;
   installedFonts?: readonly { family: string; path: string }[];
+  includePdfBytes?: boolean;
 };
 export type MeasureOptions = EstimateOptions & {
   renderer?: RendererMode;
@@ -307,6 +369,7 @@ export type MeasureOptions = EstimateOptions & {
   word?: WordRendererOptions;
   libreoffice?: LibreOfficeRendererOptions;
   includeGeneratedDocx?: boolean;
+  rulePacks?: readonly UserRulePack[];
 };
 export type InspectTemplateOptions = {
   fallbackProfile?: BuiltInProfileId | LayoutProfile;
@@ -462,6 +525,7 @@ export type LibreOfficeRendering = {
   generatedDocxSha256: string;
   pdfSha256: string;
   durationMs: number;
+  pdf?: Uint8Array;
 };
 export type MeasurementResult = {
   schemaVersion: 1;

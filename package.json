@@ -57,6 +57,9 @@
     "./artifact-result.schema.json": "./artifact-result.schema.json",
     "./compiled-docx.schema.json": "./compiled-docx.schema.json",
     "./docx-import-result.schema.json": "./docx-import-result.schema.json",
+    "./redline-import-result.schema.json": "./redline-import-result.schema.json",
+    "./filing-set.schema.json": "./filing-set.schema.json",
+    "./filing-set-validation.schema.json": "./filing-set-validation.schema.json",
     "./package.json": "./package.json"
   },
   "files": [
@@ -81,6 +84,9 @@
     "artifact-result.schema.json",
     "compiled-docx.schema.json",
     "docx-import-result.schema.json",
+    "redline-import-result.schema.json",
+    "filing-set.schema.json",
+    "filing-set-validation.schema.json",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.txt"

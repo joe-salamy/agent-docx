@@ -29,6 +29,7 @@ import type {
   AgentDocxDocumentConfig,
   AgentDocxManifest,
   DependencyHashes,
+  FilingSet,
   ProjectDocumentInput,
 } from "./contracts.js";
 
@@ -63,11 +64,14 @@ export type ExportIntent = {
   stagePath: string;
   docxStagePath: string;
   attachmentStagePath: string | null;
+  pdfStagePath: string | null;
   docxSha256: RevisionId;
   attachmentManifestSha256: RevisionId | null;
   artifactProvenanceSha256: RevisionId;
   artifactStorePath: string;
   attachmentStorePath: string | null;
+  pdfStorePath: string | null;
+  pdfSha256: RevisionId | null;
 };
 export type OpenedStore = {
   manifestPath: string;
@@ -94,6 +98,7 @@ const allowedManifestKeys: Record<string, true> = {
   defaultDocument: true,
   storeDir: true,
   documents: true,
+  filingSets: true,
 };
 
 const allowedDocumentKeys: Record<string, true> = {
@@ -102,6 +107,7 @@ const allowedDocumentKeys: Record<string, true> = {
   profile: true,
   filingKind: true,
   rulePack: true,
+  rulePacks: true,
   template: true,
   assetsDir: true,
   fontSet: true,
@@ -109,10 +115,18 @@ const allowedDocumentKeys: Record<string, true> = {
   metadata: true,
 };
 
+const allowedFilingSetKeys: Record<string, true> = {
+  id: true,
+  label: true,
+  documentIds: true,
+  pageCap: true,
+};
+
 const fileMode = 0o600;
 
 export const objectId = (bytes: Uint8Array | string): RevisionId =>
   `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+const emptyObjectId = objectId(new Uint8Array());
 
 export const canonicalJson = (value: unknown): string => {
   const serialized = canonicalize(value);
@@ -566,6 +580,28 @@ const validateDocumentConfig = (value: unknown): AgentDocxDocumentConfig => {
     )
   )
     throw new AgentDocxError("PROJECT_INVALID", "Document rulePack is invalid");
+  if (config.rulePacks !== undefined) {
+    if (!Array.isArray(config.rulePacks))
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        "Document rulePacks is invalid",
+      );
+    for (const [index, configuredPath] of config.rulePacks.entries()) {
+      if (
+        typeof configuredPath !== "string" ||
+        configuredPath.length === 0 ||
+        configuredPath.includes("\0")
+      )
+        throw new AgentDocxError(
+          "PATH_OUTSIDE_PROJECT",
+          `Document rulePacks[${index}] is invalid`,
+        );
+      assertRelativeManifestPath(
+        configuredPath,
+        `Document rulePacks[${index}]`,
+      );
+    }
+  }
   if (config.chrome !== undefined) assertChrome(config.chrome);
   for (const name of ["template", "assetsDir"] as const) {
     const path = config[name];
@@ -613,6 +649,71 @@ const validateDocumentConfig = (value: unknown): AgentDocxDocumentConfig => {
     }
   }
   return config as unknown as AgentDocxDocumentConfig;
+};
+
+const validateManifestFilingSet = (
+  value: unknown,
+  documentIds: ReadonlySet<string>,
+): FilingSet => {
+  const set = objectRecord(value, "Filing set");
+  if (!hasOnlyKeys(set, allowedFilingSetKeys))
+    throw new AgentDocxError(
+      "PROJECT_INVALID",
+      "Filing set has unknown properties",
+    );
+  const id = set.id;
+  if (typeof id !== "string" || !isDocumentId(id))
+    throw new AgentDocxError("PROJECT_INVALID", "Filing set id is invalid");
+  if (
+    set.label !== undefined &&
+    (typeof set.label !== "string" || set.label.length === 0)
+  )
+    throw new AgentDocxError(
+      "PROJECT_INVALID",
+      `Filing set ${id} label is invalid`,
+    );
+  if (!Array.isArray(set.documentIds) || set.documentIds.length === 0)
+    throw new AgentDocxError(
+      "PROJECT_INVALID",
+      `Filing set ${id} documentIds must be a nonempty array`,
+    );
+  const references: string[] = [];
+  const seen = new Set<string>();
+  for (const value of set.documentIds) {
+    if (typeof value !== "string")
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        `Filing set ${id} document id is invalid`,
+      );
+    if (seen.has(value))
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        `Filing set ${id} references duplicate document ${value}`,
+      );
+    if (!documentIds.has(value))
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        `Filing set ${id} references unknown document ${value}`,
+      );
+    seen.add(value);
+    references.push(value);
+  }
+  if (
+    set.pageCap !== undefined &&
+    (!Number.isInteger(set.pageCap) || (set.pageCap as number) < 1)
+  )
+    throw new AgentDocxError(
+      "PROJECT_INVALID",
+      `Filing set ${id} pageCap is invalid`,
+    );
+  const label = set.label as string | undefined;
+  const pageCap = set.pageCap as number | undefined;
+  return {
+    id,
+    ...(label !== undefined ? { label } : {}),
+    documentIds: references,
+    ...(pageCap !== undefined ? { pageCap } : {}),
+  };
 };
 
 export const validateManifest = (value: unknown): AgentDocxManifest => {
@@ -679,12 +780,35 @@ export const validateManifest = (value: unknown): AgentDocxManifest => {
       "PROJECT_INVALID",
       "Default document is not declared",
     );
+  const filingSets =
+    manifest.filingSets === undefined
+      ? []
+      : Array.isArray(manifest.filingSets)
+        ? manifest.filingSets.map((entry) =>
+            validateManifestFilingSet(entry, ids),
+          )
+        : (() => {
+            throw new AgentDocxError(
+              "PROJECT_INVALID",
+              "Project filingSets must be an array",
+            );
+          })();
+  const filingSetIds = new Set<string>();
+  for (const filingSet of filingSets) {
+    if (filingSetIds.has(filingSet.id))
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        `Duplicate filing set id: ${filingSet.id}`,
+      );
+    filingSetIds.add(filingSet.id);
+  }
   return {
     schemaVersion: 1,
     projectId: manifest.projectId,
     defaultDocument: manifest.defaultDocument,
     storeDir: STORE_DIR,
     documents,
+    ...(filingSets.length > 0 ? { filingSets } : {}),
   };
 };
 type OwnedManifestPath = {
@@ -722,6 +846,8 @@ export const validateManifestPaths = async (
     add(document.source, "Document source", document.id);
     add(document.template, "Document template", document.id);
     add(document.assetsDir, "Assets directory", document.id);
+    for (const [index, path] of (document.rulePacks ?? []).entries())
+      add(path, `Rule pack ${index}`, document.id);
     for (const [role, path] of [
       ["regular", document.fontSet?.regularPath],
       ["bold", document.fontSet?.boldPath],
@@ -1025,6 +1151,20 @@ export const snapshotProjectDocument = async (
         dependencies,
       );
   }
+  for (const [index, configuredPath] of (document.rulePacks ?? []).entries()) {
+    const packPath = assertWithin(
+      opened.projectDirectory,
+      configuredPath,
+      `Rule pack ${index}`,
+    );
+    await assertRegularFile(packPath, `Rule pack ${index}`);
+    dependencyObjects[`rule-pack:${index}`] = await addDependency(
+      await readFile(packPath),
+      "application/json",
+      `rule-pack:${index}`,
+      dependencies,
+    );
+  }
   if (document.template) {
     const templatePath = assertWithin(
       opened.projectDirectory,
@@ -1237,6 +1377,10 @@ const exportIntentFrom = (
     intent.docxStagePath,
     "docxStagePath",
   );
+  const pdfStagePath =
+    intent.pdfStagePath === undefined || intent.pdfStagePath === null
+      ? null
+      : intentPathValue(projectDirectory, intent.pdfStagePath, "pdfStagePath");
   const attachmentStagePath =
     intent.attachmentStagePath === null
       ? null
@@ -1258,6 +1402,10 @@ const exportIntentFrom = (
           intent.attachmentStorePath,
           "attachmentStorePath",
         );
+  const pdfStorePath =
+    intent.pdfStorePath === undefined || intent.pdfStorePath === null
+      ? null
+      : intentPathValue(projectDirectory, intent.pdfStorePath, "pdfStorePath");
   const digest = (value: unknown, label: string): RevisionId => {
     if (typeof value !== "string" || !/^sha256:[0-9a-f]{64}$/.test(value))
       throw new AgentDocxError(
@@ -1270,6 +1418,10 @@ const exportIntentFrom = (
     intent.artifactProvenanceSha256,
     "artifactProvenanceSha256",
   );
+  const pdfSha256 =
+    intent.pdfSha256 === undefined || intent.pdfSha256 === null
+      ? emptyObjectId
+      : digest(intent.pdfSha256, "pdfSha256");
   const artifactsRoot = resolve(projectDirectory, STORE_DIR, "artifacts");
   const artifactRelative = relative(artifactsRoot, dirname(artifactStorePath));
   if (
@@ -1280,6 +1432,23 @@ const exportIntentFrom = (
     throw new AgentDocxError(
       "PROJECT_INVALID",
       "Export intent artifactStorePath is invalid",
+    );
+  if (
+    pdfStorePath !== null &&
+    (dirname(pdfStorePath) !== dirname(artifactStorePath) ||
+      basename(pdfStorePath) !== "document.pdf")
+  )
+    throw new AgentDocxError(
+      "PROJECT_INVALID",
+      "Export intent pdfStorePath is invalid",
+    );
+  if (
+    state === "prepared" &&
+    (pdfSha256 !== emptyObjectId) !== (pdfStorePath !== null)
+  )
+    throw new AgentDocxError(
+      "PROJECT_INVALID",
+      "Prepared PDF export is incomplete",
     );
   if (
     attachmentStorePath !== null &&
@@ -1297,7 +1466,15 @@ const exportIntentFrom = (
     docxStagePath !== resolve(stagePath, "document.docx") ||
     (attachmentStagePath !== null &&
       attachmentStagePath !== resolve(stagePath, "attachments")) ||
-    (attachmentPath !== null && attachmentStagePath === null)
+    (attachmentPath !== null && attachmentStagePath === null) ||
+    (pdfStagePath !== null &&
+      pdfStagePath !== resolve(stagePath, "document.pdf")) ||
+    (pdfSha256 !== emptyObjectId &&
+      (pdfStagePath === null || pdfStorePath === null)) ||
+    (pdfSha256 === emptyObjectId && pdfStorePath !== null) ||
+    (pdfStagePath !== null &&
+      pdfSha256 === emptyObjectId &&
+      state === "prepared")
   )
     throw new AgentDocxError(
       "PROJECT_INVALID",
@@ -1313,6 +1490,7 @@ const exportIntentFrom = (
     attachmentPath,
     stagePath,
     docxStagePath,
+    pdfStagePath,
     attachmentStagePath,
     docxSha256: digest(intent.docxSha256, "docxSha256"),
     attachmentManifestSha256:
@@ -1322,6 +1500,8 @@ const exportIntentFrom = (
     artifactProvenanceSha256,
     artifactStorePath,
     attachmentStorePath,
+    pdfStorePath,
+    pdfSha256,
   };
 };
 
@@ -1488,6 +1668,7 @@ const verifyArtifactDirectory = async (
   provenanceSha256: RevisionId,
   docxSha256: RevisionId,
   attachmentManifestSha256: RevisionId | null,
+  pdfSha256: RevisionId | null,
 ): Promise<void> => {
   const artifactDirectory = dirname(artifactStorePath);
   await assertDirectory(artifactDirectory, "Published artifact");
@@ -1499,6 +1680,16 @@ const verifyArtifactDirectory = async (
       "PROJECT_INVALID",
       "Published artifact DOCX hash does not match export intent",
     );
+  if (pdfSha256 !== null && pdfSha256 !== emptyObjectId) {
+    const pdfPath = resolve(artifactDirectory, "document.pdf");
+    if (
+      (await hashRegularFile(pdfPath, "Published artifact PDF")) !== pdfSha256
+    )
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        "Published artifact PDF hash does not match export intent",
+      );
+  }
   const provenancePath = resolve(artifactDirectory, "provenance.json");
   if (
     (await hashRegularFile(provenancePath, "Published artifact provenance")) !==
@@ -1621,38 +1812,70 @@ const recoverExport = async (
     await mkdir(dirname(artifactDirectory), { recursive: true, mode: 0o700 });
     await publishStagedDirectory(artifactStagePath, artifactDirectory);
   }
+  const pdfSha256 = intent.pdfSha256 ?? emptyObjectId;
+  const pdfDeclared = pdfSha256 !== emptyObjectId;
   await verifyArtifactDirectory(
     intent.artifactStorePath,
     intent.artifactProvenanceSha256,
     intent.docxSha256,
     intent.attachmentManifestSha256,
+    pdfSha256,
   );
-  await assertNoSymlinkComponents(intent.outputPath, "Published DOCX");
+  await assertNoSymlinkComponents(
+    intent.outputPath,
+    pdfDeclared ? "Published PDF" : "Published DOCX",
+  );
   const outputExists = await pathExists(intent.outputPath);
+  const outputSha256 = pdfDeclared ? pdfSha256 : intent.docxSha256;
+  const outputLabel = pdfDeclared ? "Published PDF" : "Published DOCX";
   if (outputExists) {
     if (
-      (await hashRegularFile(intent.outputPath, "Published DOCX")) !==
-      intent.docxSha256
+      (await hashRegularFile(intent.outputPath, outputLabel)) !== outputSha256
     )
       throw new AgentDocxError(
         "PROJECT_INVALID",
-        "Published DOCX hash does not match export intent",
+        `${outputLabel} hash does not match export intent`,
       );
   } else {
-    if (!stageIsOwned || !(await pathExists(intent.docxStagePath)))
+    if (!stageIsOwned)
       throw new AgentDocxError(
         "PROJECT_INVALID",
-        "Prepared export is missing its DOCX stage",
+        "Prepared export is missing its stage",
+      );
+    const stageOutputPath = pdfDeclared
+      ? intent.pdfStagePath
+      : intent.docxStagePath;
+    if (stageOutputPath === null)
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        "Prepared PDF export is missing its PDF stage",
       );
     if (
-      (await hashRegularFile(intent.docxStagePath, "Staged DOCX")) !==
-      intent.docxSha256
+      pdfDeclared &&
+      !(await pathExists(stageOutputPath)) &&
+      intent.pdfStorePath !== null
+    ) {
+      await assertNoSymlinkComponents(stageOutputPath, "Staged PDF");
+      await link(intent.pdfStorePath, stageOutputPath);
+    }
+    if (!(await pathExists(stageOutputPath)))
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        pdfDeclared
+          ? "Prepared export is missing its PDF stage"
+          : "Prepared export is missing its DOCX stage",
+      );
+    if (
+      (await hashRegularFile(
+        stageOutputPath,
+        `Staged ${pdfDeclared ? "PDF" : "DOCX"}`,
+      )) !== outputSha256
     )
       throw new AgentDocxError(
         "PROJECT_INVALID",
-        "Staged DOCX hash does not match export intent",
+        `Staged ${pdfDeclared ? "PDF" : "DOCX"} hash does not match export intent`,
       );
-    await link(intent.docxStagePath, intent.outputPath);
+    await link(stageOutputPath, intent.outputPath);
   }
   if (intent.attachmentPath !== null) {
     if (
@@ -2009,11 +2232,25 @@ export const documentConfigFromInput = async (
       "Assets directory",
     );
   }
+  let rulePacks: readonly string[] | undefined;
+  if (input.rulePacks !== undefined) {
+    if (!Array.isArray(input.rulePacks))
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        "rulePacks must be an array",
+      );
+    rulePacks = await Promise.all(
+      input.rulePacks.map((path, index) =>
+        normalize(path, `Rule pack ${index}`),
+      ),
+    );
+  }
   return {
     id: input.documentId,
     source,
     profile: input.profile,
     ...(input.filingKind ? { filingKind: input.filingKind } : {}),
+    ...(rulePacks ? { rulePacks } : {}),
     ...(input.rulePack ? { rulePack: input.rulePack } : {}),
     ...(input.template
       ? { template: await normalize(input.template, "Template") }

@@ -19,7 +19,11 @@ export {
   parseLegalMarkdown,
 } from "./legal/parse.js";
 export { lowerLegalDocument } from "./legal/lower.js";
-export { builtInRulePacks, validateLegalDocument } from "./legal/rules.js";
+export {
+  builtInRulePacks,
+  validateLegalDocument,
+  validateUserRulePack,
+} from "./legal/rules.js";
 export { emptyValidationResult } from "./legal/rules.js";
 export type {
   AddReviewInput,
@@ -36,6 +40,9 @@ export type {
   ProjectMeasureOptions,
   ProjectMeasurementResult,
   ProjectState,
+  FilingSet,
+  FilingSetSnapshot,
+  FilingSetValidation,
   ResolveChangesInput,
   ResolveReviewInput,
   SerializableMeasurementResult,
@@ -79,6 +86,7 @@ export type {
   ImportDocxInput,
   RendererProvenance,
   SerializableCompiledDocx,
+  RedlineImportResult,
 } from "./docx/contracts.js";
 export type {
   BuiltInRulePack,
@@ -86,6 +94,21 @@ export type {
   ValidationFinding,
   ValidationResult,
 } from "./legal/rules.js";
+export type {
+  RuleCheckParams,
+  UserRulePack,
+  UserRulePackCheck,
+  UserRulePackCountedLinesMaximum,
+  UserRulePackLengthAlternative,
+  UserRulePackLineSpacing,
+  UserRulePackMarginMinimum,
+  UserRulePackPageSize,
+  UserRulePackReferenceIntegrity,
+  UserRulePackRequiredBlock,
+  UserRulePackRequiredFooter,
+  UserRulePackRequiredMetadata,
+  UserRulePackTypeface,
+} from "./types.js";
 export type {
   DraftGuidance,
   PatchDeltas,

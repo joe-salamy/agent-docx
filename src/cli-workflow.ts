@@ -1002,6 +1002,72 @@ export const runWorkflowCommand = async (
       action = "docx.import";
       break;
     }
+    case "import-redline": {
+      parsed = parse(command.args, {
+        ...commonProject,
+        document: string,
+        input: string,
+        attachments: string,
+        author: string,
+        email: string,
+        message: string,
+      });
+      noPositionals(parsed, "import-redline");
+      params = {
+        documentId: await documentId(runtime.cwd, parsed.values),
+        input: required(parsed.values, "input"),
+        author: actor(parsed.values),
+        message: required(parsed.values, "message"),
+        ...(optional(parsed.values, "attachments")
+          ? { attachments: optional(parsed.values, "attachments") }
+          : {}),
+      };
+      action = "docx.importRedline";
+      break;
+    }
+    case "filing-set": {
+      if (subcommand === "add") {
+        parsed = parse(rest, {
+          ...commonProject,
+          id: string,
+          label: string,
+          documents: string,
+          "page-cap": string,
+        });
+        noPositionals(parsed, "filing-set add");
+        const documents = required(parsed.values, "documents")
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0);
+        if (documents.length === 0)
+          throw new AgentDocxError(
+            "INVALID_ARGUMENT",
+            "--documents requires a comma-separated document ID list",
+          );
+        params = {
+          id: required(parsed.values, "id"),
+          documentIds: documents,
+          ...(optional(parsed.values, "label")
+            ? { label: optional(parsed.values, "label") }
+            : {}),
+          ...(optional(parsed.values, "page-cap")
+            ? { pageCap: Number(optional(parsed.values, "page-cap")) }
+            : {}),
+        };
+        action = "filingSet.add";
+      } else {
+        parsed = parse(rest, { ...commonProject, id: string });
+        noPositionals(parsed, `filing-set ${subcommand}`);
+        params = { id: required(parsed.values, "id") };
+        action =
+          subcommand === "remove"
+            ? "filingSet.remove"
+            : subcommand === "get"
+              ? "filingSet.get"
+              : "filingSet.validate";
+      }
+      break;
+    }
     case "agent": {
       parsed = parse(command.args, {
         project: string,

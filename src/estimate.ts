@@ -76,7 +76,11 @@ export async function estimateNormalizedDocument(
   );
   const maximumIterations = hasPageFields ? 8 : 1;
   let converged = !hasPageFields || layout.pageCount === expectedPageCount;
-  for (let iteration = 1; !converged && iteration < maximumIterations; iteration++) {
+  for (
+    let iteration = 1;
+    !converged && iteration < maximumIterations;
+    iteration++
+  ) {
     expectedPageCount = layout.pageCount;
     bodyBounds = conservativeBodyBounds(
       profile,

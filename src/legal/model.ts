@@ -215,7 +215,10 @@ export type LegalDocument = {
   footnotes: readonly FootnoteDefinition[];
   annotations: readonly ReviewAnnotation[];
   assets: Readonly<
-    Record<string, { sha256: `sha256:${string}`; mediaType: string; bytes: number }>
+    Record<
+      string,
+      { sha256: `sha256:${string}`; mediaType: string; bytes: number }
+    >
   >;
   source: { text: string; sha256: `sha256:${string}` };
 };
@@ -234,10 +237,9 @@ export type LegalDocumentSpecification = {
 };
 
 export type AddressableBlock = LegalBlock | FootnoteDefinition;
-export type ContainerBlock = LegalListBlock | Extract<
-  LegalBlock,
-  { kind: "exhibit" | "length-exclusion" }
->;
+export type ContainerBlock =
+  | LegalListBlock
+  | Extract<LegalBlock, { kind: "exhibit" | "length-exclusion" }>;
 export type LeafAddressableBlock = Exclude<AddressableBlock, ContainerBlock>;
 
 export const emptyLitigationMetadata = (): LitigationMetadata => ({

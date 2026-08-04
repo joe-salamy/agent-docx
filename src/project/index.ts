@@ -9,8 +9,10 @@ import {
   sep,
 } from "node:path";
 import { measureNormalizedDocument } from "../renderers/index.js";
+import { renderLibreOffice } from "../renderers/office.js";
 import {
   validateLegalDocument,
+  validateUserRulePack,
   type ValidationResult,
 } from "../legal/rules.js";
 import {
@@ -19,14 +21,19 @@ import {
   type LegalAssetInput,
 } from "../legal/parse.js";
 import { lowerLegalDocument } from "../legal/lower.js";
-import type {
-  Actor,
-  AddressableBlock,
-  LegalDocument,
-  RevisionId,
-  ReviewAnnotation,
+import {
+  isDocumentId,
+  type Actor,
+  type AddressableBlock,
+  type LegalDocument,
+  type RevisionId,
+  type ReviewAnnotation,
 } from "../legal/model.js";
-import { AgentDocxError, type MeasurementResult } from "../types.js";
+import {
+  AgentDocxError,
+  type MeasurementResult,
+  type UserRulePack,
+} from "../types.js";
 import {
   createChangeSet,
   createRevisionDelta,
@@ -55,6 +62,9 @@ import type {
   AgentDocxProject,
   ConfigureDocumentInput,
   DocumentSnapshot,
+  FilingSet,
+  FilingSetSnapshot,
+  FilingSetValidation,
   ProjectDocumentInput,
   ProjectMeasureOptions,
   ProjectMeasurementResult,
@@ -97,6 +107,8 @@ import type {
   GeneratedAttachmentBundle,
   ImportDocxInput,
   DocxImportResult,
+  ImportAttachmentBundle,
+  RedlineImportResult,
 } from "../docx/contracts.js";
 import type {
   DraftGuidance,
@@ -108,7 +120,10 @@ import {
   createSemanticManifest,
   semanticDocumentProjection,
 } from "../docx/compile.js";
-import { inspectDocxMaterial } from "../docx/import.js";
+import {
+  inspectDocxMaterial,
+  inspectRedlineResolution,
+} from "../docx/import.js";
 import { generateRedlineDocx } from "../docx/redline.js";
 
 export type ProjectRuntimeOptions = {
@@ -193,6 +208,17 @@ const documentById = (
     );
   return document;
 };
+const filingSetById = (
+  manifest: AgentDocxManifest,
+  filingSetId: string,
+): FilingSet => {
+  const filingSet = manifest.filingSets?.find(
+    (entry) => entry.id === filingSetId,
+  );
+  if (!filingSet)
+    throw new AgentDocxError("PROJECT_INVALID", "Filing set not found");
+  return filingSet;
+};
 
 const sourceAssets = (
   snapshot: ProjectSnapshot,
@@ -203,6 +229,64 @@ const sourceAssets = (
     assets[key.slice("asset/".length)] = value;
   }
   return assets;
+};
+const configuredRulePacks = async (
+  opened: OpenedStore,
+  config: AgentDocxDocumentConfig,
+  snapshot: ProjectSnapshot,
+): Promise<readonly UserRulePack[]> => {
+  const packs: UserRulePack[] = [];
+  for (const [index, configuredPath] of (config.rulePacks ?? []).entries()) {
+    const key = `rule-pack:${index}`;
+    const expected = snapshot.dependencyObjects[key];
+    if (!expected)
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        `Rule pack dependency is missing: ${configuredPath}`,
+      );
+    const path = resolve(opened.projectDirectory, configuredPath);
+    const contained = relative(opened.projectDirectory, path);
+    if (
+      contained === "" ||
+      contained === ".." ||
+      contained.startsWith(`..${sep}`) ||
+      isAbsolute(contained)
+    )
+      throw new AgentDocxError(
+        "PATH_OUTSIDE_PROJECT",
+        `Rule pack is outside the project: ${configuredPath}`,
+      );
+    await assertNoSymlinkComponents(path, `Rule pack ${index}`);
+    let bytes: Uint8Array;
+    try {
+      bytes = await readFile(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        throw new AgentDocxError(
+          "PROJECT_INVALID",
+          `Rule pack changed since snapshot: ${configuredPath}`,
+        );
+      throw error;
+    }
+    if (objectId(bytes) !== expected)
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        `Rule pack changed since snapshot: ${configuredPath}`,
+      );
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      );
+    } catch {
+      throw new AgentDocxError(
+        "RULE_PACK_INVALID",
+        `Rule pack is not valid JSON: ${configuredPath}`,
+      );
+    }
+    packs.push(validateUserRulePack(parsed, `Rule pack ${configuredPath}`));
+  }
+  return packs;
 };
 
 const importedAssetDestinations = (
@@ -300,6 +384,7 @@ const storedMediaType = (key: string): string => {
   if (key.endsWith(".png")) return "image/png";
   if (key.endsWith(".jpg") || key.endsWith(".jpeg")) return "image/jpeg";
   if (key.endsWith(".pdf")) return "application/pdf";
+  if (key.startsWith("rule-pack:")) return "application/json";
   return key.startsWith("rule-source/")
     ? "text/plain"
     : "application/octet-stream";
@@ -936,6 +1021,11 @@ const dependencyPath = (
     }[role];
     return configured ? resolve(projectDirectory, configured) : null;
   }
+  const customRulePack = /^rule-pack:(\d+)$/.exec(key);
+  if (customRulePack) {
+    const configured = config.rulePacks?.[Number(customRulePack[1])];
+    return configured ? resolve(projectDirectory, configured) : null;
+  }
   return null;
 };
 const dependencyPathsChanged = (
@@ -1006,6 +1096,7 @@ const materializeSelectedDependencies = async (
       targetObject !== undefined &&
       key !== "profile" &&
       key !== "rule-pack" &&
+      !key.startsWith("rule-pack:") &&
       !key.startsWith("rule-source/")
     ) {
       throw new AgentDocxError(
@@ -1824,9 +1915,11 @@ class Project implements AgentDocxProject {
       committedDocument,
       revisionId,
     );
+    const customPacks = await configuredRulePacks(opened, config, snapshot);
     const validation = validateLegalDocument(committedDocument, {
       revision: revisionId,
       rulePack: config.rulePack,
+      customPacks,
       filingKind: config.filingKind,
       measurement: serializableMeasurement(measurement),
     });
@@ -1958,6 +2051,7 @@ class Project implements AgentDocxProject {
       manifestPath: this.manifestPath,
       manifest: opened.manifest,
       documents,
+      filingSets: opened.manifest.filingSets ?? [],
     };
   }
 
@@ -2010,6 +2104,198 @@ class Project implements AgentDocxProject {
     return this.getState();
   }
 
+  async addFilingSet(input: {
+    id: string;
+    label?: string;
+    documentIds: readonly string[];
+    pageCap?: number;
+  }): Promise<ProjectState> {
+    await withLockedStore(this.manifestPath, async (opened) => {
+      if (
+        !input ||
+        typeof input !== "object" ||
+        Array.isArray(input) ||
+        typeof input.id !== "string" ||
+        !isDocumentId(input.id)
+      )
+        throw new AgentDocxError(
+          "INVALID_ARGUMENT",
+          "Filing set id is invalid",
+        );
+      if (
+        input.label !== undefined &&
+        (typeof input.label !== "string" || input.label.length === 0)
+      )
+        throw new AgentDocxError(
+          "INVALID_ARGUMENT",
+          `Filing set ${input.id} label is invalid`,
+        );
+      if (
+        input.pageCap !== undefined &&
+        (!Number.isInteger(input.pageCap) || input.pageCap < 1)
+      )
+        throw new AgentDocxError(
+          "INVALID_ARGUMENT",
+          `Filing set ${input.id} pageCap is invalid`,
+        );
+      if (!Array.isArray(input.documentIds) || input.documentIds.length === 0)
+        throw new AgentDocxError(
+          "INVALID_ARGUMENT",
+          `Filing set ${input.id} documentIds must be a nonempty array`,
+        );
+      const existing = opened.manifest.filingSets ?? [];
+      if (existing.some((entry) => entry.id === input.id))
+        throw new AgentDocxError(
+          "PROJECT_INVALID",
+          "Filing set already exists",
+        );
+      const references: string[] = [];
+      const seen = new Set<string>();
+      for (const reference of input.documentIds) {
+        if (typeof reference !== "string")
+          throw new AgentDocxError(
+            "INVALID_ARGUMENT",
+            `Filing set ${input.id} document id is invalid`,
+          );
+        if (seen.has(reference))
+          throw new AgentDocxError(
+            "PROJECT_INVALID",
+            `Filing set ${input.id} references duplicate document ${reference}`,
+          );
+        if (!opened.manifest.documents.some((entry) => entry.id === reference))
+          throw new AgentDocxError(
+            "PROJECT_INVALID",
+            `Filing set ${input.id} references unknown document ${reference}`,
+          );
+        seen.add(reference);
+        references.push(reference);
+      }
+      const filingSet: FilingSet = {
+        id: input.id,
+        ...(input.label !== undefined ? { label: input.label } : {}),
+        documentIds: references,
+        ...(input.pageCap !== undefined ? { pageCap: input.pageCap } : {}),
+      };
+      const filingSets = [...existing, filingSet].sort((left, right) =>
+        left.id.localeCompare(right.id),
+      );
+      await updateManifest(opened, { ...opened.manifest, filingSets });
+    });
+    return this.getState();
+  }
+
+  async removeFilingSet(id: string): Promise<ProjectState> {
+    await withLockedStore(this.manifestPath, async (opened) => {
+      const existing = opened.manifest.filingSets ?? [];
+      if (!existing.some((entry) => entry.id === id))
+        throw new AgentDocxError("PROJECT_INVALID", "Filing set not found");
+      const filingSets = existing.filter((entry) => entry.id !== id);
+      const manifest: AgentDocxManifest = { ...opened.manifest };
+      if (filingSets.length > 0) manifest.filingSets = filingSets;
+      else delete manifest.filingSets;
+      await updateManifest(opened, manifest);
+    });
+    return this.getState();
+  }
+
+  async getFilingSet(id: string): Promise<FilingSetSnapshot> {
+    const opened = await openStore(this.manifestPath);
+    const filingSet = filingSetById(opened.manifest, id);
+    const documents = await Promise.all(
+      filingSet.documentIds.map(async (documentId) => {
+        const config = documentById(opened.manifest, documentId);
+        const snapshot = await snapshotProjectDocument(opened, config);
+        const head = await readHead(opened.storePath, documentId);
+        const record = head
+          ? await readRevisionJson<RevisionRecord>(opened.storePath, head)
+          : null;
+        return {
+          documentId,
+          head,
+          workingTreeHash: snapshot.workingTreeHash,
+          matchesHead: record?.workingTreeHash === snapshot.workingTreeHash,
+        };
+      }),
+    );
+    return {
+      schemaVersion: 1,
+      id: filingSet.id,
+      label: filingSet.label ?? null,
+      documentIds: [...filingSet.documentIds],
+      pageCap: filingSet.pageCap ?? null,
+      documents,
+    };
+  }
+
+  async validateFilingSet(id: string): Promise<FilingSetValidation> {
+    const opened = await openStore(this.manifestPath);
+    const filingSet = filingSetById(opened.manifest, id);
+    const documents: FilingSetValidation["documents"][number][] = [];
+    for (const documentId of filingSet.documentIds) {
+      const head = await readHead(opened.storePath, documentId);
+      let validation: ValidationResult | null = null;
+      let pageCount: number | null = null;
+      if (head !== null) {
+        validation = await this.validate(documentId);
+        pageCount = (await this.measure(documentId)).deterministic.pageCount;
+      }
+      documents.push({ documentId, head, validation, pageCount });
+    }
+    const pageCap =
+      filingSet.pageCap === undefined
+        ? null
+        : (() => {
+            const totalPages = documents.reduce(
+              (total, document) => total + (document.pageCount ?? 0),
+              0,
+            );
+            const missing = documents.find(
+              (document) =>
+                document.head === null || document.pageCount === null,
+            );
+            if (missing) {
+              const missingValue =
+                missing.head === null ? "no HEAD" : "no page count";
+              return {
+                limit: filingSet.pageCap!,
+                totalPages,
+                status: "unknown" as const,
+                detail: `Document ${missing.documentId} has ${missingValue}; page cap cannot be evaluated`,
+              };
+            }
+            return {
+              limit: filingSet.pageCap!,
+              totalPages,
+              status: (totalPages <= filingSet.pageCap!
+                ? "pass"
+                : "fail") as FilingSetValidation["status"],
+              detail:
+                totalPages <= filingSet.pageCap!
+                  ? `Total pages ${totalPages} are within page cap ${filingSet.pageCap!}`
+                  : `Total pages ${totalPages} exceed page cap ${filingSet.pageCap!}`,
+            };
+          })();
+    let status: FilingSetValidation["status"] = "pass";
+    const rank: Record<FilingSetValidation["status"], number> = {
+      pass: 0,
+      unknown: 1,
+      fail: 2,
+    };
+    for (const document of documents) {
+      const candidate = (document.validation?.status ??
+        "unknown") as FilingSetValidation["status"];
+      if (rank[candidate] > rank[status]) status = candidate;
+    }
+    if (pageCap && rank[pageCap.status] > rank[status]) status = pageCap.status;
+    return {
+      schemaVersion: 1,
+      id: filingSet.id,
+      documents,
+      pageCap,
+      status,
+    };
+  }
+
   async configureDocument(
     documentId: string,
     input: ConfigureDocumentInput,
@@ -2051,6 +2337,9 @@ class Project implements AgentDocxProject {
       if (input.changes.rulePack === null) delete next.rulePack;
       else if (input.changes.rulePack !== undefined)
         next.rulePack = input.changes.rulePack;
+      if (input.changes.rulePacks === null) delete next.rulePacks;
+      else if (input.changes.rulePacks !== undefined)
+        next.rulePacks = input.changes.rulePacks;
       if (input.changes.template === null) delete next.template;
       else if (input.changes.template !== undefined)
         next.template = input.changes.template;
@@ -2508,17 +2797,26 @@ class Project implements AgentDocxProject {
         );
         document = { ...document, annotations };
       }
-      return this.measureSnapshot(config, snapshot, document, null, options);
+      const customPacks = await configuredRulePacks(opened, config, snapshot);
+      return this.measureSnapshot(config, snapshot, document, null, {
+        ...options,
+        rulePacks: customPacks,
+      });
     }
     const record = await this.currentRevision(opened, documentId, revision);
     const material = await this.materialFor(opened, record);
     const snapshot = await this.snapshotForMaterial(opened, material);
+    const customPacks = await configuredRulePacks(
+      opened,
+      material.config,
+      snapshot,
+    );
     return this.measureSnapshot(
       material.config,
       snapshot,
       material.document,
       record.id,
-      options,
+      { ...options, rulePacks: customPacks },
     );
   }
 
@@ -2528,9 +2826,44 @@ class Project implements AgentDocxProject {
   ): Promise<ValidationResult> {
     const snapshot = await this.getDocument(documentId, revision);
     const measurement = await this.measure(documentId, revision);
+    const opened = await openStore(this.manifestPath);
+    const selectedConfig = snapshot.documentConfig;
+    const selectedSnapshot =
+      revision === undefined
+        ? await snapshotProjectDocument(opened, selectedConfig)
+        : await this.snapshotForMaterial(
+            opened,
+            await this.materialFor(
+              opened,
+              await this.currentRevision(opened, documentId, revision),
+            ),
+          );
+    if (revision === undefined && (selectedConfig.rulePacks?.length ?? 0) > 0) {
+      const head = await readHead(opened.storePath, documentId);
+      if (head) {
+        const headRecord = await this.currentRevision(opened, documentId, head);
+        for (const [index] of selectedConfig.rulePacks!.entries()) {
+          const key = `rule-pack:${index}`;
+          if (
+            selectedSnapshot.dependencyObjects[key] !==
+            headRecord.dependencyObjects[key]
+          )
+            throw new AgentDocxError(
+              "PROJECT_INVALID",
+              `Rule pack changed since snapshot: ${selectedConfig.rulePacks![index]}`,
+            );
+        }
+      }
+    }
+    const customPacks = await configuredRulePacks(
+      opened,
+      selectedConfig,
+      selectedSnapshot,
+    );
     return validateLegalDocument(snapshot.document, {
       revision: snapshot.revision,
       rulePack: snapshot.documentConfig.rulePack,
+      customPacks,
       filingKind: snapshot.documentConfig.filingKind,
       measurement: serializableMeasurement(measurement),
     });
@@ -2619,9 +2952,15 @@ class Project implements AgentDocxProject {
         sectionDiagnostics: true,
       },
     );
+    const baseCustomPacks = await configuredRulePacks(
+      opened,
+      material.config,
+      baseSnapshot,
+    );
     const beforeValidation = validateLegalDocument(material.document, {
       revision: record.id,
       rulePack: material.config.rulePack,
+      customPacks: baseCustomPacks,
       filingKind: material.config.filingKind,
       measurement: serializableMeasurement(beforeMeasurement),
     });
@@ -2712,6 +3051,7 @@ class Project implements AgentDocxProject {
       const candidateValidation = validateLegalDocument(candidateDocument, {
         revision: record.id,
         rulePack: material.config.rulePack,
+        customPacks: baseCustomPacks,
         filingKind: material.config.filingKind,
         measurement: serializableMeasurement(candidateMeasurement),
       });
@@ -2856,6 +3196,11 @@ class Project implements AgentDocxProject {
       );
       const material = await this.materialFor(opened, record);
       const baseSnapshot = await this.snapshotForMaterial(opened, material);
+      const baseCustomPacks = await configuredRulePacks(
+        opened,
+        material.config,
+        baseSnapshot,
+      );
       const snapshot = await snapshotProjectDocument(opened, config);
       if (
         (await readHead(opened.storePath, patch.documentId)) !== record.id ||
@@ -2937,6 +3282,7 @@ class Project implements AgentDocxProject {
         validateLegalDocument(material.document, {
           revision: record.id,
           rulePack: material.config.rulePack,
+          customPacks: baseCustomPacks,
           filingKind: material.config.filingKind,
           measurement: serializableMeasurement(beforeMeasurement),
         }),
@@ -2944,6 +3290,7 @@ class Project implements AgentDocxProject {
           revision: record.id,
           rulePack: config.rulePack,
           filingKind: config.filingKind,
+          customPacks: baseCustomPacks,
           measurement: serializableMeasurement(candidateMeasurement),
         }),
       ];
@@ -3282,6 +3629,14 @@ class Project implements AgentDocxProject {
         },
         {
           ...input.options,
+          ...(input.mode === "pdf"
+            ? { renderer: "deterministic" as const }
+            : {}),
+          rulePacks: await configuredRulePacks(
+            opened,
+            material.config,
+            snapshot,
+          ),
           generation: {
             revision: record,
             annotations: input.mode === "redline" ? material.annotations : [],
@@ -3290,7 +3645,7 @@ class Project implements AgentDocxProject {
         },
       );
       let bytes = compiled.bytes;
-      let mode: "clean" | "redline" = "clean";
+      let mode: "clean" | "redline" | "pdf" = "clean";
       let baseRevision: RevisionId | null = null;
       let redlineVerification:
         | { revisionCount: number; commentCount: number; fieldCount: number }
@@ -3395,6 +3750,25 @@ class Project implements AgentDocxProject {
           "DOCX_IMPORT_UNSUPPORTED",
           "Generated DOCX failed strict semantic re-import validation",
         );
+      const pdfRendering =
+        input.mode === "pdf"
+          ? await renderLibreOffice(
+              bytes,
+              [compiled.measurement.deterministic.profile.requestedFontFamily],
+              {
+                ...(input.options?.libreoffice ?? {}),
+                includePdfBytes: true,
+              },
+              input.options?.officeTimeoutMs ?? 60000,
+            )
+          : null;
+      if (pdfRendering) mode = "pdf";
+      if (pdfRendering && !pdfRendering.pdf)
+        throw new AgentDocxError(
+          "LIBREOFFICE_RENDER_FAILED",
+          "LibreOffice renderer did not return PDF bytes",
+        );
+      const pdfBytes = pdfRendering?.pdf ?? null;
 
       const destination = await assertExportDestination(
         opened,
@@ -3419,6 +3793,8 @@ class Project implements AgentDocxProject {
         attachmentPath: null,
         stagePath,
         docxStagePath: resolve(stagePath, "document.docx"),
+        pdfStagePath:
+          input.mode === "pdf" ? resolve(stagePath, "document.pdf") : null,
         attachmentStagePath: null,
         docxSha256: emptyObject,
         attachmentManifestSha256: null,
@@ -3430,9 +3806,13 @@ class Project implements AgentDocxProject {
           "0".repeat(64),
           "document.docx",
         ),
+        pdfStorePath: null,
+        pdfSha256: emptyObject,
         attachmentStorePath: null,
       };
       await updateExportIntent(opened.projectDirectory, initialIntent);
+      let pdfObject: RevisionId | null = null;
+      let pdfStorePath: string | null = null;
       let artifactObject!: RevisionId;
       let artifactProvenance!: RevisionId;
       let artifactStorePath!: string;
@@ -3448,11 +3828,17 @@ class Project implements AgentDocxProject {
           opened.manifestPath,
         );
         await writeExclusiveFile(resolve(stagePath, "document.docx"), bytes);
+        if (pdfBytes)
+          await writeExclusiveFile(
+            resolve(stagePath, "document.pdf"),
+            pdfBytes,
+          );
         if (compiled.attachments) {
           attachmentPath = destination.attachment;
           await writeAttachmentStage(stagePath, compiled.attachments);
         }
         artifactObject = await writeObject(opened.storePath, bytes);
+        if (pdfBytes) pdfObject = await writeObject(opened.storePath, pdfBytes);
         if (compiled.attachments) {
           await writeObject(
             opened.storePath,
@@ -3480,6 +3866,27 @@ class Project implements AgentDocxProject {
             ),
           ),
           docxSha256: artifactObject,
+          ...(pdfRendering && pdfObject
+            ? {
+                pdfSha256: pdfObject,
+                pdfPageCount: pdfRendering.pageCount,
+                pdfDelta:
+                  pdfRendering.pageCount -
+                  compiled.measurement.deterministic.pageCount,
+                pdfRendererProvenance: {
+                  versionRaw: pdfRendering.versionRaw,
+                  executablePath: pdfRendering.executablePath,
+                  platform: pdfRendering.platform,
+                  arch: pdfRendering.arch,
+                  calibratedFontEnvironment:
+                    pdfRendering.calibratedFontEnvironment,
+                  requestedFontFamilies: pdfRendering.requestedFontFamilies,
+                  durationMs: pdfRendering.durationMs,
+                  generatedDocxSha256: pdfRendering.generatedDocxSha256,
+                  pdfSha256: pdfRendering.pdfSha256,
+                },
+              }
+            : {}),
           attachments: compiled.attachments
             ? [...compiled.attachments.manifest.entries]
                 .map((entry) => ({
@@ -3500,6 +3907,9 @@ class Project implements AgentDocxProject {
           record.id,
           artifactProvenance,
         );
+        pdfStorePath = pdfBytes
+          ? resolve(artifactDirectory, "document.pdf")
+          : null;
         artifactStorePath = resolve(artifactDirectory, "document.docx");
         attachmentStorePath = compiled.attachments
           ? resolve(artifactDirectory, "attachments", "manifest.json")
@@ -3510,6 +3920,11 @@ class Project implements AgentDocxProject {
           resolve(artifactStagePath, "document.docx"),
           bytes,
         );
+        if (pdfBytes)
+          await writeExclusiveFile(
+            resolve(artifactStagePath, "document.pdf"),
+            pdfBytes,
+          );
         await writeExclusiveFile(
           resolve(artifactStagePath, "provenance.json"),
           provenanceJson,
@@ -3524,6 +3939,9 @@ class Project implements AgentDocxProject {
             ? resolve(stagePath, "attachments")
             : null,
           docxSha256: artifactObject,
+          pdfStagePath: pdfBytes ? resolve(stagePath, "document.pdf") : null,
+          pdfStorePath,
+          pdfSha256: pdfObject ?? emptyObject,
           attachmentManifestSha256:
             compiled.attachments?.manifestSha256 ?? null,
           artifactProvenanceSha256: artifactProvenance,
@@ -3560,6 +3978,32 @@ class Project implements AgentDocxProject {
                 storePath: attachmentStorePath,
                 manifestSha256: compiled.attachments.manifestSha256,
                 manifest: compiled.attachments.manifest,
+              }
+            : null,
+        pdf:
+          pdfRendering && pdfObject && pdfStorePath
+            ? {
+                sha256: pdfObject,
+                pageCount: pdfRendering.pageCount,
+                deterministicPageCount:
+                  compiled.measurement.deterministic.pageCount,
+                delta:
+                  pdfRendering.pageCount -
+                  compiled.measurement.deterministic.pageCount,
+                rendererProvenance: {
+                  versionRaw: pdfRendering.versionRaw,
+                  executablePath: pdfRendering.executablePath,
+                  platform: pdfRendering.platform,
+                  arch: pdfRendering.arch,
+                  calibratedFontEnvironment:
+                    pdfRendering.calibratedFontEnvironment,
+                  requestedFontFamilies: pdfRendering.requestedFontFamilies,
+                  durationMs: pdfRendering.durationMs,
+                  generatedDocxSha256: pdfRendering.generatedDocxSha256,
+                  pdfSha256: pdfRendering.pdfSha256,
+                },
+                path,
+                storePath: pdfStorePath,
               }
             : null,
         revision: record.id,
@@ -3822,6 +4266,233 @@ class Project implements AgentDocxProject {
           await rm(path, { force: true });
         throw error;
       }
+    });
+  }
+  async importRedline(input: {
+    documentId: string;
+    input: string | Uint8Array;
+    attachments?: ImportAttachmentBundle;
+    author: Actor;
+    message: string;
+  }): Promise<RedlineImportResult> {
+    const inspected = await inspectRedlineResolution(input.input, {
+      ...(input.attachments ? { attachments: input.attachments } : {}),
+    });
+    return withLockedStore(this.manifestPath, async (opened) => {
+      const config = documentById(opened.manifest, input.documentId);
+      if (
+        inspected.semantic.projectId !== opened.manifest.projectId ||
+        inspected.semantic.documentId !== config.id
+      )
+        throw new AgentDocxError(
+          "DOCX_IMPORT_UNSUPPORTED",
+          "DOCX semantic manifest belongs to a different project document",
+        );
+      const semanticRevision = inspected.semantic.revision;
+      const semanticBaseRevision = inspected.semantic.baseRevision;
+      if (!semanticRevision || !semanticBaseRevision)
+        throw new AgentDocxError(
+          "REVISION_NOT_FOUND",
+          "Redline semantic manifest does not identify committed revisions",
+        );
+      const currentHeadId = await readHead(opened.storePath, config.id);
+      if (currentHeadId === null)
+        throw new AgentDocxError(
+          "REVISION_NOT_FOUND",
+          `Document has no revision: ${config.id}`,
+        );
+      if (currentHeadId !== semanticRevision)
+        throw new AgentDocxError(
+          "REVISION_CONFLICT",
+          "Redline semantic revision must be the current document head",
+        );
+      const head = await this.currentRevision(
+        opened,
+        config.id,
+        semanticRevision,
+      );
+      const base = await this.currentRevision(
+        opened,
+        config.id,
+        semanticBaseRevision,
+      );
+      if (
+        base.id === head.id ||
+        !(await this.isFirstParentAncestor(opened, base.id, head))
+      )
+        throw new AgentDocxError(
+          "REVISION_CONFLICT",
+          "Redline base must be a distinct first-parent ancestor of the head",
+        );
+      const baseMaterial = await this.materialFor(opened, base);
+      const headMaterial = await this.materialFor(opened, head);
+      if (inspected.semantic.source !== headMaterial.source)
+        throw new AgentDocxError(
+          "DOCX_IMPORT_UNSUPPORTED",
+          "Redline semantic source does not match the committed head revision",
+        );
+      if (
+        canonicalJson(semanticDocumentProjection(headMaterial.document)) !==
+        canonicalJson(inspected.semantic.document)
+      )
+        throw new AgentDocxError(
+          "DOCX_IMPORT_UNSUPPORTED",
+          "Redline semantic document does not match the committed head revision",
+        );
+      const snapshot = await snapshotProjectDocument(opened, config);
+      if (
+        snapshot.workingTreeHash !== head.workingTreeHash ||
+        snapshot.sourceObject !== head.sourceObject ||
+        snapshot.documentConfigObject !== head.documentConfigObject ||
+        canonicalJson(snapshot.dependencyObjects) !==
+          canonicalJson(head.dependencyObjects)
+      )
+        throw new AgentDocxError(
+          "WORKING_COPY_CONFLICT",
+          "Working copy differs from the redline head revision",
+        );
+      if (
+        inspected.resolution === "complete" &&
+        inspected.rejectedSource === null
+      )
+        throw new AgentDocxError(
+          "CHANGESET_INVALID",
+          "Complete redline resolution did not produce a rejected source",
+        );
+      const rawChangeSet = createChangeSet(
+        config.id,
+        base.id,
+        head.id,
+        baseMaterial.document,
+        headMaterial.document,
+        baseMaterial.annotations,
+        headMaterial.annotations,
+        defaultAttribution(head.author, head.createdAt),
+        {
+          baseConfig: baseMaterial.config as unknown as JsonObject,
+          headConfig: headMaterial.config as unknown as JsonObject,
+          baseDependencies: base.dependencyObjects,
+          headDependencies: head.dependencyObjects,
+          baseSource: baseMaterial.source,
+          headSource: headMaterial.source,
+        },
+      );
+      const baseProvenance = await provenanceForRevision(opened, base);
+      const headProvenance = await provenanceForRevision(opened, head);
+      const changeSet = reattributeChangeSet(rawChangeSet, {
+        baseBlocks: baseProvenance.blocks,
+        headBlocks: headProvenance.blocks,
+        baseOperations: baseProvenance.operations,
+        headOperations: headProvenance.operations,
+        baseConfig: baseProvenance.config,
+        headConfig: headProvenance.config,
+        baseConfigOperations: baseProvenance.configOperations,
+        headConfigOperations: headProvenance.configOperations,
+        baseDependencyOperations: baseProvenance.dependencyOperations,
+        headDependencyOperations: headProvenance.dependencyOperations,
+        baseDocument: baseMaterial.document,
+        headDocument: headMaterial.document,
+        baseDependencies: baseProvenance.dependencies,
+        headDependencies: headProvenance.dependencies,
+      });
+      const decisions: Record<`c_${string}`, "accept" | "reject"> = {};
+      if (inspected.resolution === "complete") {
+        const rawIds = new Set(rawChangeSet.changes.map((change) => change.id));
+        for (const changeId of Object.keys(inspected.decisions))
+          if (!rawIds.has(changeId as `c_${string}`))
+            throw new AgentDocxError(
+              "CHANGESET_INVALID",
+              `Redline decision does not identify a committed change: ${changeId}`,
+            );
+        for (const [index, change] of changeSet.changes.entries()) {
+          const rawChange = rawChangeSet.changes[index];
+          const decision =
+            rawChange === undefined
+              ? undefined
+              : inspected.decisions[rawChange.id];
+          if (!decision)
+            throw new AgentDocxError(
+              "CHANGESET_INVALID",
+              `Change cannot be attributed to a reviewer decision: ${change.id}`,
+            );
+          decisions[change.id] = decision;
+        }
+        const reviewerAnnotations = new Map(
+          inspected.annotations.map((annotation) => [
+            annotation.id,
+            annotation,
+          ]),
+        );
+        for (const change of changeSet.annotations) {
+          if (change.kind === "add") {
+            decisions[change.id] = reviewerAnnotations.has(change.newValue.id)
+              ? "accept"
+              : "reject";
+          } else if (change.kind === "remove") {
+            decisions[change.id] = reviewerAnnotations.has(change.oldValue.id)
+              ? "reject"
+              : "accept";
+          } else {
+            const current = reviewerAnnotations.get(change.newValue.id);
+            if (
+              current &&
+              canonicalJson(current) === canonicalJson(change.newValue)
+            )
+              decisions[change.id] = "accept";
+            else if (
+              reviewerAnnotations.get(change.oldValue.id) &&
+              canonicalJson(reviewerAnnotations.get(change.oldValue.id)) ===
+                canonicalJson(change.oldValue)
+            )
+              decisions[change.id] = "reject";
+            else
+              throw new AgentDocxError(
+                "CHANGESET_INVALID",
+                `Annotation change cannot be attributed to a reviewer decision: ${change.id}`,
+              );
+          }
+        }
+      }
+      const fidelity: RedlineImportResult["fidelity"] = {
+        overall: "normalized",
+        items: [
+          {
+            status: "preserved",
+            partPath: "customXml/itemAgentDocx.xml",
+            relationshipId: "rIdAgentDocxSemantic",
+            ooxmlKind: "agent-docx:semantic-manifest",
+            count: 1,
+            blockIds: [],
+            sourcePositions: [],
+            explanation:
+              "The agent-docx semantic manifest preserves revision and block identity.",
+          },
+          {
+            status: "normalized",
+            partPath: "word/document.xml",
+            relationshipId: null,
+            ooxmlKind: "w:ins/w:del",
+            count: inspected.tracked.paragraphs.length,
+            blockIds: inspected.tracked.paragraphs.flatMap((paragraph) =>
+              paragraph.bookmark ? [paragraph.bookmark] : [],
+            ),
+            sourcePositions: [],
+            explanation:
+              "Reviewer redline markup was validated and normalized to semantic decisions.",
+          },
+        ],
+      };
+      return {
+        schemaVersion: 1,
+        documentId: config.id,
+        baseRevision: base.id,
+        headRevision: head.id,
+        changeSet,
+        decisions,
+        resolution: inspected.resolution,
+        annotations: inspected.annotations,
+        fidelity,
+      };
     });
   }
 }

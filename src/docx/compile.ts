@@ -29,8 +29,8 @@ import type {
   StatelessCompiledDocx,
 } from "./contracts.js";
 import type { CompileOptions } from "../project/contracts.js";
-import type { ChangeSet } from "../revisions/types.js";
-
+import type { Change, ChangeSet } from "../revisions/types.js";
+import { visibleTextForBlock } from "../revisions/diff.js";
 export type CompileMarkdownOptions = CompileOptions & {
   generation?: Pick<
     GenerateDocxOptions,
@@ -165,6 +165,67 @@ const attachmentBundle = (
   };
 };
 
+const revisionMapText = (
+  change: Change,
+): { blockId: string | null; baseText: string; headText: string } => {
+  switch (change.kind) {
+    case "insert-text":
+      return {
+        blockId: change.blockId,
+        baseText: "",
+        headText: change.newText,
+      };
+    case "delete-text":
+      return {
+        blockId: change.blockId,
+        baseText: change.oldText,
+        headText: "",
+      };
+    case "replace-text":
+      return {
+        blockId: change.blockId,
+        baseText: change.oldText,
+        headText: change.newText,
+      };
+    case "insert-block":
+      return {
+        blockId: change.blockId,
+        baseText: "",
+        headText: visibleTextForBlock(change.block),
+      };
+    case "delete-block":
+      return {
+        blockId: change.blockId,
+        baseText: visibleTextForBlock(change.oldBlock),
+        headText: "",
+      };
+    case "replace-block":
+      return {
+        blockId: change.blockId,
+        baseText: visibleTextForBlock(change.oldBlock),
+        headText: visibleTextForBlock(change.newBlock),
+      };
+    case "move-block":
+      return {
+        blockId: change.blockId,
+        baseText: change.oldSource.text,
+        headText: change.newSource.text,
+      };
+    case "replace-container-shell":
+      return {
+        blockId: change.blockId,
+        baseText: change.oldShell.sourceRanges
+          .map((range) => range.text)
+          .join("\n"),
+        headText: change.newShell.sourceRanges
+          .map((range) => range.text)
+          .join("\n"),
+      };
+    default:
+      return { blockId: null, baseText: "", headText: "" };
+  }
+};
+
 export const createSemanticManifest = (input: {
   document: LegalDocument;
   source: string;
@@ -212,16 +273,20 @@ export const createSemanticManifest = (input: {
   revisionMap: input.changeSet
     ? [...input.changeSet.changes]
         .sort((left, right) => left.id.localeCompare(right.id))
-        .map((change) => ({
-          changeId: change.id,
-          attribution: {
-            author: change.attribution.author ?? null,
-            createdAt: change.attribution.createdAt,
-            ...(change.attribution.sourceRevisionId
-              ? { sourceRevisionId: change.attribution.sourceRevisionId }
-              : {}),
-          },
-        }))
+        .map((change) => {
+          const text = revisionMapText(change);
+          return {
+            changeId: change.id,
+            attribution: {
+              author: change.attribution.author ?? null,
+              createdAt: change.attribution.createdAt,
+              ...(change.attribution.sourceRevisionId
+                ? { sourceRevisionId: change.attribution.sourceRevisionId }
+                : {}),
+            },
+            ...text,
+          };
+        })
     : [],
   commentMap: [...(input.annotations ?? [])]
     .filter((annotation) => annotation.status === "open")
@@ -269,6 +334,7 @@ export const compileMarkdown = async (
   const validation = validateLegalDocument(document, {
     ...(generation?.revision ? { revision: generation.revision.id } : {}),
     rulePack: specification.rulePack,
+    customPacks: options.rulePacks,
     filingKind: specification.filingKind,
     measurement: serializableMeasurement(measurement),
   });

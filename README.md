@@ -83,11 +83,31 @@ agent-docx review add|resolve ...
 agent-docx validate ...
 agent-docx export ...
 agent-docx import ...
+agent-docx import-redline ...
+agent-docx filing-set add|remove|get|validate ...
 agent-docx agent --input-jsonl
 agent-docx agent --watch --project FILE --document ID --jsonl
+agent-docx mcp
 ```
 
 All workflow commands accept `--project FILE`; project creation and document addition use `--document`, `--source`, `--profile`, and `--metadata`. `project init` creates the manifest and first document; `project add` adds another document and accepts `--default` to make it the default document. Custom font input requires `--font-family` and `--font-regular` together; bold, italic, and bold-italic files are optional.
+
+### Filing sets
+
+Documents can be grouped into ordered filing sets with an optional shared deterministic page cap:
+
+```sh
+agent-docx filing-set add \
+  --project agent-docx.json --id motion-package \
+  --label "Motion package" --documents motion,brief,proposed-order \
+  --page-cap 30
+
+agent-docx filing-set get --project agent-docx.json --id motion-package
+agent-docx filing-set validate --project agent-docx.json --id motion-package
+agent-docx filing-set remove --project agent-docx.json --id motion-package
+```
+
+Filing sets live in the project manifest (`filingSets`), reference existing documents in order, and are validated at add time (unknown or duplicate documents are rejected). `filing-set validate` (agent actions `filingSet.add`/`remove`/`get`/`validate`) reports each member document's validation result and deterministic page count, and when a `pageCap` is set, the summed page budget with `pass`/`fail`/`unknown` status—an unmeasured member makes the budget `unknown`, never a silent pass. Set membership is manifest state, not a revision; document revisions stay independently revision-bound.
 
 ```sh
 # Inspect a supported template without copying arbitrary package parts.
@@ -122,7 +142,7 @@ printf '%s\n' \
   | agent-docx agent --input-jsonl
 ```
 
-Actions include `project.init`, `project.add`, `project.get`, `document.configure`, `document.get`, `document.measure`, `document.validate`, `revision.checkpoint`, `revision.list`, `revision.get`, `revision.restore`, `revision.diff`, `revision.resolve`, `draft.guidance`, `draft.evaluate`, `draft.apply`, `review.add`, `review.resolve`, `docx.export`, `docx.import`, and `docx.inspect`.
+Actions include `project.init`, `project.add`, `project.get`, `document.configure`, `document.get`, `document.measure`, `document.validate`, `revision.checkpoint`, `revision.list`, `revision.get`, `revision.restore`, `revision.diff`, `revision.resolve`, `draft.guidance`, `draft.evaluate`, `draft.apply`, `review.add`, `review.resolve`, `docx.export`, `docx.import`, `docx.inspect`, `docx.importRedline`, `filingSet.add`, `filingSet.remove`, `filingSet.get`, and `filingSet.validate`.
 
 The response envelope always contains `schemaVersion`, `kind`, `sequence`, `requestId`, `action`, `project`, `documentId`, and `revision`. Generated binary DOCX bytes are never embedded in CLI JSON; serializable responses provide public artifact paths, SHA-256 values, block manifests, validation, and renderer provenance instead.
 
@@ -134,6 +154,14 @@ agent-docx agent --watch \
 ```
 
 The watch stream emits `ready`, debounced `document.measure` results or errors, and `end` on `SIGINT` or `SIGTERM`. Its ready record inventories the source, template, custom fonts, and assets used by the revision. Changing the manifest, source, template, font, an existing asset, or an asset-directory membership refreshes the measurement and watch set.
+
+## Model Context Protocol server
+
+```sh
+agent-docx mcp
+```
+
+`agent-docx mcp` serves the same version-1 protocol as a Model Context Protocol server over stdio (newline-delimited JSON-RPC, no framing). Every protocol action becomes one MCP tool named after the action (for example `document.validate`, `draft.evaluate`, `docx.export`, `filingSet.get`); each tool takes the action's `params` object plus an optional `project` path relative to the server's working directory. Tool results carry the serialized protocol value as both text and `structuredContent`; dispatch failures return `isError: true` results with a `{code, message}` structured payload. The server implements `initialize`, `ping`, `tools/list`, and `tools/call`, so MCP-capable agents (Claude Code, Cursor, and similar) can drive the full project, draft, review, validation, and export workflow without shell parsing. No binary DOCX bytes are ever embedded in MCP responses; artifacts are referenced by public path and SHA-256.
 
 ## Markdown and legal structure
 
@@ -165,6 +193,24 @@ A redline export converts the resolved semantic diff into native OOXML insertion
 
 Native redline export currently supports body paragraphs, headings, blockquotes, and controlled numbered paragraphs without footnotes. Comments are block-anchored; exact subrange anchors remain source-side review metadata. It rejects lists, tables, images, exhibits, length-exclusion containers, breaks, captions, TOC/TOA fields, and footnotes with `DOCX_REDLINE_UNSUPPORTED` rather than emitting a misleading partial redline. Use clean export for documents containing those constructs.
 
+### Redline round trip
+
+A redline returned from a reviewer can be imported back into the revision store as an explicit decision set:
+
+```sh
+agent-docx import-redline \
+  --project agent-docx.json --document motion \
+  --input motion-redline-reviewed.docx \
+  --author "Drafter" --message "Reviewer accepted all"
+
+agent-docx revision resolve \
+  --project agent-docx.json --document motion \
+  --change-set change-set.json --decisions decisions.json \
+  --author "Drafter" --message "Apply reviewer decisions"
+```
+
+`import-redline` (`docx.importRedline`) reads a redline exported by agent-docx whose tracked changes the reviewer resolved in Word (accept or reject; a fully unresolved redline yields an empty decision set for the agent to decide later). It validates the DOCX's semantic manifest against the project, requires the redline revision to be the current HEAD with a clean working copy, and returns a canonical `ChangeSet` plus a `decisions` map covering every change. Reviewer-added Word comments anchored to document blocks become open review annotations. Import either classifies every change unambiguously or fails with `DOCX_IMPORT_UNSUPPORTED`; it never guesses. The returned `ChangeSet` is byte-identical to what `revision.resolve` re-derives, so the decisions commit exactly the reviewer's accepted state as a new revision.
+
 ## Rule packs and validation
 
 Layout profiles control geometry and styles. Rule packs control legal validation. Built-in packs are versioned snapshots:
@@ -175,6 +221,21 @@ Layout profiles control geometry and styles. Rule packs control legal validation
 Each pack records its official URL, effective date, checked-in source excerpt, SHA-256, exact predicates modeled by the software, and unmodeled provisions. Validation findings include check ID, status, severity, source/evidence, remediation where available, and the rule-pack snapshot. A changing court website cannot silently change existing validation semantics.
 
 The current closed check family covers length alternatives, page size, minimum margins, typeface, line spacing, maximum counted lines, required metadata, required blocks, required footer content, and reference integrity. An `unknown` result means the deterministic compiler cannot establish the relevant native behavior; it is not a passing filing result.
+
+### Authorable rule packs
+
+Beyond the built-in snapshots, projects can attach user-defined rule packs: schema-validated JSON files that express the same closed check family as data-driven parameters. A pack file declares an id, source citation, effective date, source excerpt and SHA-256, unmodeled provisions, and a `checks` array whose entries pair a check id with a kind and `params` (for example `page-size` with `{widthTwips, heightTwips}`, `counted-lines-maximum` with `{perPageMaximum}`, or `required-footer` with `{requiredTokens}`). Packs attach to a document through project configuration:
+
+```sh
+agent-docx document configure \
+  --project agent-docx.json --document motion \
+  --base HEAD --changes changes.json \
+  --author "Drafter" --message "Attach firm pack"
+
+# changes.json: { "rulePacks": ["packs/firm-style.json"] }
+```
+
+Pack files are project-relative, content-hashed into the revision's dependency objects, and schema-validated; a changed pack file changes the working-tree hash, and validation reports any pack whose content no longer matches its snapshot. Custom pack findings appear alongside built-in findings in `ValidationResult`, with each pack recorded in `scope.sourceSnapshots`. Validation semantics for user packs are the user's responsibility; the built-in packs remain evidence-backed snapshots.
 
 ## Layout, pagination, and profiles
 
@@ -204,6 +265,16 @@ The same Markdown, configuration, and metric-font bytes produce the same determi
 `template inspect` uses a bounded ZIP/XML reader to inspect supported style inheritance, numbering, theme/font information, sections, header/footer relationships, fields, and caption components. Unsafe or unsupported package features—including macros, external relationships, embedded objects, scripts, encrypted parts, and arbitrary package copying—are not executed or copied into output.
 
 Supported inspected layout/style data can be consumed by project configuration. A template is input for supported style and geometry semantics, not a host document to merge into an output package.
+
+## PDF export and page verification
+
+```sh
+agent-docx export \
+  --project agent-docx.json --document motion --revision HEAD \
+  --mode pdf --output motion.pdf
+```
+
+`export --mode pdf` (agent action `docx.export` with `mode: "pdf"`) compiles the clean DOCX through the same strict semantic re-import gate, then renders it to PDF with the hardened headless LibreOffice invocation (isolated user profile, fixed locale and timezone, absolute executable path). The deterministic measurement remains the stable baseline: the result reports both page counts and their delta, and the PDF artifact is published through the same crash-recoverable staged store as DOCX exports, with `pdfSha256`, page count, and renderer provenance in the artifact provenance record. LibreOffice is an explicit local dependency for this mode—missing or failing renderers surface as `LIBREOFFICE_NOT_FOUND`/`LIBREOFFICE_RENDER_FAILED`/`LIBREOFFICE_TIMEOUT`, never a silent fallback. Office-rendered pagination is verification evidence, not a portable golden.
 
 `import` reads supported DOCX material into legal Markdown and returns fidelity classifications: `preserved`, `normalized`, `externalized`, or `unsupported`. Import is explicit about information it cannot preserve; inspect-only import does not write a project revision.
 
@@ -274,6 +345,9 @@ All published schemas are JSON Schema Draft 2020-12 and are exported from the pa
 - `agent-docx/artifact-result.schema.json`
 - `agent-docx/compiled-docx.schema.json`
 - `agent-docx/docx-import-result.schema.json`
+- `agent-docx/redline-import-result.schema.json`
+- `agent-docx/filing-set.schema.json`
+- `agent-docx/filing-set-validation.schema.json`
 - `agent-docx/agent-request.schema.json`
 - `agent-docx/agent-response.schema.json`
 - `agent-docx/agent-stream.schema.json`

@@ -41,6 +41,9 @@ const schemaNames = [
   "artifact-result.schema.json",
   "compiled-docx.schema.json",
   "docx-import-result.schema.json",
+  "redline-import-result.schema.json",
+  "filing-set.schema.json",
+  "filing-set-validation.schema.json",
   "profile-catalog.schema.json",
 ];
 const schemas = await Promise.all(
