@@ -1,9 +1,8 @@
-import type { JsonValue, SourcePosition } from "../types.js";
+import type { JsonValue } from "../types.js";
 import type {
   Actor,
   AddressableBlock,
   BlockId,
-  ContainerBlock,
   LeafAddressableBlock,
   ReviewAnnotation,
   RevisionId,
@@ -199,5 +198,3 @@ export type RevisionMutationResult = {
   validation: ValidationResult;
 };
 
-export type ReviewChangeTarget = ContainerBlock | AddressableBlock;
-export type ImportedSourcePosition = SourcePosition;

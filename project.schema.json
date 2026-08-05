@@ -67,6 +67,7 @@
         "profile": { "enum": ["us-district-conventional", "frap-32", "cand-civil"] },
         "filingKind": { "enum": ["principal-brief", "reply-brief", "motion-document", "opposition-text", "reply-text"] },
         "rulePack": { "enum": ["frap-32@2024-12-01", "cand-civil@2026-05-01"] },
+        "rulePacks": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "template": { "$ref": "#/$defs/relativePath" }, "assetsDir": { "$ref": "#/$defs/relativePath" }, "fontSet": { "$ref": "#/$defs/fontSet" },
         "chrome": { "$ref": "#/$defs/chrome" }, "metadata": { "$ref": "#/$defs/metadata" }
       }

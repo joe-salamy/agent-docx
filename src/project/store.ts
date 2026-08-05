@@ -3,7 +3,6 @@ import {
   link,
   lstat,
   mkdir,
-  open,
   readFile,
   readdir,
   realpath,
@@ -22,6 +21,12 @@ import {
 import canonicalize from "canonicalize";
 import { lock } from "proper-lockfile";
 import { AgentDocxError } from "../types.js";
+import { objectRecord } from "../json-contract.js";
+import {
+  pathExists,
+  pathsOverlap,
+  writeExclusiveFile,
+} from "./fs-util.js";
 import { builtInProfiles } from "../profiles.js";
 import { isDocumentId, type RevisionId } from "../legal/model.js";
 import { builtInRulePacks } from "../legal/rules.js";
@@ -33,9 +38,9 @@ import type {
   ProjectDocumentInput,
 } from "./contracts.js";
 
-export const STORE_DIR = ".agent-docx";
+const STORE_DIR = ".agent-docx";
 const INIT_INTENT = ".agent-docx.init.json";
-export const EXPORT_INTENT = ".agent-docx.export.json";
+const EXPORT_INTENT = ".agent-docx.export.json";
 const LOCK_NAME = ".agent-docx.lock";
 const BINDING_FILE = "project.json";
 
@@ -121,8 +126,6 @@ const allowedFilingSetKeys: Record<string, true> = {
   documentIds: true,
   pageCap: true,
 };
-
-const fileMode = 0o600;
 
 export const objectId = (bytes: Uint8Array | string): RevisionId =>
   `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -248,7 +251,7 @@ const assertWithin = (
   return absolutePath;
 };
 
-const strictJson = <T>(bytes: Uint8Array, path: string): T => {
+export const strictJson = <T>(bytes: Uint8Array, path: string): T => {
   try {
     return JSON.parse(
       new TextDecoder("utf-8", { fatal: true }).decode(bytes),
@@ -265,14 +268,7 @@ const hasOnlyKeys = (
   allowed: Record<string, true>,
 ): boolean => Object.keys(value).every((key) => allowed[key] === true);
 
-const objectRecord = (
-  value: unknown,
-  name: string,
-): Record<string, unknown> => {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new AgentDocxError("PROJECT_INVALID", `${name} must be an object`);
-  return value as Record<string, unknown>;
-};
+
 
 const assertClosedKeys = (
   value: Record<string, unknown>,
@@ -293,7 +289,7 @@ const assertString = (value: unknown, name: string): string => {
 };
 
 const assertMetadata = (value: unknown): void => {
-  const metadata = objectRecord(value, "Document metadata");
+  const metadata = objectRecord(value, "Document metadata", { code: "PROJECT_INVALID" });
   assertClosedKeys(
     metadata,
     [
@@ -340,7 +336,7 @@ const assertMetadata = (value: unknown): void => {
       );
     const ids = new Set<string>();
     for (const entry of metadata[key]) {
-      const record = objectRecord(entry, `Document metadata ${key} entry`);
+      const record = objectRecord(entry, `Document metadata ${key} entry`, { code: "PROJECT_INVALID" });
       assertClosedKeys(record, allowed, `Document metadata ${key} entry`);
       const id = assertString(record.id, `Document metadata ${key} entry id`);
       if (!isDocumentId(id) || ids.has(id))
@@ -377,7 +373,7 @@ const assertMetadata = (value: unknown): void => {
     );
   const certificateIds = new Set<string>();
   for (const certificate of metadata.certificates) {
-    const record = objectRecord(certificate, "Document metadata certificate");
+    const record = objectRecord(certificate, "Document metadata certificate", { code: "PROJECT_INVALID" });
     const id = assertString(record.id, "Document metadata certificate id");
     if (!isDocumentId(id) || certificateIds.has(id))
       throw new AgentDocxError(
@@ -439,7 +435,7 @@ const assertMetadata = (value: unknown): void => {
 };
 
 const assertChrome = (value: unknown): void => {
-  const chrome = objectRecord(value, "Document chrome");
+  const chrome = objectRecord(value, "Document chrome", { code: "PROJECT_INVALID" });
   assertClosedKeys(
     chrome,
     ["headers", "footers", "pageNumber", "lineNumbers"],
@@ -450,6 +446,7 @@ const assertChrome = (value: unknown): void => {
     const stories = objectRecord(
       chrome[storyKind],
       `Document chrome ${storyKind}`,
+      { code: "PROJECT_INVALID" },
     );
     assertClosedKeys(
       stories,
@@ -478,6 +475,7 @@ const assertChrome = (value: unknown): void => {
     const number = objectRecord(
       chrome.pageNumber,
       "Document chrome pageNumber",
+      { code: "PROJECT_INVALID" },
     );
     assertClosedKeys(
       number,
@@ -511,6 +509,7 @@ const assertChrome = (value: unknown): void => {
     const lines = objectRecord(
       chrome.lineNumbers,
       "Document chrome lineNumbers",
+      { code: "PROJECT_INVALID" },
     );
     assertClosedKeys(
       lines,
@@ -618,7 +617,7 @@ const validateDocumentConfig = (value: unknown): AgentDocxDocumentConfig => {
       Array.isArray(config.fontSet)
     )
       throw new AgentDocxError("PROJECT_INVALID", "fontSet is invalid");
-    const fontSet = objectRecord(config.fontSet, "fontSet");
+    const fontSet = objectRecord(config.fontSet, "fontSet", { code: "PROJECT_INVALID" });
     assertClosedKeys(
       fontSet,
       ["family", "regularPath", "boldPath", "italicPath", "boldItalicPath"],
@@ -655,7 +654,7 @@ const validateManifestFilingSet = (
   value: unknown,
   documentIds: ReadonlySet<string>,
 ): FilingSet => {
-  const set = objectRecord(value, "Filing set");
+  const set = objectRecord(value, "Filing set", { code: "PROJECT_INVALID" });
   if (!hasOnlyKeys(set, allowedFilingSetKeys))
     throw new AgentDocxError(
       "PROJECT_INVALID",
@@ -716,7 +715,7 @@ const validateManifestFilingSet = (
   };
 };
 
-export const validateManifest = (value: unknown): AgentDocxManifest => {
+const validateManifest = (value: unknown): AgentDocxManifest => {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new AgentDocxError(
       "PROJECT_INVALID",
@@ -817,7 +816,7 @@ type OwnedManifestPath = {
   shareableFont: boolean;
 };
 
-export const validateManifestPaths = async (
+const validateManifestPaths = async (
   projectDirectory: string,
   manifest: AgentDocxManifest,
 ): Promise<void> => {
@@ -858,25 +857,8 @@ export const validateManifestPaths = async (
   }
 };
 
-const pathsOverlap = (left: string, right: string): boolean =>
-  left === right ||
-  left.startsWith(`${right}${sep}`) ||
-  right.startsWith(`${left}${sep}`);
-
 const readJsonFile = async <T>(path: string): Promise<T> =>
   strictJson<T>(await readFile(path), path);
-
-const writeExclusive = async (
-  path: string,
-  bytes: Uint8Array | string,
-): Promise<void> => {
-  const handle = await open(path, "wx", fileMode);
-  try {
-    await handle.writeFile(bytes);
-  } finally {
-    await handle.close();
-  }
-};
 
 const objectPath = (storePath: string, id: RevisionId): string => {
   const hex = id.slice("sha256:".length);
@@ -893,7 +875,7 @@ export const writeObject = async (
   const path = objectPath(storePath, id);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   try {
-    await writeExclusive(path, bytes);
+    await writeExclusiveFile(path, bytes);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const current = await readFile(path);
@@ -970,7 +952,7 @@ export const writeHead = async (
   const path = refsPath(storePath, documentId);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const stage = `${path}.${randomUUID()}.stage`;
-  await writeExclusive(
+  await writeExclusiveFile(
     stage,
     canonicalJson({ schemaVersion: 1, documentId, head }),
   );
@@ -1011,7 +993,7 @@ export const writeRevisionJson = async (
   const path = revisionPath(storePath, id);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   try {
-    await writeExclusive(path, record);
+    await writeExclusiveFile(path, record);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const existing = strictJson<Record<string, unknown>>(
@@ -1292,7 +1274,18 @@ const recoverInitialization = async (
       manifest.projectId === intent.projectId &&
       binding.projectId === intent.projectId &&
       binding.manifestBasename === basename(manifestPath);
-  } catch {}
+  } catch (error) {
+    const code =
+      error instanceof AgentDocxError
+        ? error.code
+        : (error as NodeJS.ErrnoException).code;
+    const partialInitialization =
+      code === "INPUT_NOT_FOUND" ||
+      code === "PROJECT_INVALID" ||
+      code === "ENOENT" ||
+      code === "ENOTDIR";
+    if (!partialInitialization) throw error;
+  }
   if (committed) {
     await rm(intentPath, { force: true });
     return;
@@ -1334,7 +1327,7 @@ const exportIntentFrom = (
   projectDirectory: string,
   value: unknown,
 ): ExportIntent => {
-  const intent = objectRecord(value, "Export intent");
+  const intent = objectRecord(value, "Export intent", { code: "PROJECT_INVALID" });
   const state = intent.state;
   if (
     intent.schemaVersion !== 1 ||
@@ -1505,15 +1498,7 @@ const exportIntentFrom = (
   };
 };
 
-const pathExists = async (path: string): Promise<boolean> => {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
-};
+
 
 const stageMarker = (stagePath: string): string =>
   resolve(stagePath, "owner.json");
@@ -1907,21 +1892,13 @@ const recoverExport = async (
   await rm(intentPath, { force: true });
 };
 
-export const writeExportIntent = async (
-  projectDirectory: string,
-  intent: ExportIntent,
-): Promise<void> => {
-  const path = exportIntentPath(projectDirectory);
-  await writeExclusive(path, canonicalJson(intent));
-};
-
 export const updateExportIntent = async (
   projectDirectory: string,
   intent: ExportIntent,
 ): Promise<void> => {
   const path = exportIntentPath(projectDirectory);
   const stage = `${path}.${intent.owner}.stage`;
-  await writeExclusive(stage, canonicalJson(intent));
+  await writeExclusiveFile(stage, canonicalJson(intent));
   try {
     await rename(stage, path);
   } finally {
@@ -1960,39 +1937,8 @@ export const acquireProjectLock = async (
   }
 };
 
-export const openStore = async (manifestPath: string): Promise<OpenedStore> => {
-  const absoluteManifestPath = resolve(manifestPath);
-  const projectDirectory = dirname(absoluteManifestPath);
-  await assertDirectory(projectDirectory, "Project directory");
-  const release = await acquireProjectLock(projectDirectory);
-  try {
-    await recoverInitialization(projectDirectory, absoluteManifestPath);
-    await recoverExport(projectDirectory, absoluteManifestPath);
-    await assertRegularFile(absoluteManifestPath, "Project manifest");
-    const manifest = validateManifest(
-      await readJsonFile<unknown>(absoluteManifestPath),
-    );
-    await validateManifestPaths(projectDirectory, manifest);
-    const opened = {
-      manifestPath: absoluteManifestPath,
-      projectDirectory: await realpath(projectDirectory),
-      storePath: resolve(projectDirectory, STORE_DIR),
-      manifest,
-    };
-    await assertDirectory(opened.storePath, "Project store");
-    await validateBinding(opened);
-    return opened;
-  } catch (error) {
-    if ((error as AgentDocxError).code === "INPUT_NOT_FOUND")
-      throw new AgentDocxError(
-        "PROJECT_NOT_FOUND",
-        `Project not found: ${absoluteManifestPath}`,
-      );
-    throw error;
-  } finally {
-    await release();
-  }
-};
+export const openStore = (manifestPath: string): Promise<OpenedStore> =>
+  withLockedStore<OpenedStore>(manifestPath, async (opened) => opened);
 
 export const withLockedStore = async <Value>(
   manifestPath: string,
@@ -2082,9 +2028,9 @@ export const initializeStore = async (
       manifestPath: absoluteManifestPath,
       storePath,
     };
-    await writeExclusive(intentPath, canonicalJson(intent));
+    await writeExclusiveFile(intentPath, canonicalJson(intent));
     await mkdir(storePath, { recursive: false, mode: 0o700 });
-    await writeExclusive(
+    await writeExclusiveFile(
       bindingPath(storePath),
       canonicalJson({
         schemaVersion: 1,
@@ -2092,7 +2038,7 @@ export const initializeStore = async (
         manifestBasename: manifestName,
       } satisfies ProjectBinding),
     );
-    await writeExclusive(absoluteManifestPath, canonicalJson(manifest));
+    await writeExclusiveFile(absoluteManifestPath, canonicalJson(manifest));
     await rm(intentPath, { force: true });
     return {
       manifestPath: absoluteManifestPath,
@@ -2269,7 +2215,7 @@ export const createEmptySource = async (
   const sourcePath = assertWithin(projectDirectory, source, "Document source");
   await assertNoSymlinkComponents(sourcePath, "Document source");
   await mkdir(dirname(sourcePath), { recursive: true, mode: 0o700 });
-  await writeExclusive(sourcePath, "");
+  await writeExclusiveFile(sourcePath, "");
 };
 
 export const replaceOwnedFile = async (
@@ -2299,7 +2245,7 @@ export const replaceOwnedFile = async (
   }
   const stage = `${path}.${randomUUID()}.stage`;
   const backup = `${path}.${randomUUID()}.backup`;
-  await writeExclusive(stage, bytes);
+  await writeExclusiveFile(stage, bytes);
   let backupCreated = false;
   let replacementLinked = false;
   const rollback = async (): Promise<void> => {
@@ -2461,7 +2407,7 @@ export const updateManifest = async (
   validateManifest(manifest);
   await validateManifestPaths(opened.projectDirectory, manifest);
   const stage = `${opened.manifestPath}.${randomUUID()}.stage`;
-  await writeExclusive(stage, canonicalJson(manifest));
+  await writeExclusiveFile(stage, canonicalJson(manifest));
   try {
     await rename(stage, opened.manifestPath);
   } finally {

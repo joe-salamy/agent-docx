@@ -16,27 +16,16 @@ const expectedMetricFonts = manifest.fonts.map(({ sha256 }, index) => ({
   metricsFamily: "Liberation Serif",
   sha256,
 }));
-const schemaNames = [
-  "config.schema.json",
-  "measurement-request.schema.json",
-  "measurement-result.schema.json",
-  "docx-template-inspection.schema.json",
-  "measurement-stream.schema.json",
-  "cli-error.schema.json",
-  "profile-catalog.schema.json",
-  "project.schema.json",
-  "rule-pack.schema.json",
-  "agent-request.schema.json",
-  "agent-response.schema.json",
-  "agent-stream.schema.json",
-  "revision.schema.json",
-  "change-set.schema.json",
-  "source-patch.schema.json",
-  "validation-result.schema.json",
-  "artifact-result.schema.json",
-  "compiled-docx.schema.json",
-  "docx-import-result.schema.json",
-];
+const packageJson = JSON.parse(
+  await readFile(new URL("../package.json", import.meta.url), "utf8"),
+);
+const schemaNames = Object.keys(packageJson.exports)
+  .filter((key) => key.endsWith(".schema.json"))
+  .map((key) => key.slice(2));
+if (schemaNames.length < 21)
+  throw new Error(
+    `Schema allowlist derivation found ${schemaNames.length} schemas; expected at least 21`,
+  );
 const fontPrefix = "assets/fonts/liberation-serif-2.1.5/";
 const requiredRuleAssets = [
   "assets/rules/cand-civil-2026-05-01.txt",
@@ -107,10 +96,14 @@ try {
       `Archive contains forbidden files: ${forbidden.join(", ")}`,
     );
   }
+  const basenameOf = (path) => path.split("/").at(-1);
   const allowed = (path) =>
-    /^(?:package\.json|README\.md|LICENSE|THIRD_PARTY_NOTICES\.txt|(?:config|measurement-request|measurement-result|docx-template-inspection|measurement-stream|cli-error|profile-catalog|project|rule-pack|agent-request|agent-response|agent-stream|revision|change-set|source-patch|validation-result|artifact-result|compiled-docx|docx-import-result)\.schema\.json|dist\/)/.test(
+    /^(?:package\.json|README\.md|LICENSE|THIRD_PARTY_NOTICES\.txt|dist\/)/.test(
       path,
-    ) || requiredAssets.includes(path);
+    ) ||
+    (basenameOf(path).endsWith(".schema.json") &&
+      schemaNames.includes(basenameOf(path))) ||
+    requiredAssets.includes(path);
   const unexpected = paths.filter((path) => !allowed(path));
   if (unexpected.length) {
     throw new Error(

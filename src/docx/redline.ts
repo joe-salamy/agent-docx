@@ -11,7 +11,10 @@ import {
   TextRun,
   type ParagraphChild,
 } from "docx";
-import type { LayoutProfile, TextStyle } from "../types.js";
+import type { LayoutProfile, TextStyle } from "../layout/profile.js";
+import { AgentDocxError } from "../types.js";
+import type { TextFlowBlock } from "../markdown.js";
+import { flowStyleFor } from "../layout/style.js";
 import type {
   DocumentChrome,
   LegalBlock,
@@ -21,6 +24,7 @@ import type {
 } from "../legal/model.js";
 import type { Change, ChangeSet } from "../revisions/types.js";
 import { visibleRangeForSource } from "../revisions/diff.js";
+import { visibleTextForBlock } from "../legal/visible-text.js";
 import { blockBookmark } from "../legal/model.js";
 import {
   addSemanticManifest,
@@ -66,90 +70,50 @@ const textBlock = (block: LegalBlock): block is TextBlock =>
   block.kind === "blockquote" ||
   block.kind === "numbered-paragraph";
 
-const blockText = (block: TextBlock): string =>
-  block.runs
-    .map((run) => `${run.text}${run.hardBreakAfter ? "\n" : ""}`)
-    .join("");
+const REDLINE_SUPPORTED_KINDS = new Set<string>([
+  "paragraph",
+  "heading",
+  "blockquote",
+  "numbered-paragraph",
+  "list",
+  "footnote",
+  "exhibit",
+  "length-exclusion",
+]);
 
-const textForLegalBlock = (block: LegalBlock): string => {
-  if (textBlock(block)) return blockText(block);
-  if (block.kind === "list")
-    return block.items
-      .map((item) =>
-        item.paragraphs
-          .map((paragraph) =>
-            paragraph.runs
-              .map((run) => `${run.text}${run.hardBreakAfter ? "\n" : ""}`)
-              .join(""),
-          )
-          .join("\n"),
-      )
-      .join("\n");
-  if (block.kind === "table")
-    return block.rows
-      .map((row) =>
-        row
-          .map((cell) =>
-            cell.paragraphs
-              .map((paragraph) =>
-                paragraph.runs
-                  .map((run) => `${run.text}${run.hardBreakAfter ? "\n" : ""}`)
-                  .join(""),
-              )
-              .join("\n"),
-          )
-          .join(" | "),
-      )
-      .join("\n");
-  if (block.kind === "exhibit")
-    return [block.label, ...block.blocks.map(textForLegalBlock)]
-      .filter(Boolean)
-      .join("\n");
-  if (block.kind === "length-exclusion")
-    return block.blocks.map(textForLegalBlock).join("\n");
-  if (block.kind === "image") return `[Image: ${block.alt}]`;
-  return block.sourceText;
-};
-
-const textBlockForRedline = (block: LegalBlock): TextBlock => {
-  if (textBlock(block)) return block;
-  return {
-    id: block.id,
-    kind: "paragraph",
-    position: block.position,
-    sourceText: block.sourceText,
-    segments: block.segments,
-    runs: [
-      {
-        text: textForLegalBlock(block),
-        bold: false,
-        italic: false,
-        strikethrough: false,
-        literal: false,
-        hardBreakAfter: false,
-      },
-    ],
-    footnoteRefs: [],
+const assertRedlineSupported = (document: LegalDocument): void => {
+  const visit = (blocks: readonly LegalBlock[]): void => {
+    for (const block of blocks) {
+      if (!REDLINE_SUPPORTED_KINDS.has(block.kind))
+        throw new AgentDocxError(
+          "DOCX_REDLINE_UNSUPPORTED",
+          `Redline does not support ${block.kind} blocks (block ${block.id})`,
+        );
+      if (block.kind === "exhibit" || block.kind === "length-exclusion")
+        visit(block.blocks);
+    }
   };
+  visit(document.blocks);
 };
+
+const flowView = (block: TextBlock): TextFlowBlock => ({
+  kind: block.kind === "numbered-paragraph" ? "list" : block.kind,
+  runs: [...block.runs],
+  normalizedText: "",
+  sourceSegments: [],
+  position: block.position,
+  footnoteRefs: [],
+  ...(block.kind === "heading" ? { level: block.level } : {}),
+  ...(block.kind === "numbered-paragraph"
+    ? { legalKind: "numbered-paragraph" as const, numberedLevel: block.level - 1 }
+    : {}),
+});
 
 const styleFor = (block: TextBlock, profile: LayoutProfile): TextStyle =>
-  block.kind === "heading"
-    ? profile.headings[String(block.level) as "1"]
-    : block.kind === "blockquote"
-      ? profile.blockquote
-      : block.kind === "numbered-paragraph"
-        ? profile.list
-        : profile.body;
+  flowStyleFor(flowView(block), profile).style;
 
-const paragraphStyleId = (block: TextBlock): string =>
-  block.kind === "heading"
-    ? `AgentDocxHeading${block.level}`
-    : block.kind === "blockquote"
-      ? "AgentDocxBlockQuote"
-      : block.kind === "numbered-paragraph"
-        ? "AgentDocxList"
-        : "AgentDocxBody";
+const paragraphStyleId = (block: TextBlock, profile: LayoutProfile): string =>
+  flowStyleFor(flowView(block), profile).styleId;
 
 const revision = (change: Change, id: number) => {
   const createdAt = change.attribution.createdAt;
@@ -159,7 +123,10 @@ const revision = (change: Change, id: number) => {
       : (() => {
           const parsed = new Date(createdAt);
           if (Number.isNaN(parsed.valueOf()))
-            throw new Error(`Invalid revision attribution date: ${createdAt}`);
+            throw new AgentDocxError(
+              "DOCX_REDLINE_UNSUPPORTED",
+              `Invalid revision attribution date: ${createdAt}`,
+            );
           return parsed.toISOString();
         })();
   return {
@@ -305,8 +272,8 @@ const redlineTextChildren = (
   profile: LayoutProfile,
   nextRevision: () => number,
 ): readonly ParagraphChild[] | null => {
-  const oldText = blockText(base);
-  const newText = blockText(head);
+  const oldText = visibleTextForBlock(base);
+  const newText = visibleTextForBlock(head);
   const edits: VisibleTextEdit[] = [];
   for (const change of changes) {
     const oldRange =
@@ -418,18 +385,7 @@ const commentInitials = (author: string): string =>
     .join("")
     .slice(0, 8);
 
-const isCodePointBoundary = (text: string, offset: number): boolean =>
-  offset >= 0 &&
-  offset <= text.length &&
-  (offset === 0 ||
-    offset === text.length ||
-    !(
-      text.charCodeAt(offset - 1) >= 0xd800 &&
-      text.charCodeAt(offset - 1) <= 0xdbff &&
-      text.charCodeAt(offset) >= 0xdc00 &&
-      text.charCodeAt(offset) <= 0xdfff
-    ));
-
+import { isCodePointBoundary } from "./text.js";
 const commentsFor = (
   annotations: readonly ReviewAnnotation[],
   blocks: readonly TextBlock[],
@@ -475,7 +431,8 @@ const commentChildren = (
       !isCodePointBoundary(text, start) ||
       !isCodePointBoundary(text, end)
     )
-      throw new Error(
+      throw new AgentDocxError(
+        "DOCX_INVALID",
         "Open review comment ranges overlap, split a code point, or exceed their block text",
       );
     if (start > cursor)
@@ -490,35 +447,58 @@ const commentChildren = (
   return children;
 };
 
-const redlineBlocks = (document: LegalDocument): readonly TextBlock[] => [
-  ...document.blocks.map(textBlockForRedline),
-  ...document.footnotes.map(
-    (footnote): TextBlock => ({
-      id: footnote.id,
-      kind: "paragraph",
-      position: footnote.position,
-      sourceText: footnote.sourceText,
-      segments: footnote.segments,
-      runs: [
-        {
-          text: footnote.paragraphs
-            .map((paragraph) =>
-              paragraph.runs
-                .map((run) => `${run.text}${run.hardBreakAfter ? "\n" : ""}`)
-                .join(""),
-            )
-            .join("\n"),
-          bold: false,
-          italic: false,
-          strikethrough: false,
-          literal: false,
-          hardBreakAfter: false,
-        },
-      ],
-      footnoteRefs: [],
-    }),
-  ),
-];
+const redlineBlocks = (document: LegalDocument): readonly TextBlock[] => {
+  const asText = (block: LegalBlock): TextBlock =>
+    textBlock(block)
+      ? block
+      : {
+          id: block.id,
+          kind: "paragraph",
+          position: block.position,
+          sourceText: block.sourceText,
+          segments: block.segments,
+          runs: [
+            {
+              text: visibleTextForBlock(block),
+              bold: false,
+              italic: false,
+              strikethrough: false,
+              literal: false,
+              hardBreakAfter: false,
+            },
+          ],
+          footnoteRefs: [],
+        };
+  return [
+    ...document.blocks.map(asText),
+    ...document.footnotes.map(
+      (footnote): TextBlock => ({
+        id: footnote.id,
+        kind: "paragraph",
+        position: footnote.position,
+        sourceText: footnote.sourceText,
+        segments: footnote.segments,
+        runs: [
+          {
+            text: footnote.paragraphs
+              .map((paragraph) =>
+                paragraph.runs
+                  .map((run) => `${run.text}${run.hardBreakAfter ? "\n" : ""}`)
+                  .join(""),
+              )
+              .join("\n"),
+            bold: false,
+            italic: false,
+            strikethrough: false,
+            literal: false,
+            hardBreakAfter: false,
+          },
+        ],
+        footnoteRefs: [],
+      }),
+    ),
+  ];
+};
 
 /**
  * Emits OOXML `w:ins` and `w:del` runs for source-mapped leaf-block changes.
@@ -532,6 +512,8 @@ export const generateRedlineDocx = async (
   profile: LayoutProfile,
   options: GenerateRedlineDocxOptions = {},
 ): Promise<GeneratedRedlineDocx> => {
+  assertRedlineSupported(base);
+  assertRedlineSupported(head);
   const baseBlocks = redlineBlocks(base);
   const headBlocks = redlineBlocks(head);
   const baseById = new Map(baseBlocks.map((block) => [block.id, block]));
@@ -563,14 +545,14 @@ export const generateRedlineDocx = async (
     const style = styleFor(block, profile);
     children.push(
       new Paragraph({
-        style: paragraphStyleId(block),
+        style: paragraphStyleId(block, profile),
         ...paragraphOptions(style, profile.pagination.widowOrphanControl),
         children: [
           new Bookmark({
             id: blockBookmark(block.id),
             children: [
               deletedRun(
-                blockText(block),
+                visibleTextForBlock(block),
                 style,
                 profile,
                 change,
@@ -593,7 +575,7 @@ export const generateRedlineDocx = async (
         entry.kind === "delete-text" ||
         entry.kind === "replace-text",
     );
-    const currentText = blockText(block);
+    const currentText = visibleTextForBlock(block);
     let childrenForBlock: readonly ParagraphChild[];
     if (change?.kind === "insert-block")
       childrenForBlock = [
@@ -611,7 +593,7 @@ export const generateRedlineDocx = async (
                   paragraph.runs.map((run) => run.text).join(""),
                 )
                 .join("\n")
-            : textForLegalBlock(change.oldBlock)
+            : visibleTextForBlock(change.oldBlock)
           : currentText;
       childrenForBlock = [
         deletedRun(previous, style, profile, change, revisionId++),
@@ -620,11 +602,12 @@ export const generateRedlineDocx = async (
     } else if (change?.kind === "replace-container-shell") {
       const previous = baseById.get(block.id);
       if (!previous)
-        throw new Error(
+        throw new AgentDocxError(
+          "DOCX_INVALID",
           `Missing base block for container shell replacement: ${block.id}`,
         );
       childrenForBlock = [
-        deletedRun(blockText(previous), style, profile, change, revisionId++),
+        deletedRun(visibleTextForBlock(previous), style, profile, change, revisionId++),
         insertedRun(currentText, style, profile, change, revisionId++),
       ];
     } else if (textChanges.length > 0 && baseById.get(block.id)) {
@@ -637,7 +620,7 @@ export const generateRedlineDocx = async (
         () => revisionId++,
       ) ?? [
         deletedRun(
-          blockText(baseById.get(block.id)!),
+          visibleTextForBlock(baseById.get(block.id)!),
           style,
           profile,
           textChanges[0]!,
@@ -658,7 +641,8 @@ export const generateRedlineDocx = async (
     );
     if (rangedComments.length > 0) {
       if (blockChanges.length > 0)
-        throw new Error(
+        throw new AgentDocxError(
+          "DOCX_INVALID",
           "Native redline comments with text ranges cannot target revised blocks",
         );
       childrenForBlock = commentChildren(
@@ -677,7 +661,7 @@ export const generateRedlineDocx = async (
     });
     children.push(
       new Paragraph({
-        style: paragraphStyleId(block),
+        style: paragraphStyleId(block, profile),
         ...paragraphOptions(style, profile.pagination.widowOrphanControl),
         children: [
           ...blockWideComments.map(
@@ -700,7 +684,10 @@ export const generateRedlineDocx = async (
         : (() => {
             const parsed = new Date(annotation.createdAt);
             if (Number.isNaN(parsed.valueOf()))
-              throw new Error(`Invalid comment date: ${annotation.createdAt}`);
+              throw new AgentDocxError(
+                "DOCX_REDLINE_UNSUPPORTED",
+                `Invalid comment date: ${annotation.createdAt}`,
+              );
             return parsed;
           })();
     const author = annotation.author?.name ?? "";

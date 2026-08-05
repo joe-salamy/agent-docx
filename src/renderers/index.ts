@@ -1,30 +1,24 @@
 import { estimateNormalizedDocument } from "../estimate.js";
 import { normalizeMarkdown, type NormalizedDocument } from "../markdown.js";
 import { renderLibreOffice, renderWord } from "./office.js";
-import {
-  AgentDocxError,
-  type Budget,
-  type LibreOfficeRendering,
-  type MeasureOptions,
-  type MeasurementResult,
-  type PageCountSource,
-  type RendererError,
-  type RendererMode,
-  type RendererStatus,
-  type WordRendering,
-} from "../types.js";
+import { toErrorPayload } from "../errors.js";
+import { AgentDocxError } from "../types.js";
+import type {
+  Budget,
+  LibreOfficeRendering,
+  MeasureOptions,
+  MeasurementResult,
+  PageCountSource,
+  RendererError,
+  RendererMode,
+  RendererStatus,
+  WordRendering,
+} from "../measurement.js";
 
 function rendererError(error: unknown, phase: string): RendererError {
-  if (error instanceof AgentDocxError)
-    return {
-      code: error.code,
-      message: error.message,
-      phase,
-      ...(error.details ? { details: error.details } : {}),
-    };
+  const projected = toErrorPayload(error);
   return {
-    code: "INVALID_ARGUMENT",
-    message: error instanceof Error ? error.message : String(error),
+    ...projected,
     phase,
   };
 }
@@ -79,13 +73,39 @@ export async function measureNormalizedDocument(
     deterministic,
     renderers: {},
   };
+  const pagination = deterministic.profile.pagination;
+  if (
+    mode !== "deterministic" &&
+    pagination.widowOrphanControl &&
+    (pagination.orphanLines !== 2 || pagination.widowLines !== 2)
+  )
+    deterministic.warnings = [
+      ...deterministic.warnings,
+      {
+        code: "RENDERER_PARITY_APPROXIMATE",
+        severity: "warning",
+        message:
+          "Word expresses widow/orphan control as on/off (2 lines); configured orphanLines/widowLines differ, so Office pagination may diverge.",
+      },
+    ];
   if (deterministic.budget) output.budget = deterministic.budget;
   const needsDocx =
     options.includeGeneratedDocx === true || mode !== "deterministic";
   if (!needsDocx) return output;
   // Load DOCX generation only when bytes or Office rendering are requested.
   const { generateDocx } = await import("../docx/generate.js");
-  const generated = await generateDocx(flow, deterministic.profile);
+  const { loadFonts } = await import("../resolve.js");
+  const fonts = await loadFonts(
+    options.fontSet,
+    deterministic.profile.requestedFontFamily,
+  );
+  const generated = await generateDocx(flow, deterministic.profile, {
+    ...(options.chrome !== undefined ? { chrome: options.chrome } : {}),
+    ...(options.metadata !== undefined ? { metadata: options.metadata } : {}),
+    ...(options.assets !== undefined ? { assets: options.assets } : {}),
+    pageCount: deterministic.pageCount,
+    fonts,
+  });
   const docx = generated.bytes;
   if (options.includeGeneratedDocx === true) output.generatedDocx = docx;
   if (mode === "deterministic") return output;
@@ -188,7 +208,8 @@ export async function measureNormalizedDocument(
         lines,
       );
     output.budgetBySource = budgets;
-    output.budget = budgets[output.pageCountSource];
+    // pageCountSource always names a key above (deterministic, or the ok renderer).
+    output.budget = budgets[output.pageCountSource]!;
   }
   return output;
 }

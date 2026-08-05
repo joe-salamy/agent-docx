@@ -7,10 +7,14 @@ import {
   compileMarkdown,
   estimateMarkdown,
   inspectDocxTemplate,
+  lowerLegalDocument,
   measureMarkdown,
+  parseLegalMarkdown,
   AgentDocxError,
 } from "../dist/index.js";
+import { measureNormalizedDocument } from "../dist/renderers/index.js";
 import { normalizeMarkdown } from "../dist/markdown.js";
+import { metadata } from "./helpers.js";
 
 test("root API and immutable profiles", () => {
   assert.deepEqual(Object.keys(builtInProfiles), [
@@ -40,6 +44,51 @@ test("generated DOCX bytes are opt-in and publicly inspectable", async () => {
     "PK",
   );
   await inspectDocxTemplate(included.generatedDocx);
+});
+
+test("image blocks reserve their extent in deterministic pagination", async () => {
+  const seal = Uint8Array.from(
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL77QAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  );
+  const parseOptions = {
+    documentId: "motion",
+    profile: "us-district-conventional",
+    metadata: {
+      court: "",
+      jurisdiction: "",
+      caseName: "",
+      docketNumber: "",
+      documentTitle: "",
+      parties: [],
+      counsel: [],
+      certificates: [],
+    },
+    assets: { "seal.png": { bytes: seal, mediaType: "image/png" } },
+  };
+  const measure = (markdown) =>
+    measureNormalizedDocument(
+      lowerLegalDocument(parseLegalMarkdown(markdown, parseOptions).document),
+      { renderer: "deterministic" },
+    );
+  const one = await measure(
+    'Intro.\n\n::image{source="seal.png" alt="Seal" widthTwips="2000" heightTwips="6500"}\n',
+  );
+  assert.equal(one.deterministic.pageCount, 1);
+  assert.ok(
+    one.deterministic.lastPage.usedTwips >= 6500,
+    `last page usedTwips ${one.deterministic.lastPage.usedTwips} must include the image reservation`,
+  );
+  const two = await measure(
+    [
+      '::image{source="seal.png" alt="Seal A" widthTwips="2000" heightTwips="6500"}',
+      "",
+      '::image{source="seal.png" alt="Seal B" widthTwips="2000" heightTwips="6500"}',
+    ].join("\n"),
+  );
+  assert.equal(two.deterministic.pageCount, 2);
 });
 
 test("default metric fonts match the committed manifest", async () => {
@@ -492,16 +541,7 @@ test("template inspection reports numbering, chrome fields, and captions", async
   const compiled = await compileMarkdown("::caption\n\n- One\n- Two\n", {
     documentId: "motion",
     profile: "us-district-conventional",
-    metadata: {
-      court: "United States District Court",
-      jurisdiction: "Northern District of California",
-      caseName: "Example v. Example",
-      docketNumber: "3:26-cv-00001",
-      documentTitle: "Motion",
-      parties: [],
-      counsel: [],
-      certificates: [],
-    },
+    metadata,
     chrome: {
       headers: { default: "{{caseName}} {{page}}" },
       footers: { default: "{{documentTitle}} {{pages}}" },

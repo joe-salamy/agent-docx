@@ -10,20 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { compileMarkdown, createProject, openProject } from "../dist/index.js";
+import { AgentDocxError, compileMarkdown, createProject, openProject } from "../dist/index.js";
 import { readDocxParts, repackDocxParts } from "../dist/docx/package.js";
 import { inspectDocxMaterial } from "../dist/docx/import.js";
-
-const metadata = {
-  court: "United States District Court",
-  jurisdiction: "Northern District of California",
-  caseName: "Example v. Example",
-  docketNumber: "3:26-cv-00001",
-  documentTitle: "Motion",
-  parties: [],
-  counsel: [],
-  certificates: [],
-};
+import { metadata } from "./helpers.js";
 
 test("project checkpoints source-mapped legal documents and review revisions", async () => {
   const directory = await mkdtemp(join(tmpdir(), "agent-docx-project-"));
@@ -1002,6 +992,199 @@ test("project evaluates and applies canonical, Unicode-safe source patches", asy
     const unsafe = await project.evaluatePatch(unsafePatch);
     assert.equal(unsafe.candidate.status, "invalid");
     assert.equal(unsafe.candidate.error.code, "PATCH_INVALID");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("project input taxonomy: missing and malformed manifests", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-docx-taxonomy-"));
+  const manifestPath = join(directory, "agent-docx.json");
+  const sourcePath = join(directory, "motion.md");
+  try {
+    await writeFile(sourcePath, "# Motion\n\nBody.\n");
+    await createProject(manifestPath, {
+      documentId: "motion",
+      source: "motion.md",
+      profile: "us-district-conventional",
+      metadata,
+    });
+    await assert.rejects(
+      openProject(join(directory, "missing.json")),
+      (error) =>
+        error instanceof AgentDocxError && error.code === "PROJECT_NOT_FOUND",
+    );
+    await writeFile(manifestPath, new Uint8Array([0xff, 0xfe, 0x00]));
+    await assert.rejects(
+      openProject(manifestPath),
+      (error) =>
+        error instanceof AgentDocxError && error.code === "PROJECT_INVALID",
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("mutations return the locked post-update state", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-docx-mutation-"));
+  const manifestPath = join(directory, "agent-docx.json");
+  const sourcePath = join(directory, "motion.md");
+  try {
+    await writeFile(sourcePath, "# Motion\n\nBody.\n");
+    const project = await createProject(manifestPath, {
+      documentId: "motion",
+      source: "motion.md",
+      profile: "us-district-conventional",
+      metadata,
+    });
+    const added = await project.addDocument({
+      documentId: "reply",
+      source: "reply.md",
+      profile: "us-district-conventional",
+      metadata,
+      createSource: true,
+    });
+    assert.ok(added.documents.some((entry) => entry.documentId === "reply"));
+    const reopened = await openProject(manifestPath);
+    assert.deepEqual(added, await reopened.getState());
+
+    const pack = {
+      id: "custom-rule@2026-08-01",
+      sourceUrl: "https://example.com/rule.txt",
+      effectiveDate: "2026-08-01",
+      sourceSha256: `sha256:${"a".repeat(64)}`,
+      sourceExcerpt: "Rule text excerpt",
+      checks: [
+        {
+          id: "custom.lines",
+          kind: "counted-lines-maximum",
+          citation: "Local Rule 1",
+          predicate: "No more than 25 counted lines per page",
+          params: { perPageMaximum: 25 },
+        },
+      ],
+      unmodeledProvisions: [],
+    };
+    const packPath = join(directory, "rules", "custom.json");
+    await mkdir(join(directory, "rules"), { recursive: true });
+    await writeFile(packPath, JSON.stringify(pack));
+    await reopened.configureDocument("motion", {
+      baseRevision: "HEAD",
+      changes: { rulePacks: ["rules/custom.json"] },
+      author: { name: "Drafter" },
+      message: "Bind custom pack",
+    });
+    await reopened.checkpoint("motion", {
+      baseRevision: "HEAD",
+      author: { name: "Drafter" },
+      message: "Checkpoint with pack",
+    });
+    await writeFile(
+      packPath,
+      JSON.stringify({
+        ...pack,
+        checks: [
+          {
+            ...pack.checks[0],
+            params: { perPageMaximum: 24 },
+          },
+        ],
+      }),
+    );
+    const changed = await reopened.getState();
+    const motion = changed.documents.find(
+      (entry) => entry.documentId === "motion",
+    );
+    assert.equal(motion.matchesHead.dependencies, false);
+    assert.equal(motion.matchesHead.all, false);
+
+    const withSet = await reopened.addFilingSet({
+      id: "set-1",
+      documentIds: ["motion", "reply"],
+    });
+    assert.ok(withSet.filingSets.some((entry) => entry.id === "set-1"));
+    const withoutSet = await reopened.removeFilingSet("set-1");
+    assert.equal(withoutSet.filingSets.length, 0);
+    assert.deepEqual(withoutSet, await reopened.getState());
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("initialization recovery rethrows non-missing I/O errors", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-docx-recover-"));
+  const manifestPath = join(directory, "agent-docx.json");
+  const sourcePath = join(directory, "motion.md");
+  try {
+    await writeFile(sourcePath, "# Motion\n\nBody.\n");
+    await createProject(manifestPath, {
+      documentId: "motion",
+      source: "motion.md",
+      profile: "us-district-conventional",
+      metadata,
+    });
+    await writeFile(
+      join(directory, ".agent-docx.init.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        state: "preparing",
+        projectId: "11111111-2222-4333-8444-555555555555",
+        manifestPath,
+        storePath: join(directory, ".agent-docx"),
+      }),
+    );
+    await rm(manifestPath, { force: true });
+    await mkdir(manifestPath);
+    await assert.rejects(openProject(manifestPath), (error) => {
+      assert.notEqual(error.code, "PROJECT_NOT_FOUND");
+      assert.notEqual(error.code, "PROJECT_INVALID");
+      return true;
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("corrupt historical objects map to PROJECT_INVALID", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-docx-corrupt-"));
+  const manifestPath = join(directory, "agent-docx.json");
+  const sourcePath = join(directory, "motion.md");
+  try {
+    await writeFile(sourcePath, "# Motion\n\nBody.\n");
+    const project = await createProject(manifestPath, {
+      documentId: "motion",
+      source: "motion.md",
+      profile: "us-district-conventional",
+      metadata,
+    });
+    const checkpoint = await project.checkpoint("motion", {
+      baseRevision: null,
+      author: { name: "Drafter" },
+      message: "Initial",
+    });
+    const revisionId = checkpoint.revision.id;
+    const revisionPath = join(
+      directory,
+      ".agent-docx",
+      "revisions",
+      `${revisionId.slice("sha256:".length)}.json`,
+    );
+    const record = JSON.parse(await readFile(revisionPath, "utf8"));
+    const objectHex = record.legalDocumentObject.slice("sha256:".length);
+    const objectPath = join(
+      directory,
+      ".agent-docx",
+      "objects",
+      "sha256",
+      objectHex.slice(0, 2),
+      objectHex.slice(2),
+    );
+    await writeFile(objectPath, new Uint8Array([0xff, 0x00]));
+    await assert.rejects(
+      project.getDocument("motion", revisionId),
+      (error) =>
+        error instanceof AgentDocxError && error.code === "PROJECT_INVALID",
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

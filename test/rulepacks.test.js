@@ -5,17 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { compileMarkdown, createProject } from "../dist/index.js";
 import { validateUserRulePack } from "../dist/legal/rules.js";
+import { metadata } from "./helpers.js";
 
-const metadata = {
-  court: "United States District Court",
-  jurisdiction: "Northern District of California",
-  caseName: "Example v. Example",
-  docketNumber: "3:26-cv-00001",
-  documentTitle: "Motion",
-  parties: [],
-  counsel: [],
-  certificates: [],
-};
 const sourceHash = `sha256:${"0".repeat(64)}`;
 
 const packWith = (checks) => ({

@@ -14,15 +14,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { PDFDocument } from "pdf-lib";
-import {
-  AgentDocxError,
-  type LibreOfficeRendererOptions,
-  type LibreOfficeRendering,
-  type WordRendererOptions,
-  type RendererError,
-  type WordParagraphDiagnostic,
-  type WordRendering,
-} from "../types.js";
+import { AgentDocxError } from "../types.js";
+import type {
+  LibreOfficeRendererOptions,
+  LibreOfficeRendering,
+  RendererError,
+  WordParagraphDiagnostic,
+  WordRendererOptions,
+  WordRendering,
+} from "../measurement.js";
 import type { BodyParagraphManifestEntry } from "../docx/generate.js";
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 type ProcessResult = {
@@ -151,6 +151,33 @@ export async function renderLibreOffice(
   options: LibreOfficeRendererOptions = {},
   timeoutMs = 60000,
 ): Promise<LibreOfficeRendering> {
+  if (options.installedFonts !== undefined) {
+    for (const [index, font] of options.installedFonts.entries()) {
+      if (
+        typeof font.family !== "string" ||
+        font.family.length === 0 ||
+        typeof font.path !== "string" ||
+        font.path.length === 0 ||
+        !isAbsolute(font.path)
+      )
+        throw new AgentDocxError(
+          "INVALID_FONT",
+          `installedFonts[${index}] must name an absolute font path`,
+        );
+      const entry = await stat(font.path).catch(() => null);
+      if (!entry || !entry.isFile() || entry.isSymbolicLink())
+        throw new AgentDocxError(
+          "INVALID_FONT",
+          `installed font is not a regular readable file: ${font.path}`,
+        );
+    }
+  }
+  const installedFamilies = new Set(
+    (options.installedFonts ?? []).map((font) => font.family.toLowerCase()),
+  );
+  const familiesCovered = requestedFontFamilies.every((family) =>
+    installedFamilies.has(family.toLowerCase()),
+  );
   const executable = await resolveLibreOffice(options.executablePath);
   const versionResult = await run(executable, ["--version"], undefined, 10000);
   if (versionResult.stdoutOverflow || versionResult.stderrOverflow)
@@ -239,7 +266,8 @@ export async function renderLibreOffice(
         "LIBREOFFICE_RENDER_FAILED",
         "LibreOffice PDF has no pages",
       );
-    const calibrated = Boolean(options.installedFonts?.length);
+    const calibrated =
+      (options.installedFonts?.length ?? 0) > 0 && familiesCovered;
     return {
       pageCount,
       versionRaw: versionResult.stdout.trim() || versionResult.stderr.trim(),

@@ -3,16 +3,18 @@ import { createHash } from "node:crypto";
 import * as fontkit from "fontkit";
 import type { Font } from "fontkit";
 import { builtInProfiles } from "./profiles.js";
-import {
-  AgentDocxError,
-  type Diagnostic,
-  type EstimateOptions,
-  type FontSetInput,
-  type LayoutProfile,
-  type MetricFont,
-  type ResolvedLayoutProfile,
-  type TextStyle,
-} from "./types.js";
+import { AgentDocxError } from "./types.js";
+import type { Diagnostic } from "./types.js";
+import type {
+  EstimateOptions,
+} from "./measurement.js";
+import type {
+  FontSetInput,
+  LayoutProfile,
+  MetricFont,
+  ResolvedLayoutProfile,
+  TextStyle,
+} from "./layout/profile.js";
 export type LoadedFace = { bytes: Uint8Array; hash: string; font: Font };
 export type LoadedFonts = {
   regular: LoadedFace;
@@ -148,7 +150,7 @@ function finite(name: string, n: number, min: number, integer = false) {
       `${name} must be ${integer ? "an integer " : ""}>= ${min}`,
     );
 }
-export function validateProfile(p: LayoutProfile) {
+function validateProfile(p: LayoutProfile) {
   finite("page.widthTwips", p.page.widthTwips, 1);
   finite("page.heightTwips", p.page.heightTwips, 1);
   for (const [k, v] of Object.entries(p.page.marginsTwips))

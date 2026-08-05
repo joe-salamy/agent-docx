@@ -7,17 +7,7 @@ import test from "node:test";
 import { createProject } from "../dist/index.js";
 import { inspectDocxMaterial } from "../dist/docx/import.js";
 import { resolveLibreOffice } from "../dist/renderers/office.js";
-
-const metadata = {
-  court: "United States District Court",
-  jurisdiction: "Northern District of California",
-  caseName: "Example v. Example",
-  docketNumber: "3:26-cv-00001",
-  documentTitle: "Motion",
-  parties: [],
-  counsel: [],
-  certificates: [],
-};
+import { metadata } from "./helpers.js";
 
 const sha256 = (bytes) =>
   `sha256:${createHash("sha256").update(bytes).digest("hex")}`;

@@ -5,17 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { createProject } from "../dist/index.js";
 import { readDocxParts, repackDocxParts } from "../dist/docx/package.js";
-
-const metadata = {
-  court: "United States District Court",
-  jurisdiction: "Northern District of California",
-  caseName: "Example v. Example",
-  docketNumber: "3:26-cv-00001",
-  documentTitle: "Motion",
-  parties: [],
-  counsel: [],
-  certificates: [],
-};
+import { metadata } from "./helpers.js";
 
 const xmlFor = async (bytes) => {
   const parts = await readDocxParts(bytes);

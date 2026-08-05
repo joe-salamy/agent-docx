@@ -1,11 +1,11 @@
 import type { NormalizedSourceSegment } from "../markdown.js";
+import type { SourcePosition } from "../types.js";
 import type {
   BuiltInProfileId,
-  FilingKind,
   FontSetInput,
   LayoutProfile,
-  SourcePosition,
-} from "../types.js";
+} from "../layout/profile.js";
+import type { FilingKind } from "../measurement.js";
 
 export type RulePackId = "frap-32@2024-12-01" | "cand-civil@2026-05-01";
 export type BlockId = `b_${string}`;
@@ -70,6 +70,12 @@ export type DocumentChrome = {
   };
 };
 
+export type AuthorityReference = {
+  id: string;
+  category: "cases" | "statutes" | "rules" | "other";
+  short: string;
+};
+
 export type InlineRun = {
   text: string;
   bold: boolean;
@@ -80,11 +86,7 @@ export type InlineRun = {
   link?: { target: string; title?: string };
   footnoteId?: string;
   referenceTarget?: BlockId;
-  authority?: {
-    id: string;
-    category: "cases" | "statutes" | "rules" | "other";
-    short: string;
-  };
+  authority?: AuthorityReference;
 };
 
 export type BlockBase = {

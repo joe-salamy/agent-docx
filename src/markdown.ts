@@ -8,6 +8,10 @@ import {
   type SectionHeading,
   type SourcePosition,
 } from "./types.js";
+import type {
+  AuthorityReference,
+  LegalBlock,
+} from "./legal/model.js";
 type Node = {
   type: string;
   value?: string;
@@ -36,6 +40,7 @@ export type InlineRun = {
   italic: boolean;
   footnoteId?: string;
   literal?: boolean;
+  authority?: AuthorityReference;
 };
 export type TextBlockKind =
   | "paragraph"
@@ -51,6 +56,12 @@ export type TextFlowBlock = {
   position: SourcePosition;
   level?: number;
   footnoteRefs: string[];
+  legalBlockId?: string;
+  legalKind?: LegalBlock["kind"] | "footnote";
+  listOrdered?: boolean;
+  listLevel?: number;
+  numberedLevel?: number;
+  listStart?: number;
   image?: {
     source: string;
     alt: string;
@@ -75,6 +86,13 @@ export type ThematicBreakFlowBlock = {
 export type PageBreakFlowBlock = {
   kind: "pagebreak";
   position: SourcePosition;
+  sectionBreak?: {
+    kind: "next-page" | "continuous";
+    pageNumber?: {
+      format: "decimal" | "lower-roman" | "upper-roman";
+      start: number;
+    };
+  };
 };
 export type FlowBlock =
   | TextFlowBlock
@@ -414,10 +432,6 @@ function inline(
   }
   return { runs, normalizedText, sourceSegments };
 }
-const emptyPos: SourcePosition = {
-  start: { line: 1, column: 1, offset: 0 },
-  end: { line: 1, column: 1, offset: 0 },
-};
 export function normalizeMarkdown(markdown: string): NormalizedDocument {
   const root = unified()
     .use(remarkParse)
@@ -589,4 +603,3 @@ export function normalizeMarkdown(markdown: string): NormalizedDocument {
     for (const block of definition.blocks) validateDefinition(id, block);
   return { blocks, footnotes, paragraphs };
 }
-export const emptyPosition = emptyPos;

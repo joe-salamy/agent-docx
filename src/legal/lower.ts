@@ -15,32 +15,6 @@ import type {
   LegalListBlock,
 } from "./model.js";
 
-type SemanticFlowHints = {
-  legalKind?: LegalBlock["kind"] | "footnote";
-  listOrdered?: boolean;
-  listLevel?: number;
-  numberedLevel?: number;
-  sequence?: string;
-};
-
-type IdentifiedTextFlowBlock = TextFlowBlock &
-  SemanticFlowHints & {
-    legalBlockId?: string;
-    image?: {
-      source: string;
-      alt: string;
-      widthTwips: number;
-      heightTwips: number;
-    };
-  };
-
-type SectionBreakFlowBlock = FlowBlock & {
-  sectionBreak?: {
-    kind: "next-page" | "continuous";
-    pageNumber?: { format: "decimal" | "lower-roman" | "upper-roman"; start: number };
-    legalBlockId: string;
-  };
-};
 
 const asTextFlowBlock = (
   kind: TextFlowBlock["kind"],
@@ -51,8 +25,17 @@ const asTextFlowBlock = (
       }),
   level?: number,
   legalBlockId?: string,
-  semantic: SemanticFlowHints = {},
-): IdentifiedTextFlowBlock => {
+  semantic: Partial<
+    Pick<
+      TextFlowBlock,
+      | "legalKind"
+      | "listOrdered"
+      | "listLevel"
+      | "numberedLevel"
+      | "listStart"
+    >
+  > = {},
+): TextFlowBlock => {
   const runs = paragraph.runs.map((run) => ({
     text: `${run.text}${run.hardBreakAfter ? "\n" : ""}`,
     bold: run.bold,
@@ -62,6 +45,7 @@ const asTextFlowBlock = (
     ...(run.link ? { link: run.link } : {}),
     ...(run.referenceTarget ? { referenceTarget: run.referenceTarget } : {}),
     ...(run.strikethrough ? { strikethrough: true } : {}),
+    ...(run.authority ? { authority: run.authority } : {}),
   }));
   return {
     kind,
@@ -132,6 +116,9 @@ const appendList = (
         legalKind: "list",
         listOrdered: list.ordered,
         listLevel: Math.max(0, list.depth - 1),
+        ...(list.start !== undefined && list.start !== null && list.start !== 1
+          ? { listStart: list.start }
+          : {}),
       });
       blocks.push(flow);
       paragraphs.push(flow);
@@ -174,7 +161,6 @@ const appendBlock = (
     const flow = asTextFlowBlock("list", block, undefined, block.id, {
       legalKind: "numbered-paragraph",
       numberedLevel: block.level - 1,
-      sequence: block.sequence,
     });
     blocks.push(flow);
     paragraphs.push(flow);
@@ -208,11 +194,10 @@ const appendBlock = (
             sectionBreak: {
               kind: block.breakKind,
               ...(block.pageNumber ? { pageNumber: block.pageNumber } : {}),
-              legalBlockId: block.id,
             },
           }
         : {}),
-    } as SectionBreakFlowBlock);
+    });
     return;
   }
   if (block.kind === "exhibit") {

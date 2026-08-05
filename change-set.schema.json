@@ -17,9 +17,9 @@
   "$defs": {
     "revisionId": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "changeId": { "type": "string", "pattern": "^c_[0-9a-f]{64}$" },
-    "blockId": { "type": "string", "pattern": "^b_[0-9a-f-]{36}$" },
+    "blockId": { "type": "string", "pattern": "^b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
     "documentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
-    "actor": { "type": "object", "additionalProperties": false, "required": ["name"], "properties": { "name": { "type": "string" }, "email": { "type": "string" } } },
+    "actor": { "type": "object", "additionalProperties": false, "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "email": { "type": "string" } } },
     "attribution": { "type": "object", "additionalProperties": false, "required": ["author", "createdAt"], "properties": { "author": { "anyOf": [{ "$ref": "#/$defs/actor" }, { "type": "null" }] }, "createdAt": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }] }, "sourceRevisionId": { "type": "string" } } },
     "range": { "type": "object", "additionalProperties": false, "required": ["start", "end", "text"], "properties": { "start": { "type": "integer", "minimum": 0 }, "end": { "type": "integer", "minimum": 0 }, "text": { "type": "string" } } },
     "location": { "type": "object", "additionalProperties": false, "required": ["collection", "parentId", "index", "sourceOffset"], "properties": { "collection": { "enum": ["body", "footnotes"] }, "parentId": { "anyOf": [{ "$ref": "#/$defs/blockId" }, { "type": "null" }] }, "index": { "type": "integer", "minimum": 0 }, "sourceOffset": { "type": "integer", "minimum": 0 } } },

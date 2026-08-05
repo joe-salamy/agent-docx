@@ -5,12 +5,12 @@ import type {
   Actor,
   AddressableBlock,
   BlockId,
-  InlineRun,
   LegalBlock,
   LegalDocument,
   ReviewAnnotation,
   RevisionId,
 } from "../legal/model.js";
+import { visibleBlock } from "../legal/visible-text.js";
 import type {
   AnnotationChange,
   AttributionSpan,
@@ -21,6 +21,7 @@ import type {
   ContainerShell,
   RevisionDeltaRecord,
 } from "./types.js";
+export { visibleTextForBlock } from "../legal/visible-text.js";
 export type JsonObject = { readonly [key: string]: JsonValue };
 const compareText = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
@@ -193,7 +194,8 @@ type FlatBlock = {
 
 const canonicalHash = (value: unknown): string => {
   const serialized = canonicalize(value);
-  if (serialized === undefined) throw new Error("Cannot canonicalize change");
+  if (serialized === undefined)
+    throw new AgentDocxError("INTERNAL_ERROR", "Cannot canonicalize change");
   return createHash("sha256").update(serialized).digest("hex");
 };
 
@@ -210,7 +212,8 @@ const withoutPositions = (value: unknown): unknown => {
 
 const canonicalBlock = (block: AddressableBlock): string => {
   const serialized = canonicalize(withoutPositions(block));
-  if (serialized === undefined) throw new Error("Cannot canonicalize block");
+  if (serialized === undefined)
+    throw new AgentDocxError("INTERNAL_ERROR", "Cannot canonicalize block");
   return serialized;
 };
 
@@ -413,51 +416,6 @@ export const reattributeVisibleText = (
   return spans.length > 0 ? spans : spansFor(newText, insertedAttribution);
 };
 
-const visibleRuns = (runs: readonly InlineRun[]): string =>
-  runs.map((run) => `${run.text}${run.hardBreakAfter ? "\n" : ""}`).join("");
-
-const visibleBlock = (block: AddressableBlock): string => {
-  if (block.kind === "footnote")
-    return block.paragraphs
-      .map((paragraph) => visibleRuns(paragraph.runs))
-      .join("\n");
-  if (
-    block.kind === "paragraph" ||
-    block.kind === "blockquote" ||
-    block.kind === "heading" ||
-    block.kind === "numbered-paragraph"
-  )
-    return visibleRuns(block.runs);
-  if (block.kind === "list")
-    return block.items
-      .flatMap((item) => [
-        ...item.paragraphs.map((paragraph) => visibleRuns(paragraph.runs)),
-        ...item.children.map((child) => visibleBlock(child)),
-      ])
-      .join("\n");
-  if (block.kind === "table")
-    return block.rows
-      .map((row) =>
-        row
-          .map((cell) =>
-            cell.paragraphs
-              .map((paragraph) => visibleRuns(paragraph.runs))
-              .join("\n"),
-          )
-          .join("\t"),
-      )
-      .join("\n");
-  if (block.kind === "exhibit" || block.kind === "length-exclusion")
-    return block.blocks.map(visibleBlock).join("\n");
-  if (block.kind === "image") return block.alt;
-  if (block.kind === "signature") return block.counselId;
-  if (block.kind === "certificate") return block.certificateId;
-  return "";
-};
-
-export const visibleTextForBlock = (block: AddressableBlock): string =>
-  visibleBlock(block);
-
 const flatten = (
   blocks: readonly LegalBlock[],
   collection: "body" | "footnotes",
@@ -606,7 +564,7 @@ const containerShellSignature = (
     sourceTexts: shell.sourceRanges.map((range) => range.text),
   });
   if (serialized === undefined)
-    throw new Error("Cannot canonicalize container shell");
+    throw new AgentDocxError("INTERNAL_ERROR", "Cannot canonicalize container shell");
   return serialized;
 };
 
@@ -1596,10 +1554,14 @@ export const createRevisionDelta = (
     {
       baseConfig,
       headConfig,
-      baseDependencies: parent.dependencyObjects,
-      headDependencies,
-      baseSource,
-      headSource,
+      ...(parent.dependencyObjects !== undefined
+        ? { baseDependencies: parent.dependencyObjects }
+        : {}),
+      ...(headDependencies !== undefined
+        ? { headDependencies }
+        : {}),
+      ...(baseSource !== undefined ? { baseSource } : {}),
+      ...(headSource !== undefined ? { headSource } : {}),
     },
   );
   const attributed = baseBlocks

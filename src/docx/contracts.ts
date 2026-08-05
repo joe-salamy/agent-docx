@@ -1,10 +1,18 @@
+import type { Diagnostic, SourcePosition } from "../types.js";
 import type {
+  BuiltInProfileId,
+  LayoutProfile,
+  LayoutOverrides,
+  PageGeometry,
+  TextStyle,
+} from "../layout/profile.js";
+import type {
+  LibreOfficeRendererOptions,
   MeasurementResult,
   PageCountSource,
+  ProvenanceSource,
   RendererMode,
-  SourcePosition,
-  LibreOfficeRendererOptions,
-} from "../types.js";
+} from "../measurement.js";
 import type {
   Actor,
   BlockId,
@@ -15,7 +23,89 @@ import type {
 } from "../legal/model.js";
 import type { ValidationResult } from "../legal/rules.js";
 import type { ProjectMeasurementResult } from "../project/contracts.js";
-import type { ChangeSet, RevisionRecord } from "../revisions/types.js";
+import type { ChangeSet } from "../revisions/types.js";
+export type InspectTemplateOptions = {
+  fallbackProfile?: BuiltInProfileId | LayoutProfile;
+};
+
+export type InspectedHeaderFooterReference = {
+  kind: "header" | "footer";
+  variant: "default" | "first" | "even";
+  relationshipId: string;
+  partPath: string | null;
+};
+
+export type InspectedSection = {
+  index: number;
+  page: PageGeometry;
+  sourcePart: string;
+  headerFooterReferences: readonly InspectedHeaderFooterReference[];
+};
+
+export type InspectedField = {
+  partPath: string;
+  instruction: string;
+  kind: string;
+};
+
+export type InspectedHeaderFooter = InspectedHeaderFooterReference & {
+  sectionIndex: number;
+  text: string;
+  fields: readonly InspectedField[];
+};
+
+export type InspectedNumbering = {
+  partPath: string | null;
+  abstractNumbers: readonly { id: string; levels: number }[];
+  instances: readonly { id: string; abstractNumberId: string | null }[];
+};
+
+export type InspectedCaptionComponent = {
+  paragraphIndex: number;
+  styleId: string | null;
+  text: string;
+  sequence: string | null;
+};
+
+export type UnsupportedTemplatePart = {
+  partPath: string;
+  reason: string;
+};
+
+export type InspectedStyle = {
+  styleId: string | null;
+  name: string | null;
+  resolved: TextStyle;
+  requestedFontFamily: string;
+  provenance: Readonly<Record<string, ProvenanceSource | string>>;
+};
+
+export type DocxTemplateInspection = {
+  imported: LayoutOverrides;
+  sections: readonly InspectedSection[];
+  selectedSection: number;
+  styles: {
+    body: InspectedStyle;
+    headings: Readonly<
+      Record<"1" | "2" | "3" | "4" | "5" | "6", InspectedStyle>
+    >;
+    quote: InspectedStyle;
+    list: InspectedStyle;
+    footnote: InspectedStyle;
+    footnoteReference: InspectedStyle | null;
+  };
+  numbering: InspectedNumbering;
+  headerFooters: readonly InspectedHeaderFooter[];
+  fields: readonly InspectedField[];
+  captions: readonly InspectedCaptionComponent[];
+  fonts: {
+    theme: Readonly<{ major: string | null; minor: string | null }>;
+    families: readonly { family: string; sourcePart: string }[];
+  };
+  unsupportedParts: readonly UnsupportedTemplatePart[];
+  package: { sha256: string; mainPart: string; macroEnabled: boolean };
+  warnings: readonly Diagnostic[];
+};
 
 export type BodyBlockManifestEntry = {
   id: BlockId;
@@ -289,16 +379,6 @@ export type DocxImportResult =
       revisions: readonly [RevisionId, RevisionId];
     });
 
-export type GeneratedDocxOptions = {
-  revision?: RevisionRecord;
-  changeSet?: ChangeSet;
-  annotations: readonly ReviewAnnotation[];
-  validation: ValidationResult;
-  dependencies: ReadonlyMap<
-    string,
-    { sha256: RevisionId; mediaType: string; bytes: Uint8Array }
-  >;
-};
 export type RedlineImportResult = {
   schemaVersion: 1;
   documentId: string;

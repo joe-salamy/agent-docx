@@ -22,6 +22,31 @@ test("LibreOffice resolver rejects an explicit missing executable", async () => 
   );
 });
 
+test("LibreOffice installed font entries must be readable regular files", async () => {
+  await assert.rejects(
+    () =>
+      renderLibreOffice(new Uint8Array([1]), ["Times New Roman"], {
+        executablePath: "/definitely/missing/soffice",
+        installedFonts: [
+          { family: "Times New Roman", path: "/definitely/missing/font.ttf" },
+        ],
+      }),
+    (error) =>
+      error instanceof AgentDocxError && error.code === "INVALID_FONT",
+  );
+  await assert.rejects(
+    () =>
+      renderLibreOffice(new Uint8Array([1]), ["Times New Roman"], {
+        executablePath: "/definitely/missing/soffice",
+        installedFonts: [
+          { family: "Times New Roman", path: "relative/font.ttf" },
+        ],
+      }),
+    (error) =>
+      error instanceof AgentDocxError && error.code === "INVALID_FONT",
+  );
+});
+
 test("explicit renderer paths must be absolute", async () => {
   await assert.rejects(
     () => resolveLibreOffice("relative-soffice"),

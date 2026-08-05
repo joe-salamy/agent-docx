@@ -1,5 +1,6 @@
 import type { DocumentChrome } from "../legal/model.js";
-import { AgentDocxError, type LayoutProfile, type TextStyle } from "../types.js";
+import { AgentDocxError } from "../types.js";
+import type { LayoutProfile, TextStyle } from "./profile.js";
 
 export type PageChromeKind = "default" | "first" | "even";
 
@@ -63,7 +64,7 @@ const templateFor = (
  * Returns Word-equivalent body bounds for one header/footer page kind. The same
  * calculation is shared by deterministic pagination and DOCX section margins.
  */
-export const bodyBoundsFor = (
+const bodyBoundsFor = (
   profile: LayoutProfile,
   chrome: DocumentChrome | undefined,
   kind: PageChromeKind,

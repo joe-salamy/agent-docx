@@ -3,7 +3,7 @@ import type {
   LayoutProfile,
   TableStyle,
   TextStyle,
-} from "./types.js";
+} from "./layout/profile.js";
 const double = { rule: "auto", numerator: 480, denominator: 240 } as const;
 const single = { rule: "auto", numerator: 240, denominator: 240 } as const;
 const style = (

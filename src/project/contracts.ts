@@ -1,11 +1,13 @@
 import type {
   BuiltInProfileId,
-  FilingKind,
   FontSetInput,
   LayoutProfile,
+} from "../layout/profile.js";
+import type {
+  FilingKind,
   MeasureOptions,
   MeasurementResult,
-} from "../types.js";
+} from "../measurement.js";
 import type {
   Actor,
   AnnotationId,

@@ -101,7 +101,6 @@
     "prepack": "pnpm run build",
     "verify:pack": "node scripts/verify-pack.mjs",
     "accuracy": "node scripts/accuracy.mjs",
-    "calibrate": "node scripts/accuracy.mjs",
     "social:preview": "node scripts/social-preview.mjs",
     "smoke:agent": "pnpm run build && node scripts/smoke-agent-workflow.mjs"
   },

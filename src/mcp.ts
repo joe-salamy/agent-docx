@@ -1,19 +1,16 @@
+import { readFile } from "node:fs/promises";
 import {
   agentActions,
-  dispatchAgentRequest,
+  executeAgentRequest,
   serializeAgentValue,
 } from "./agent.js";
-import { AgentDocxError, type ErrorCode } from "./types.js";
+import { toErrorPayload } from "./errors.js";
+import type { CliRuntime } from "./cli-contract.js";
 
-export type McpRuntime = {
-  cwd: string;
-  stdinIsTTY: boolean;
-  readStdinChunks(): AsyncGenerator<Uint8Array>;
-  writeStdout(text: string): Promise<void>;
-  writeStderr(text: string): Promise<void>;
-  onceSignal(signal: string, listener: () => void): void;
-  version: string;
-};
+export type McpRuntime = Pick<
+  CliRuntime,
+  "cwd" | "version" | "readStdinChunks" | "writeStdout" | "onceSignal"
+>;
 
 type RpcId = string | number | null;
 type RpcError = {
@@ -71,9 +68,6 @@ const rpcResult = (id: RpcId, result: unknown): RpcReply => ({
   result,
 });
 
-const errorCode = (error: unknown): ErrorCode | undefined =>
-  error instanceof AgentDocxError ? error.code : undefined;
-
 const errorMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message;
   if (isRecord(error) && typeof error.message === "string")
@@ -84,22 +78,176 @@ const errorMessage = (error: unknown): string => {
 const isEpipe = (error: unknown): boolean =>
   isRecord(error) && error.code === "EPIPE";
 
-const tools = (): PlainRecord[] =>
-  agentActions.map((name) => ({
-    name,
-    description:
-      "agent-docx version-1 protocol action (params are validated as in agent-request.schema.json); project defaults to ./agent-docx.json",
-    inputSchema: {
-      type: "object",
-      properties: {
-        project: {
-          type: "string",
-          description: "Project manifest path, relative to the server cwd",
+type ActionSchema = {
+  properties?: Record<string, unknown>;
+  required?: readonly unknown[];
+};
+
+type LoadedActionSchemas = {
+  byAction: Map<string, ActionSchema>;
+  defs: Record<string, unknown>;
+};
+
+type SchemaBranch = {
+  $ref?: string;
+  properties?: PlainRecord;
+  required?: readonly unknown[];
+};
+
+const resolveActionDef = (
+  name: string,
+  defs: Record<string, unknown>,
+): ActionSchema => {
+  const def = defs[name];
+  if (typeof def !== "object" || def === null || Array.isArray(def))
+    return {};
+  const { properties, required, allOf } = def as ActionSchema & {
+    allOf?: readonly SchemaBranch[];
+  };
+  const merged: ActionSchema = {
+    ...(properties ? { properties } : {}),
+    ...(required ? { required } : {}),
+  };
+  for (const branch of allOf ?? []) {
+    const inner =
+      typeof branch.$ref === "string"
+        ? resolveActionDef(branch.$ref.replace(/^#\/\$defs\//, ""), defs)
+        : {
+            ...(branch.properties ? { properties: branch.properties } : {}),
+            ...(branch.required ? { required: branch.required } : {}),
+          };
+    merged.properties = {
+      ...(inner.properties ?? {}),
+      ...(merged.properties ?? {}),
+    };
+    merged.required = [
+      ...(inner.required ?? []),
+      ...(merged.required ?? []),
+    ];
+  }
+  return merged;
+};
+
+const EXTERNAL_ACTION_SCHEMAS: ReadonlyArray<{
+  id: string;
+  file: string;
+  defKey: string;
+}> = [
+  {
+    id: "https://agent-docx.dev/schemas/change-set-v1.json",
+    file: "../change-set.schema.json",
+    defKey: "changeSet",
+  },
+  {
+    id: "https://agent-docx.dev/schemas/source-patch-v1.json",
+    file: "../source-patch.schema.json",
+    defKey: "sourcePatch",
+  },
+];
+
+const rewriteRefs = (
+  node: unknown,
+  rewrite: (value: string) => string,
+): void => {
+  if (Array.isArray(node)) {
+    for (const item of node) rewriteRefs(item, rewrite);
+    return;
+  }
+  if (typeof node !== "object" || node === null) return;
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "$ref" && typeof value === "string") {
+      (node as Record<string, unknown>)[key] = rewrite(value);
+    } else {
+      rewriteRefs(value, rewrite);
+    }
+  }
+};
+
+const loadActionSchemas = async (): Promise<LoadedActionSchemas | null> => {
+  try {
+    const raw = JSON.parse(
+      await readFile(
+        new URL("../agent-request.schema.json", import.meta.url),
+        "utf8",
+      ),
+    ) as {
+      $defs?: Record<string, unknown>;
+      allOf?: Array<{ oneOf?: Array<SchemaBranch & { properties?: PlainRecord }> }>;
+    };
+    const defs: Record<string, unknown> = { ...(raw.$defs ?? {}) };
+    for (const external of EXTERNAL_ACTION_SCHEMAS) {
+      const bundled = JSON.parse(
+        await readFile(new URL(external.file, import.meta.url), "utf8"),
+      ) as Record<string, unknown>;
+      delete bundled.$id;
+      delete bundled.$schema;
+      delete bundled.title;
+      // Rewrite this bundle's own local refs so they resolve inside the
+      // bundle once it is nested under the tool schema's $defs.
+      const prefix = `#/$defs/${external.defKey}`;
+      rewriteRefs(bundled, (value) =>
+        value.startsWith("#/$defs/")
+          ? `${prefix}/$defs/${value.slice("#/$defs/".length)}`
+          : value,
+      );
+      defs[external.defKey] = bundled;
+    }
+    // Global pass: only the absolute external schema IDs become local refs.
+    for (const external of EXTERNAL_ACTION_SCHEMAS) {
+      const prefix = `#/$defs/${external.defKey}`;
+      rewriteRefs(defs, (value) =>
+        value.startsWith(external.id)
+          ? `${prefix}${value.slice(external.id.length)}`
+          : value,
+      );
+    }
+    const byAction = new Map<string, ActionSchema>();
+    for (const branch of raw.allOf?.[0]?.oneOf ?? []) {
+      const action = branch.properties?.action as
+        | { const?: string }
+        | undefined;
+      const params = branch.properties?.params as { $ref?: string } | undefined;
+      if (typeof action?.const !== "string" || typeof params?.$ref !== "string")
+        continue;
+      const resolved = resolveActionDef(
+        params.$ref.replace(/^#\/\$defs\//, ""),
+        defs,
+      );
+      byAction.set(action.const, resolved);
+    }
+    return byAction.size > 0 ? { byAction, defs } : null;
+  } catch {
+    // Fall back to the generic schema; the file only loads under normal packaging.
+    return null;
+  }
+};
+
+const tools = (
+  loaded: LoadedActionSchemas | null,
+): PlainRecord[] =>
+  agentActions.map((name) => {
+    const params = loaded?.byAction.get(name);
+    return {
+      name,
+      description:
+        "agent-docx version-1 protocol action (params are validated as in agent-request.schema.json); project defaults to ./agent-docx.json",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ...(params?.properties ?? {}),
+          project: {
+            type: "string",
+            description: "Project manifest path, relative to the server cwd",
+          },
         },
+        ...(params?.required && params.required.length > 0
+          ? { required: [...params.required] }
+          : {}),
+        ...(loaded ? { $defs: loaded.defs } : {}),
+        additionalProperties: true,
       },
-      additionalProperties: true,
-    },
-  }));
+    };
+  });
 
 const initializeResult = (params: unknown, version: string): PlainRecord => {
   const requested = isRecord(params) ? params.protocolVersion : undefined;
@@ -132,6 +280,12 @@ const toolCallResult = async (
   if (rawArguments !== undefined && !isRecord(rawArguments))
     return rpcError(id, -32602, "Tool arguments must be an object");
   const argumentsObject = rawArguments === undefined ? {} : rawArguments;
+  if (
+    argumentsObject.project !== undefined &&
+    (typeof argumentsObject.project !== "string" ||
+      argumentsObject.project === "")
+  )
+    return rpcError(id, -32602, "project must be a non-empty string");
   const callParams: PlainRecord = { ...argumentsObject };
   delete callParams.project;
 
@@ -145,7 +299,7 @@ const toolCallResult = async (
     envelope.project = argumentsObject.project;
 
   try {
-    const result = await dispatchAgentRequest(envelope, runtime.cwd);
+    const result = await executeAgentRequest(envelope, runtime.cwd);
     const serialized = serializeAgentValue(result.value, runtime.cwd);
     const toolResult: PlainRecord = {
       content: [{ type: "text", text: JSON.stringify(serialized) }],
@@ -154,13 +308,13 @@ const toolCallResult = async (
     if (isPlainObject(serialized)) toolResult.structuredContent = serialized;
     return rpcResult(id, toolResult);
   } catch (error) {
-    const code = errorCode(error);
-    const message = errorMessage(error);
+    const projected = toErrorPayload(error);
     return rpcResult(id, {
-      content: [{ type: "text", text: message }],
+      content: [{ type: "text", text: projected.message }],
       structuredContent: {
-        code: code ?? "INTERNAL_ERROR",
-        message,
+        code: projected.code,
+        message: projected.message,
+        ...(projected.details ? { details: projected.details } : {}),
       },
       isError: true,
     });
@@ -171,6 +325,7 @@ const handleMessage = async (
   line: string,
   runtime: McpRuntime,
   writeReply: (reply: RpcReply) => Promise<void>,
+  actionSchemas: LoadedActionSchemas | null,
 ): Promise<void> => {
   let message: unknown;
   try {
@@ -220,7 +375,7 @@ const handleMessage = async (
       await writeReply(rpcResult(id, {}));
       return;
     case "tools/list":
-      await writeReply(rpcResult(id, { tools: tools() }));
+      await writeReply(rpcResult(id, { tools: tools(actionSchemas) }));
       return;
     case "tools/call":
       await writeReply(await toolCallResult(id, message.params, runtime));
@@ -249,6 +404,7 @@ const closeIterator = async (
 };
 
 export const runMcpServer = async (runtime: McpRuntime): Promise<number> => {
+  const actionSchemas = await loadActionSchemas();
   let stopping = false;
   let resolveStop!: () => void;
   const stopPromise = new Promise<void>((resolve) => {
@@ -291,7 +447,7 @@ export const runMcpServer = async (runtime: McpRuntime): Promise<number> => {
       const line = pending.slice(0, newline);
       pending = pending.slice(newline + 1);
       if (line.trim() === "") continue;
-      await handleMessage(line, runtime, writeReply);
+      await handleMessage(line, runtime, writeReply, actionSchemas);
     }
   };
 
@@ -345,7 +501,7 @@ export const runMcpServer = async (runtime: McpRuntime): Promise<number> => {
     const line = pending;
     pending = "";
     try {
-      await handleMessage(line, runtime, writeReply);
+      await handleMessage(line, runtime, writeReply, actionSchemas);
     } catch {
       return 1;
     }

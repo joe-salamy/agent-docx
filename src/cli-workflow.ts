@@ -1,8 +1,8 @@
-import { readFile, stat } from "node:fs/promises";
-import { parseArgs } from "node:util";
+import { stat } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import chokidar from "chokidar";
-import type { CliCommand } from "./cli-args.js";
+import { parseCliArgsStrict, type CliCommand } from "./cli-args.js";
+import { readInputFile } from "./input.js";
+import { toErrorPayload } from "./errors.js";
 import {
   agentActions,
   dispatchAgentRequest,
@@ -13,13 +13,10 @@ import {
   type AgentRequest,
 } from "./agent.js";
 import { openProject } from "./project/index.js";
-import { jsonlLines, MAX_JSONL_LINE_BYTES } from "./jsonl.js";
-import {
-  AgentDocxError,
-  type CliErrorPayload,
-  type JsonValue,
-} from "./types.js";
-import type { CliRuntime, CliSequenceState } from "./cli-run.js";
+import { jsonlLines } from "./jsonl.js";
+import { AgentDocxError, type JsonValue } from "./types.js";
+import type { CliErrorPayload, CliRuntime, CliSequenceState } from "./cli-contract.js";
+import { runWatchController } from "./watch.js";
 
 const string = { type: "string" } as const;
 const boolean = { type: "boolean" } as const;
@@ -31,23 +28,13 @@ const parse = (
   args: readonly string[],
   options: Record<string, { type: "string" | "boolean" }>,
 ): Parsed => {
-  const parsed = parseArgs({
+  const parsed = parseCliArgsStrict({
     args: [...args],
     options,
     strict: true,
     allowPositionals: true,
     tokens: true,
   });
-  const seen = new Set<string>();
-  for (const token of parsed.tokens) {
-    if (token.kind !== "option" || !token.name) continue;
-    if (seen.has(token.name))
-      throw new AgentDocxError(
-        "INVALID_ARGUMENT",
-        `Duplicate option: --${token.name}`,
-      );
-    seen.add(token.name);
-  }
   return { values: parsed.values as Values, positionals: parsed.positionals };
 };
 
@@ -75,7 +62,11 @@ const readJson = async (
   label: string,
 ): Promise<unknown> => {
   try {
-    return JSON.parse(await readFile(resolve(cwd, path), "utf8"));
+    return JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(
+        await readInputFile(resolve(cwd, path), label),
+      ),
+    );
   } catch (error) {
     throw new AgentDocxError(
       "INVALID_ARGUMENT",
@@ -106,7 +97,7 @@ const request = (
   action: AgentAction,
   project: string | undefined,
   params: Record<string, unknown>,
-): AgentRequest => ({
+): Record<string, unknown> => ({
   schemaVersion: 1,
   action,
   ...(project ? { project } : {}),
@@ -123,19 +114,8 @@ const print = async (
   );
 };
 
-const errorPayload = (error: unknown): CliErrorPayload => {
-  if (error instanceof AgentDocxError)
-    return {
-      code: error.code,
-      message: error.message,
-      ...(error.details ? { details: error.details } : {}),
-    };
-  return {
-    code: "INTERNAL_ERROR",
-    message: error instanceof Error ? error.message : String(error),
-  };
-};
-
+const errorPayload = (error: unknown): CliErrorPayload =>
+  toErrorPayload(error);
 const publicProjectPath = (cwd: string, path: string): string => {
   const project = relative(cwd, resolve(cwd, path)).split(sep).join("/");
   return project || ".";
@@ -293,12 +273,6 @@ const runAgentInput = async (
     if (!line.trim()) continue;
     let raw: unknown = null;
     try {
-      if (new TextEncoder().encode(line).byteLength > MAX_JSONL_LINE_BYTES)
-        throw new AgentDocxError(
-          "INVALID_ARGUMENT",
-          `JSONL input line exceeds ${MAX_JSONL_LINE_BYTES} bytes`,
-          { maxBytes: MAX_JSONL_LINE_BYTES },
-        );
       raw = JSON.parse(line);
       const parsed = parseAgentRequest(raw);
       if (project && parsed.project !== undefined)
@@ -306,8 +280,10 @@ const runAgentInput = async (
           "INVALID_ARGUMENT",
           "Agent request project conflicts with command --project",
         );
+      const dispatchRequest: AgentRequest =
+        project === undefined ? parsed : { ...parsed, project };
       const result = await dispatchAgentRequest(
-        project ? { ...parsed, project } : parsed,
+        dispatchRequest,
         runtime.cwd,
       );
       await runtime.writeStdout(
@@ -486,68 +462,41 @@ const runAgentWatch = async (
       `Document not found: ${targetDocument}`,
     );
 
-  let watchedPaths = new Set(initialDependencies.paths);
-  const watcher = chokidar.watch([...watchedPaths], { ignoreInitial: true });
-  await new Promise<void>((resolveReady, rejectReady) => {
-    watcher.once("ready", resolveReady).once("error", rejectReady);
-  });
+  let lastRevision = initial.head;
   const emit = async (record: JsonValue): Promise<void> =>
     runtime.writeStdout(`${JSON.stringify(record)}\n`);
-  await emit({
-    schemaVersion: 1,
-    kind: "ready",
-    sequence: nextAgentSequence(sequence),
-    requestId: null,
-    action: "project.watch",
-    project: publicProject,
-    documentId: targetDocument,
-    revision: initial.head,
-    value: {
-      protocolVersion: 1,
-      capabilities: [...agentActions].sort(),
-      dependencies: initialDependencies.entries,
+  const watchCode = await runWatchController({
+    watchPaths: initialDependencies.paths,
+    debounceMs: 100,
+    runInitial: false,
+    onReady: async () => {
+      await emit({
+        schemaVersion: 1,
+        kind: "ready",
+        sequence: nextAgentSequence(sequence),
+        requestId: null,
+        action: "project.watch",
+        project: publicProject,
+        documentId: targetDocument,
+        revision: initial.head,
+        value: {
+          protocolVersion: 1,
+          capabilities: [...agentActions].sort(),
+          dependencies: initialDependencies.entries,
+        },
+      });
     },
-  });
-
-  const refreshWatchedPaths = async (): Promise<void> => {
-    const next = await watchDependencies(
-      runtime.cwd,
-      projectPath,
-      targetDocument,
-    );
-    const nextPaths = new Set(next.paths);
-    const removed = [...watchedPaths].filter((path) => !nextPaths.has(path));
-    const added = [...nextPaths].filter((path) => !watchedPaths.has(path));
-    if (removed.length) await watcher.unwatch(removed);
-    if (added.length) watcher.add(added);
-    watchedPaths = nextPaths;
-  };
-
-  let closing = false;
-  let timer: NodeJS.Timeout | undefined;
-  let pending = Promise.resolve();
-  let lastRevision = initial.head;
-  const emitError = async (error: unknown): Promise<void> => {
-    if (closing) return;
-    await emit({
-      schemaVersion: 1,
-      kind: "error",
-      sequence: nextAgentSequence(sequence),
-      requestId: null,
-      action: "document.measure",
-      project: publicProject,
-      documentId: targetDocument,
-      revision: null,
-      error: errorPayload(error),
-    });
-  };
-  const measure = async (): Promise<void> => {
-    if (closing) return;
-    try {
+    run: async () => {
       const refreshed = await openProject(resolve(runtime.cwd, projectPath));
       const result = await refreshed.measure(targetDocument);
-      await refreshWatchedPaths();
-      if (closing) return;
+      const dependencies = await watchDependencies(
+        runtime.cwd,
+        projectPath,
+        targetDocument,
+      );
+      return { value: result, watchPaths: dependencies.paths };
+    },
+    emitResult: async (result) => {
       lastRevision = result.revision;
       await emit({
         schemaVersion: 1,
@@ -560,40 +509,22 @@ const runAgentWatch = async (
         revision: result.revision,
         value: serializeAgentValue(result, runtime.cwd),
       });
-    } catch (error) {
-      await emitError(error);
-    }
-  };
-  const enqueue = (operation: () => Promise<void>): void => {
-    pending = pending.then(operation);
-    void pending.catch(() => undefined);
-  };
-  const queue = (): void => {
-    if (closing) return;
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = undefined;
-      enqueue(measure);
-    }, 100);
-  };
-  watcher
-    .on("change", queue)
-    .on("add", queue)
-    .on("unlink", queue)
-    .on("addDir", queue)
-    .on("unlinkDir", queue)
-    .on("error", (error) => {
-      if (!closing) enqueue(() => emitError(error));
-    });
-
-  const completion = Promise.withResolvers<number>();
-  const stop = async (reason: "SIGINT" | "SIGTERM"): Promise<void> => {
-    if (closing) return;
-    closing = true;
-    clearTimeout(timer);
-    try {
-      await pending;
-      await watcher.close();
+    },
+    emitError: async (error) => {
+      await emit({
+        schemaVersion: 1,
+        kind: "error",
+        sequence: nextAgentSequence(sequence),
+        requestId: null,
+        action: "document.measure",
+        project: publicProject,
+        documentId: targetDocument,
+        revision: null,
+        error: errorPayload(error),
+      });
+    },
+    signal: (name, listener) => runtime.onceSignal(name, listener),
+    onStop: async (reason) => {
       await emit({
         schemaVersion: 1,
         kind: "end",
@@ -605,14 +536,9 @@ const runAgentWatch = async (
         revision: lastRevision,
         reason,
       });
-      completion.resolve(0);
-    } catch (error) {
-      completion.reject(error);
-    }
-  };
-  runtime.onceSignal("SIGINT", () => void stop("SIGINT"));
-  runtime.onceSignal("SIGTERM", () => void stop("SIGTERM"));
-  return completion.promise;
+    },
+  });
+  return watchCode === 130 || watchCode === 143 ? 0 : watchCode;
 };
 
 /** Runs every explicit non-measure CLI workflow command. */
@@ -630,6 +556,11 @@ export const runWorkflowCommand = async (
       parsed = parse(rest, projectDocument);
       noPositionals(parsed, `project ${subcommand}`);
       params = await inputFromProjectFlags(runtime.cwd, parsed.values);
+      if (subcommand === "init" && parsed.values.default === true)
+        throw new AgentDocxError(
+          "INVALID_ARGUMENT",
+          "--default is only valid for project add",
+        );
       if (subcommand === "add" && parsed.values.default === true)
         params.makeDefault = true;
       action = subcommand === "init" ? "project.init" : "project.add";
@@ -1088,7 +1019,7 @@ export const runWorkflowCommand = async (
     }
   }
   const result = await dispatchAgentRequest(
-    request(action, projectOption(parsed!.values), params!),
+    parseAgentRequest(request(action, projectOption(parsed!.values), params!)),
     runtime.cwd,
   );
   await print(runtime, parsed!.values.json === true, result.value);

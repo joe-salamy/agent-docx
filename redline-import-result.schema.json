@@ -28,7 +28,7 @@
       "additionalProperties": false,
       "required": ["name"],
       "properties": {
-        "name": { "type": "string" },
+        "name": { "type": "string", "minLength": 1 },
         "email": { "type": "string" }
       }
     },
@@ -38,7 +38,7 @@
       "required": ["id", "blockId", "author", "createdAt", "message", "status"],
       "properties": {
         "id": { "type": "string", "pattern": "^a_[0-9a-f-]{36}$" },
-        "blockId": { "type": "string", "pattern": "^b_[0-9a-f-]{36}$" },
+        "blockId": { "type": "string", "pattern": "^b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
         "range": {
           "type": "object",
           "additionalProperties": false,
@@ -83,7 +83,7 @@
         "relationshipId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
         "ooxmlKind": { "type": "string" },
         "count": { "type": "integer", "minimum": 0 },
-        "blockIds": { "type": "array", "items": { "type": "string", "pattern": "^b_[0-9a-f-]{36}$" } },
+        "blockIds": { "type": "array", "items": { "type": "string", "pattern": "^b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" } },
         "sourcePositions": { "type": "array", "items": { "$ref": "#/$defs/position" } },
         "explanation": { "type": "string" }
       }

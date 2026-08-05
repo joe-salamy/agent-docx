@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { runSubprocess } from "./helpers.js";
 
 const manifest = JSON.parse(
   await readFile(new URL("./corpus-manifest.json", import.meta.url), "utf8"),
@@ -26,25 +25,8 @@ const documents = [
     requireAllPageLines: false,
   })),
 ];
-const root = fileURLToPath(new URL("..", import.meta.url));
-const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const fixturePath = (document) =>
   `test/fixtures/${document.fixtureDirectory}/${document.file}`;
-
-function runCli(args) {
-  const { promise, resolve, reject } = Promise.withResolvers();
-  const child = spawn(process.execPath, [cli, ...args], {
-    cwd: root,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
-  child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
-  child.once("error", reject);
-  child.once("close", (code) => resolve({ code, stdout, stderr }));
-  return promise;
-}
 
 function deterministicGolden(deterministic) {
   return {
@@ -75,7 +57,7 @@ for (const document of documents) {
       "fixture content changed without updating its deterministic golden",
     );
 
-    const invocation = await runCli([
+    const invocation = await runSubprocess([
       "measure",
       fixturePath(document),
       "--paragraphs",
@@ -95,7 +77,7 @@ test(
   "real Markdown corpus: CLI page and last-page lines agree exactly with Word",
   { timeout: 600_000, skip: process.env.AGENT_DOCX_TEST_WORD !== "1" },
   async (t) => {
-    const invocation = await runCli([
+    const invocation = await runSubprocess([
       "measure",
       "--batch",
       ...documents.map(fixturePath),

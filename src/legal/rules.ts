@@ -1,18 +1,19 @@
-import {
-  AgentDocxError,
-  type FilingKind,
-  type JsonValue,
-  type MeasurementResult,
-  type RuleCheckParams,
-  type SourcePosition,
-  type UserRulePack,
+import { AgentDocxError } from "../types.js";
+import type {
+  JsonValue,
+  SourcePosition,
 } from "../types.js";
+import type {
+  DeterministicResult,
+  FilingKind,
+} from "../measurement.js";
 import type {
   LegalBlock,
   LegalDocument,
   RevisionId,
   RulePackId,
 } from "./model.js";
+import { visibleTextForBlock } from "./visible-text.js";
 
 export type ValidationFinding = {
   checkId: string;
@@ -61,18 +62,82 @@ export type RuleCheckKind =
   | "required-footer"
   | "reference-integrity";
 
+export type UserRulePackLengthAlternative = {
+  byFilingKind: Partial<
+    Record<
+      FilingKind | "default",
+      {
+        pages?: number;
+        words?: number;
+        monospacedLines?: number;
+        complianceCertificateRequired?: boolean;
+      }
+    >
+  >;
+};
+export type UserRulePackPageSize = {
+  widthTwips: number;
+  heightTwips: number;
+};
+export type UserRulePackMarginMinimum = { minimumTwips: number };
+export type UserRulePackTypeface = {
+  minimumTwips: number;
+  mode: "proportional" | "monospaced";
+  requireVerifiedPitch?: boolean;
+};
+export type UserRulePackLineSpacing = { doubleSpacedOrdinary?: boolean };
+export type UserRulePackCountedLinesMaximum = { perPageMaximum: number };
+export type UserRulePackRequiredMetadata = {
+  fields: readonly string[];
+  requireCounselComplete?: boolean;
+  requireComplianceCertificate?: boolean;
+};
+export type UserRulePackRequiredBlock = { kinds: readonly string[] };
+export type UserRulePackRequiredFooter = { requiredTokens: readonly string[] };
+export type UserRulePackReferenceIntegrity = {};
+export type RuleCheckParams =
+  | UserRulePackLengthAlternative
+  | UserRulePackPageSize
+  | UserRulePackMarginMinimum
+  | UserRulePackTypeface
+  | UserRulePackLineSpacing
+  | UserRulePackCountedLinesMaximum
+  | UserRulePackRequiredMetadata
+  | UserRulePackRequiredBlock
+  | UserRulePackRequiredFooter
+  | UserRulePackReferenceIntegrity;
+export type UserRulePackCheck = {
+  id: string;
+  kind: RuleCheckKind;
+  citation: string;
+  predicate: string;
+  params: RuleCheckParams;
+};
+export type UserRulePack = {
+  id: string;
+  sourceUrl: string;
+  effectiveDate: string;
+  sourceSha256: `sha256:${string}`;
+  sourceExcerpt: string;
+  checks: readonly UserRulePackCheck[];
+  unmodeledProvisions: readonly string[];
+};
+
+export type BuiltInRuleCheck = {
+  id: string;
+  kind: RuleCheckKind;
+  citation: string;
+  predicate: string;
+  params: RuleCheckParams;
+};
+
 export type BuiltInRulePack = {
   id: RulePackId;
   sourceUrl: string;
   effectiveDate: string;
   sourceSha256: `sha256:${string}`;
   sourceExcerpt: string;
-  checks: readonly {
-    id: string;
-    kind: RuleCheckKind;
-    citation: string;
-    predicate: string;
-  }[];
+  checks: readonly BuiltInRuleCheck[];
   unmodeledProvisions: readonly string[];
 };
 
@@ -95,6 +160,16 @@ export const builtInRulePacks: Readonly<Record<RulePackId, BuiltInRulePack>> = {
         citation: "Fed. R. App. P. 32(a)(7)",
         predicate:
           "principal <= 30 pages OR <= 13000 words OR <= 1300 monospaced lines; non-page alternatives require a Rule 32(g) compliance certificate",
+        params: {
+          byFilingKind: {
+            "principal-brief": {
+              pages: 30,
+              words: 13000,
+              monospacedLines: 1300,
+              complianceCertificateRequired: true,
+            },
+            },
+        },
       },
       {
         id: "frap32.length.reply",
@@ -102,24 +177,37 @@ export const builtInRulePacks: Readonly<Record<RulePackId, BuiltInRulePack>> = {
         citation: "Fed. R. App. P. 32(a)(7)",
         predicate:
           "reply <= 15 pages OR <= 6500 words OR <= 650 monospaced lines; non-page alternatives require a Rule 32(g) compliance certificate",
+        params: {
+          byFilingKind: {
+            "reply-brief": {
+              pages: 15,
+              words: 6500,
+              monospacedLines: 650,
+              complianceCertificateRequired: true,
+            },
+            },
+        },
       },
       {
         id: "frap32.page-size",
         kind: "page-size",
         citation: "Fed. R. App. P. 32(a)(4)",
         predicate: "page is exactly 8.5 by 11 inches",
+        params: { widthTwips: 12240, heightTwips: 15840 },
       },
       {
         id: "frap32.margin",
         kind: "margin-minimum",
         citation: "Fed. R. App. P. 32(a)(4)",
         predicate: "each margin is at least one inch",
+        params: { minimumTwips: 1440 },
       },
       {
         id: "frap32.typeface.proportional",
         kind: "typeface",
         citation: "Fed. R. App. P. 32(a)(5)",
         predicate: "proportional serif text is at least 14 point",
+        params: { minimumTwips: 280, mode: "proportional" },
       },
       {
         id: "frap32.typeface.monospaced",
@@ -127,12 +215,14 @@ export const builtInRulePacks: Readonly<Record<RulePackId, BuiltInRulePack>> = {
         citation: "Fed. R. App. P. 32(a)(5)",
         predicate:
           "monospaced text contains no more than 10.5 characters per inch",
+        params: { minimumTwips: 280, mode: "monospaced" },
       },
       {
         id: "frap32.spacing",
         kind: "line-spacing",
         citation: "Fed. R. App. P. 32(a)(4)",
         predicate: "ordinary text is double spaced",
+        params: { doubleSpacedOrdinary: true },
       },
     ],
     unmodeledProvisions: [
@@ -154,24 +244,34 @@ export const builtInRulePacks: Readonly<Record<RulePackId, BuiltInRulePack>> = {
         kind: "length-alternative",
         citation: "Civil L.R. 7-2(b)",
         predicate: "motion document <= 25 pages",
+        params: {
+          byFilingKind: { "motion-document": { pages: 25 } },
+        },
       },
       {
         id: "cand.length.opposition",
         kind: "length-alternative",
         citation: "Civil L.R. 7-3(a), 7-3(c)",
         predicate: "opposition text <= 25 pages",
+        params: {
+          byFilingKind: { "opposition-text": { pages: 25 } },
+        },
       },
       {
         id: "cand.length.reply",
         kind: "length-alternative",
         citation: "Civil L.R. 7-4(b)",
         predicate: "reply text <= 15 pages",
+        params: {
+          byFilingKind: { default: { pages: 15 }, "reply-text": { pages: 15 } },
+        },
       },
       {
         id: "cand.lines",
         kind: "counted-lines-maximum",
         citation: "Civil L.R. 3-4(c)(2)",
         predicate: "each page has at most 28 counted lines",
+        params: { perPageMaximum: 28 },
       },
       {
         id: "cand.typeface",
@@ -179,24 +279,43 @@ export const builtInRulePacks: Readonly<Record<RulePackId, BuiltInRulePack>> = {
         citation: "Civil L.R. 3-4(c)(2)",
         predicate:
           "all text is at least 12 point in a verified proportional serif face",
+        params: {
+          minimumTwips: 240,
+          mode: "proportional",
+          requireVerifiedPitch: true,
+        },
       },
       {
         id: "cand.spacing",
         kind: "line-spacing",
         citation: "Civil L.R. 3-4(c)(2)",
         predicate: "ordinary text is double spaced",
+        params: { doubleSpacedOrdinary: true },
       },
       {
         id: "cand.first-page",
         kind: "required-metadata",
         citation: "Civil L.R. 3-4(a)",
         predicate: "counsel, court, case, and document-title facts are present",
+        params: {
+          fields: [
+            "court",
+            "jurisdiction",
+            "caseName",
+            "docketNumber",
+            "documentTitle",
+          ],
+          requireCounselComplete: true,
+        },
       },
       {
         id: "cand.footer",
         kind: "required-footer",
         citation: "Civil L.R. 3-4(c)(3)",
         predicate: "footer contains case title and case number",
+        params: {
+          requiredTokens: ["{{caseName}}", "{{docketNumber}}"],
+        },
       },
     ],
     unmodeledProvisions: [
@@ -539,12 +658,24 @@ export const validateUserRulePack = (
   };
 };
 
+type RuleMeasurement = {
+  pageCount: number;
+  deterministic: Pick<
+    DeterministicResult,
+    | "pageCount"
+    | "totalVisualLines"
+    | "visualLinesByPage"
+    | "countedLinesByPage"
+    | "profile"
+  >;
+};
+
 export type ValidationInput = {
   revision?: RevisionId | null;
   rulePack?: RulePackId;
   customPacks?: readonly UserRulePack[];
   filingKind?: FilingKind;
-  measurement?: Omit<MeasurementResult, "generatedDocx">;
+  measurement?: RuleMeasurement;
 };
 type CountedEntry = {
   id: LegalBlock["id"];
@@ -553,22 +684,7 @@ type CountedEntry = {
   position: SourcePosition;
 };
 
-const textFor = (block: LegalBlock): string => {
-  if ("runs" in block) return block.runs.map((run) => run.text).join("");
-  if (block.kind === "table")
-    return block.rows
-      .flatMap((row) => row.flatMap((cell) => cell.paragraphs))
-      .flatMap((paragraph) => paragraph.runs)
-      .map((run) => run.text)
-      .join(" ");
-  if (block.kind === "list")
-    return block.items
-      .flatMap((item) => item.paragraphs)
-      .flatMap((paragraph) => paragraph.runs)
-      .map((run) => run.text)
-      .join(" ");
-  return block.sourceText;
-};
+const textFor = (block: LegalBlock): string => visibleTextForBlock(block);
 
 const flattenBlocks = (blocks: readonly LegalBlock[]): LegalBlock[] => {
   const flattened: LegalBlock[] = [];
@@ -657,7 +773,11 @@ const ruleFinding = (
   severity: "error",
   source: "rule",
   message,
-  citation: pack.checks.find((check) => check.id === checkId)?.citation,
+  ...(pack.checks.find((check) => check.id === checkId)?.citation
+    ? {
+        citation: pack.checks.find((check) => check.id === checkId)!.citation,
+      }
+    : {}),
   sourceUrl: pack.sourceUrl,
   effectiveDate: pack.effectiveDate,
   ...(positions && positions.length > 0 ? { positions } : {}),
@@ -915,6 +1035,23 @@ const spacingStatus = (
   };
 };
 
+const builtInCheck = (
+  pack: BuiltInRulePack,
+  kind: RuleCheckKind,
+  select: (params: RuleCheckParams) => boolean = () => true,
+): BuiltInRuleCheck => {
+  const check = pack.checks.find(
+    (candidate) => candidate.kind === kind && select(candidate.params),
+  );
+  if (!check)
+    throw new AgentDocxError(
+      "INTERNAL_ERROR",
+      `Built-in rule pack ${pack.id} is missing a ${kind} check`,
+    );
+  return check;
+};
+
+
 const applyFrapChecks = (
   document: LegalDocument,
   input: ValidationInput,
@@ -926,11 +1063,30 @@ const applyFrapChecks = (
   const words = wordsIn(counted);
   const lines = measurement?.deterministic.totalVisualLines ?? null;
   const pages = measurement?.pageCount ?? null;
-  const reply = input.filingKind === "reply-brief";
-  const lengthCheck = reply ? "frap32.length.reply" : "frap32.length.principal";
-  const limits = reply
-    ? { pages: 15, words: 6500, lines: 650 }
-    : { pages: 30, words: 13000, lines: 1300 };
+  const filingKind =
+    input.filingKind === "reply-brief" ? "reply-brief" : "principal-brief";
+  const lengthCheck = builtInCheck(
+    pack,
+    "length-alternative",
+    (params) =>
+      "byFilingKind" in params &&
+      params.byFilingKind[filingKind] !== undefined,
+  );
+  const configuredLimits = (
+    lengthCheck.params as UserRulePackLengthAlternative
+  ).byFilingKind[filingKind];
+  if (!configuredLimits)
+    throw new AgentDocxError(
+      "INTERNAL_ERROR",
+      `Built-in rule pack ${pack.id} has no limits for ${filingKind}`,
+    );
+  const limits = {
+    pages: configuredLimits.pages!,
+    words: configuredLimits.words!,
+    lines: configuredLimits.monospacedLines!,
+  };
+  const requiresComplianceCertificate =
+    configuredLimits.complianceCertificateRequired === true;
   const compliance = document.metadata.certificates.find(
     (certificate) => certificate.kind === "compliance",
   );
@@ -949,7 +1105,7 @@ const applyFrapChecks = (
     {
       name: "words",
       status:
-        complianceBlock === undefined
+        requiresComplianceCertificate && complianceBlock === undefined
           ? "fail"
           : words <= limits.words
             ? "pass"
@@ -960,7 +1116,7 @@ const applyFrapChecks = (
       status:
         lines === null
           ? "unknown"
-          : complianceBlock === undefined
+          : requiresComplianceCertificate && complianceBlock === undefined
             ? "fail"
             : lines <= limits.lines
               ? "pass"
@@ -974,28 +1130,44 @@ const applyFrapChecks = (
     : alternatives.every((alternative) => alternative.status === "fail")
       ? "fail"
       : "unknown";
+  const pageSizeCheck = builtInCheck(pack, "page-size");
+  const pageSize = pageSizeCheck.params as UserRulePackPageSize;
   const sizePasses =
-    profile?.page.widthTwips === 12240 && profile.page.heightTwips === 15840;
+    profile?.page.widthTwips === pageSize.widthTwips &&
+    profile.page.heightTwips === pageSize.heightTwips;
+  const marginCheck = builtInCheck(pack, "margin-minimum");
+  const minimumMargin =
+    marginCheck.params as UserRulePackMarginMinimum;
   const margins = profile?.page.marginsTwips;
   const marginPasses = margins
-    ? Object.values(margins).every((margin) => margin >= 1440)
+    ? Object.values(margins).every(
+        (margin) => margin >= minimumMargin.minimumTwips,
+      )
     : false;
   const monospaced = /mono|courier|consolas|menlo/i.test(
     profile?.requestedFontFamily ?? "",
   );
+  const typefaceCheck = builtInCheck(
+    pack,
+    "typeface",
+    (params) =>
+      "mode" in params &&
+      params.mode === (monospaced ? "monospaced" : "proportional"),
+  );
+  const typefaceParameters =
+    typefaceCheck.params as UserRulePackTypeface;
   const typeface = typefaceStatus(
     measurement,
-    280,
-    monospaced ? "monospaced" : "proportional",
+    typefaceParameters.minimumTwips,
+    typefaceParameters.mode,
+    typefaceParameters.requireVerifiedPitch ?? false,
   );
-  const typefaceCheck = monospaced
-    ? "frap32.typeface.monospaced"
-    : "frap32.typeface.proportional";
+  const spacingCheck = builtInCheck(pack, "line-spacing");
   const spacing = spacingStatus(measurement);
   return [
     ruleFinding(
       pack,
-      lengthCheck,
+      lengthCheck.id,
       lengthStatus,
       lengthStatus === "pass"
         ? "A Rule 32(a)(7) length alternative is satisfied"
@@ -1015,7 +1187,7 @@ const applyFrapChecks = (
     ),
     ruleFinding(
       pack,
-      "frap32.page-size",
+      pageSizeCheck.id,
       profile ? (sizePasses ? "pass" : "fail") : "unknown",
       sizePasses
         ? "Page size is 8.5 by 11 inches"
@@ -1027,16 +1199,19 @@ const applyFrapChecks = (
     ),
     ruleFinding(
       pack,
-      "frap32.margin",
+      marginCheck.id,
       profile ? (marginPasses ? "pass" : "fail") : "unknown",
       marginPasses
         ? "All page margins are at least one inch"
         : "One or more page margins are below one inch",
-      { marginsTwips: margins ?? null, minimumTwips: 1440 },
+      {
+        marginsTwips: margins ?? null,
+        minimumTwips: minimumMargin.minimumTwips,
+      },
     ),
     ruleFinding(
       pack,
-      typefaceCheck,
+      typefaceCheck.id,
       typeface.status,
       typeface.status === "pass"
         ? "Typeface evidence satisfies the selected Rule 32 check"
@@ -1045,7 +1220,7 @@ const applyFrapChecks = (
     ),
     ruleFinding(
       pack,
-      "frap32.spacing",
+      spacingCheck.id,
       spacing.status,
       spacing.status === "pass"
         ? "Ordinary text is double spaced"
@@ -1063,31 +1238,60 @@ const applyCandChecks = (
   const measurement = input.measurement;
   const pages = measurement?.pageCount ?? null;
   const kind = input.filingKind;
-  const length =
+  const selectedLengthKind =
     kind === "motion-document"
-      ? { id: "cand.length.motion", limit: 25 }
+      ? "motion-document"
       : kind === "opposition-text"
-        ? { id: "cand.length.opposition", limit: 25 }
-        : { id: "cand.length.reply", limit: 15 };
-  const typeface = typefaceStatus(measurement, 240, "proportional", true);
+        ? "opposition-text"
+        : "reply-text";
+  const lengthCheck = builtInCheck(
+    pack,
+    "length-alternative",
+    (params) =>
+      "byFilingKind" in params &&
+      params.byFilingKind[selectedLengthKind] !== undefined,
+  );
+  const lengthParameters = (
+    lengthCheck.params as UserRulePackLengthAlternative
+  ).byFilingKind[selectedLengthKind];
+  if (!lengthParameters?.pages)
+    throw new AgentDocxError(
+      "INTERNAL_ERROR",
+      `Built-in rule pack ${pack.id} has no page limit for ${selectedLengthKind}`,
+    );
+  const typefaceCheck = builtInCheck(pack, "typeface");
+  const typefaceParameters =
+    typefaceCheck.params as UserRulePackTypeface;
+  const typeface = typefaceStatus(
+    measurement,
+    typefaceParameters.minimumTwips,
+    typefaceParameters.mode,
+    typefaceParameters.requireVerifiedPitch ?? false,
+  );
+  const spacingCheck = builtInCheck(pack, "line-spacing");
   const spacing = spacingStatus(measurement);
-  const lines = measurement?.deterministic.visualLinesByPage ?? null;
+  const countedLines = measurement?.deterministic.countedLinesByPage;
+  const visualLines = measurement?.deterministic.visualLinesByPage;
+  const lines = countedLines ?? visualLines ?? null;
+  const linesCheck = builtInCheck(pack, "counted-lines-maximum");
+  const linesParameters =
+    linesCheck.params as UserRulePackCountedLinesMaximum;
   const linesStatus =
     lines === null
       ? "unknown"
-      : lines.every((lineCount) => lineCount <= 28)
+      : lines.every(
+            (lineCount) => lineCount <= linesParameters.perPageMaximum,
+          )
         ? "pass"
         : "fail";
-  const coreMetadata = [
-    ["court", document.metadata.court],
-    ["jurisdiction", document.metadata.jurisdiction],
-    ["caseName", document.metadata.caseName],
-    ["docketNumber", document.metadata.docketNumber],
-    ["documentTitle", document.metadata.documentTitle],
-  ] as const;
-  const missingMetadata = coreMetadata
-    .filter(([, value]) => value.trim().length === 0)
-    .map(([key]) => key);
+  const metadataCheck = builtInCheck(pack, "required-metadata");
+  const metadataParameters =
+    metadataCheck.params as UserRulePackRequiredMetadata;
+  const missingMetadata = metadataParameters.fields.flatMap((field) => {
+    const value =
+      document.metadata[field as keyof typeof document.metadata];
+    return typeof value === "string" && value.trim().length > 0 ? [] : [field];
+  });
   const incompleteCounsel = document.metadata.counsel
     .filter(
       (counsel) =>
@@ -1098,40 +1302,57 @@ const applyCandChecks = (
         !counsel.email?.trim(),
     )
     .map((counsel) => counsel.id);
+  const footerCheck = builtInCheck(pack, "required-footer");
+  const footerParameters =
+    footerCheck.params as UserRulePackRequiredFooter;
   const footer = document.chrome.footers?.default ?? "";
-  const footerPasses =
-    footer.includes("{{caseName}}") && footer.includes("{{docketNumber}}");
+  const missingFooterTokens = footerParameters.requiredTokens.filter(
+    (token) => !footer.includes(token),
+  );
+  const footerPasses = missingFooterTokens.length === 0;
+  const metadataPasses =
+    missingMetadata.length === 0 &&
+    (!metadataParameters.requireCounselComplete ||
+      document.metadata.counsel.length > 0) &&
+    (!metadataParameters.requireCounselComplete ||
+      incompleteCounsel.length === 0);
   return [
     ruleFinding(
       pack,
-      length.id,
-      pages === null ? "unknown" : pages <= length.limit ? "pass" : "fail",
-      pages !== null && pages <= length.limit
+      lengthCheck.id,
+      pages === null
+        ? "unknown"
+        : pages <= lengthParameters.pages
+          ? "pass"
+          : "fail",
+      pages !== null && pages <= lengthParameters.pages
         ? "Document page count is within the selected Civil Local Rule limit"
         : "Document page count exceeds or cannot prove the selected Civil Local Rule limit",
       {
         filingKind: kind ?? "reply-text",
         totalPages: pages,
         pagesOfBriefText: pages,
-        limit: length.limit,
+        limit: lengthParameters.pages,
       },
     ),
     ruleFinding(
       pack,
-      "cand.lines",
+      linesCheck.id,
       linesStatus,
       linesStatus === "pass"
         ? "Each page has at most 28 counted lines"
         : "One or more pages exceed or cannot prove the 28-line limit",
       {
-        visualLinesByPage: lines ?? [],
-        countedLineSource: "deterministic-visual-lines",
-        maximum: 28,
+        lines: lines ?? [],
+        countedLineSource: countedLines
+          ? "deterministic-counted-lines"
+          : "deterministic-visual-lines",
+        maximum: linesParameters.perPageMaximum,
       },
     ),
     ruleFinding(
       pack,
-      "cand.typeface",
+      typefaceCheck.id,
       typeface.status,
       typeface.status === "pass"
         ? "Typeface evidence satisfies the Civil Local Rule check"
@@ -1140,7 +1361,7 @@ const applyCandChecks = (
     ),
     ruleFinding(
       pack,
-      "cand.spacing",
+      spacingCheck.id,
       spacing.status,
       spacing.status === "pass"
         ? "Ordinary text is double spaced"
@@ -1149,26 +1370,20 @@ const applyCandChecks = (
     ),
     ruleFinding(
       pack,
-      "cand.first-page",
-      missingMetadata.length === 0 &&
-        document.metadata.counsel.length > 0 &&
-        incompleteCounsel.length === 0
-        ? "pass"
-        : "fail",
-      missingMetadata.length === 0 &&
-        document.metadata.counsel.length > 0 &&
-        incompleteCounsel.length === 0
+      metadataCheck.id,
+      metadataPasses ? "pass" : "fail",
+      metadataPasses
         ? "Required first-page matter facts are present"
         : "Required first-page matter facts are missing",
       {
-        missingMetadata,
+        missing: missingMetadata,
         counselCount: document.metadata.counsel.length,
         incompleteCounsel,
       },
     ),
     ruleFinding(
       pack,
-      "cand.footer",
+      footerCheck.id,
       footerPasses ? "pass" : "fail",
       footerPasses
         ? "Footer template includes case title and case number"
@@ -1375,7 +1590,9 @@ const applyDataDrivenChecks = (
       }
       case "counted-lines-maximum": {
         const params = check.params as { perPageMaximum: number };
-        const lines = measurement?.deterministic.visualLinesByPage;
+        const countedLines = measurement?.deterministic.countedLinesByPage;
+        const visualLines = measurement?.deterministic.visualLinesByPage;
+        const lines = countedLines ?? visualLines;
         const status =
           lines === undefined
             ? "unknown"
@@ -1390,8 +1607,10 @@ const applyDataDrivenChecks = (
             ? "Every page satisfies the configured counted-lines maximum"
             : "One or more pages exceed or cannot prove the configured counted-lines maximum",
           {
-            visualLinesByPage: lines ?? null,
-            countedLineSource: "deterministic-visual-lines",
+            lines: lines ?? null,
+            countedLineSource: countedLines
+              ? "deterministic-counted-lines"
+              : "deterministic-visual-lines",
             maximum: params.perPageMaximum,
           },
         );
@@ -1572,22 +1791,3 @@ export const validateLegalDocument = (
     findings,
   };
 };
-
-export const emptyValidationResult = (
-  document: LegalDocument,
-  revision: RevisionId | null = null,
-): ValidationResult => ({
-  schemaVersion: 1,
-  documentId: document.documentId,
-  revision,
-  rulePack: null,
-  scope: {
-    certification: false,
-    checkedRuleIds: [],
-    sourceSnapshots: [],
-    unmodeledProvisions: [],
-  },
-  status: "pass",
-  summary: { pass: 0, fail: 0, unknown: 0 },
-  findings: [],
-});

@@ -25,4 +25,6 @@ jobs:
       - run: pnpm run format:check
       - run: pnpm run typecheck
       - run: pnpm test
+      - run: pnpm run accuracy
+      - run: pnpm run smoke:agent
       - run: pnpm run verify:pack

@@ -2,7 +2,9 @@ import { deflateRawSync } from "node:zlib";
 import yauzl, { type Entry, type ZipFile } from "yauzl";
 import { TextDecoder } from "node:util";
 import { SaxesParser, type SaxesTagNS } from "saxes";
+import { createHash } from "node:crypto";
 import { AgentDocxError } from "../types.js";
+import { assertSafePartPath } from "./opc.js";
 
 export const DOCX_LIMITS = Object.freeze({
   maxCompressedInput: 25 * 1024 * 1024,
@@ -20,6 +22,9 @@ export const DOCX_LIMITS = Object.freeze({
 });
 
 export type DocxParts = ReadonlyMap<string, Uint8Array>;
+
+export const sha256Hex = (bytes: Uint8Array | string): `sha256:${string}` =>
+  `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 
 const zipOpen = (bytes: Uint8Array): Promise<ZipFile> => {
   const { promise, resolve, reject } = Promise.withResolvers<ZipFile>();
@@ -76,7 +81,7 @@ export const readDocxParts = async (
   if (bytes.byteLength > DOCX_LIMITS.maxCompressedInput)
     throw new AgentDocxError(
       "DOCX_TOO_LARGE",
-      "DOCX exceeds 25 MiB compressed input limit",
+      `DOCX exceeds ${DOCX_LIMITS.maxCompressedInput / (1024 * 1024)} MiB compressed input limit`,
     );
   const zip = await zipOpen(bytes);
   const parts = new Map<string, Uint8Array>();
@@ -94,24 +99,23 @@ export const readDocxParts = async (
         try {
           entries++;
           if (entries > DOCX_LIMITS.maxEntries)
-            throw new AgentDocxError("DOCX_TOO_LARGE", "DOCX exceeds 512 entries");
+            throw new AgentDocxError(
+              "DOCX_TOO_LARGE",
+              `DOCX exceeds ${DOCX_LIMITS.maxEntries} entries`,
+            );
           const name = entry.fileName;
-          if (
-            name.length > DOCX_LIMITS.maxPartNameUnits ||
-            name.includes("\\") ||
-            name.startsWith("/") ||
-            name.split("/").some((part) => part === "..") ||
-            names.has(name)
-          )
+          if (name.length > DOCX_LIMITS.maxPartNameUnits || names.has(name))
             throw new AgentDocxError(
               "DOCX_UNSAFE",
               `Unsafe or duplicate package path: ${name}`,
             );
           names.add(name);
           if (name.endsWith("/")) {
+            assertSafePartPath(name.slice(0, -1));
             zip.readEntry();
             return;
           }
+          assertSafePartPath(name);
           if (entry.compressionMethod !== 0 && entry.compressionMethod !== 8)
             throw new AgentDocxError(
               "DOCX_UNSAFE",
@@ -133,7 +137,7 @@ export const readDocxParts = async (
             if (xmlTotal > DOCX_LIMITS.maxXmlTotal)
               throw new AgentDocxError(
                 "DOCX_XML_LIMIT",
-                "Consumed XML exceeds 12 MiB",
+                `Consumed XML exceeds ${DOCX_LIMITS.maxXmlTotal / (1024 * 1024)} MiB`,
               );
           }
           if (include(name))
@@ -156,7 +160,7 @@ export const readDocxParts = async (
     if (total / Math.max(1, compressed) > DOCX_LIMITS.maxPackageRatio)
       throw new AgentDocxError(
         "DOCX_TOO_LARGE",
-        "DOCX package compression ratio exceeds 50:1",
+        `DOCX package compression ratio exceeds ${DOCX_LIMITS.maxPackageRatio}:1`,
       );
     return parts;
   } catch (error) {
@@ -303,13 +307,7 @@ export const repackDocxParts = (
   const files = [...source.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, bytes]) => {
-      if (
-        name.length === 0 ||
-        name.includes("\\") ||
-        name.startsWith("/") ||
-        name.split("/").some((component) => component === "" || component === "." || component === "..")
-      )
-        throw new AgentDocxError("DOCX_UNSAFE", `Unsafe package path: ${name}`);
+      assertSafePartPath(name);
       const encodedName = Buffer.from(name, "utf8");
       const compressed = deflateRawSync(bytes, { level: 9 });
       if (

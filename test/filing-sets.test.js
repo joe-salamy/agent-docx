@@ -4,17 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createProject, openProject } from "../dist/index.js";
-
-const metadata = {
-  court: "United States District Court",
-  jurisdiction: "Northern District of California",
-  caseName: "Example v. Example",
-  docketNumber: "3:26-cv-00001",
-  documentTitle: "Motion",
-  parties: [],
-  counsel: [],
-  certificates: [],
-};
+import { metadata } from "./helpers.js";
 
 const profile = "us-district-conventional";
 

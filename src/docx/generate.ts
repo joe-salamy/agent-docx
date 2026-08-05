@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import canonicalize from "canonicalize";
 import {
   AlignmentType,
@@ -29,52 +28,36 @@ import {
   type ParagraphChild,
 } from "docx";
 import type {
-  FlowBlock,
   InlineRun,
   NormalizedDocument,
   TableFlowBlock,
   TextFlowBlock,
 } from "../markdown.js";
 import { conservativeBodyBounds } from "../layout/body.js";
+import { flowStyleFor } from "../layout/style.js";
+import { tableColumnWidths } from "../layout/table.js";
 import {
   blockBookmark,
   type DocumentChrome,
-  type LegalBlock,
   type LegalDocument,
   type LitigationMetadata,
   type ReviewAnnotation,
 } from "../legal/model.js";
 import { lowerLegalDocument } from "../legal/lower.js";
-import {
-  AgentDocxError,
-  type LayoutProfile,
-  type SourcePosition,
-  type TextStyle,
-} from "../types.js";
+import { AgentDocxError } from "../types.js";
+import type { LayoutProfile, TextStyle } from "../layout/profile.js";
+import type { SourcePosition } from "../types.js";
 import type { ValidationResult } from "../legal/rules.js";
 import type { ChangeSet, RevisionRecord } from "../revisions/types.js";
+import type { LoadedFonts } from "../resolve.js";
 import {
   decodeDocxXml,
   readDocxParts,
   repackDocxParts,
+  sha256Hex,
 } from "./package.js";
 
 type TextContent = Pick<TextFlowBlock, "runs" | "image">;
-type SemanticTextFlowBlock = TextFlowBlock & {
-  legalBlockId?: string;
-  legalKind?: LegalBlock["kind"] | "footnote";
-  listOrdered?: boolean;
-  listLevel?: number;
-  numberedLevel?: number;
-  sequence?: string;
-};
-type SectionBreakFlowBlock = FlowBlock & {
-  sectionBreak?: {
-    kind: "next-page" | "continuous";
-    pageNumber?: { format: "decimal" | "lower-roman" | "upper-roman"; start: number };
-    legalBlockId: string;
-  };
-};
 type RichInlineRun = InlineRun & {
   strikethrough?: boolean;
   link?: { target: string; title?: string };
@@ -86,6 +69,8 @@ export type GenerateDocxOptions = {
   metadata?: LitigationMetadata;
   /** Stabilized deterministic page count for PAGE/NUMPAGES chrome fields. */
   pageCount?: number;
+  /** Loaded metric fonts; enables content-based table column allocation. */
+  fonts?: LoadedFonts;
   revision?: RevisionRecord;
   changeSet?: ChangeSet;
   annotations?: readonly ReviewAnnotation[];
@@ -127,9 +112,7 @@ const dependencyAssets = (
   const assets: Record<string, { bytes: Uint8Array; mediaType: string }> = {};
   for (const [key, dependency] of dependencies) {
     if (!key.startsWith("asset/")) continue;
-    const sha256 = `sha256:${createHash("sha256")
-      .update(dependency.bytes)
-      .digest("hex")}`;
+    const sha256 = sha256Hex(dependency.bytes);
     if (sha256 !== dependency.sha256)
       throw new AgentDocxError(
         "DOCX_GENERATED_INVALID",
@@ -253,36 +236,11 @@ export const nativeStyles = (profile: LayoutProfile) => {
 };
 
 const styleFor = (
-  block: SemanticTextFlowBlock,
+  block: TextFlowBlock,
   profile: LayoutProfile,
 ): { id: string; style: TextStyle } => {
-  if (block.legalKind === "caption")
-    return { id: "AgentDocxCaption", style: { ...profile.body, bold: true } };
-  if (block.legalKind === "signature")
-    return { id: "AgentDocxSignature", style: profile.body };
-  if (block.legalKind === "certificate")
-    return { id: "AgentDocxCertificate", style: profile.body };
-  if (block.legalKind === "toc")
-    return { id: "AgentDocxTOCHeading", style: profile.headings["1"] };
-  if (block.legalKind === "toa")
-    return { id: "AgentDocxTOAHeading", style: profile.headings["1"] };
-  if (block.kind === "heading") {
-    const level = Math.min(6, Math.max(1, block.level ?? 1));
-    return {
-      id: `AgentDocxHeading${level}`,
-      style: profile.headings[String(level) as "1"],
-    };
-  }
-  if (block.kind === "blockquote")
-    return { id: "AgentDocxBlockQuote", style: profile.blockquote };
-  if (block.kind === "list" && block.legalKind === "numbered-paragraph") {
-    const level = Math.min(3, Math.max(0, block.numberedLevel ?? 0));
-    return { id: `AgentDocxNumbered${level + 1}`, style: profile.list };
-  }
-  if (block.kind === "list") return { id: "AgentDocxList", style: profile.list };
-  if (block.kind === "footnote")
-    return { id: "AgentDocxFootnote", style: profile.footnote };
-  return { id: "AgentDocxBody", style: profile.body };
+  const resolved = flowStyleFor(block, profile);
+  return { id: resolved.styleId, style: resolved.style };
 };
 
 const runChildren = (
@@ -367,7 +325,10 @@ const tableGridWidths = (
   block: TableFlowBlock,
   profile: LayoutProfile,
   usableWidth: number,
+  fonts?: LoadedFonts,
 ): number[] => {
+  if (fonts)
+    return tableColumnWidths(block, profile, fonts, usableWidth);
   const columns = block.rows[0]?.length ?? 0;
   const fixed =
     profile.table.cellPaddingTwips.left +
@@ -485,69 +446,82 @@ const lineRestart = (
       ? LineNumberRestartFormat.NEW_SECTION
       : LineNumberRestartFormat.CONTINUOUS;
 
-export const numbering = (profile: LayoutProfile) => ({
-  config: [
-    {
-      reference: "AgentDocxOrderedList",
-      levels: [0, 1, 2, 3].map((level) => ({
-        level,
-        format: LevelFormat.DECIMAL,
-        text: `%${level + 1}.`,
-        alignment: AlignmentType.LEFT,
-        style: {
-          paragraph: {
-            indent: {
-              left: profile.list.leftIndentTwips + (level + 1) * 360,
-              hanging: Math.max(180, profile.list.hangingIndentTwips || 360),
-            },
+export const numbering = (
+  profile: LayoutProfile,
+  orderedListStarts: readonly number[] = [],
+) => {
+  const orderedLevels = (start?: number) =>
+    [0, 1, 2, 3].map((level) => ({
+      level,
+      format: LevelFormat.DECIMAL,
+      text: `%${level + 1}.`,
+      alignment: AlignmentType.LEFT,
+      ...(start !== undefined && level === 0 ? { start } : {}),
+      style: {
+        paragraph: {
+          indent: {
+            left: profile.list.leftIndentTwips + (level + 1) * 360,
+            hanging: Math.max(180, profile.list.hangingIndentTwips || 360),
           },
         },
+      },
+    }));
+  return {
+    config: [
+      {
+        reference: "AgentDocxOrderedList",
+        levels: orderedLevels(),
+      },
+      ...orderedListStarts.map((start) => ({
+        reference: `AgentDocxOrderedListFrom${start}`,
+        levels: orderedLevels(start),
       })),
-    },
-    {
-      reference: "AgentDocxBulletList",
-      levels: [0, 1, 2, 3].map((level) => ({
-        level,
-        format: LevelFormat.BULLET,
-        text: "•",
-        alignment: AlignmentType.LEFT,
-        style: {
-          paragraph: {
-            indent: {
-              left: profile.list.leftIndentTwips + (level + 1) * 360,
-              hanging: Math.max(180, profile.list.hangingIndentTwips || 360),
+      {
+        reference: "AgentDocxBulletList",
+        levels: [0, 1, 2, 3].map((level) => ({
+          level,
+          format: LevelFormat.BULLET,
+          text: "•",
+          alignment: AlignmentType.LEFT,
+          style: {
+            paragraph: {
+              indent: {
+                left: profile.list.leftIndentTwips + (level + 1) * 360,
+                hanging: Math.max(180, profile.list.hangingIndentTwips || 360),
+              },
             },
           },
-        },
-      })),
-    },
-    {
-      reference: "AgentDocxNumberedParagraph",
-      levels: [0, 1, 2, 3].map((level) => ({
-        level,
-        format: LevelFormat.DECIMAL,
-        text: `%${level + 1}.`,
-        alignment: AlignmentType.LEFT,
-        style: {
-          paragraph: {
-            indent: {
-              left: profile.list.leftIndentTwips + (level + 1) * 360,
-              hanging: Math.max(180, profile.list.hangingIndentTwips || 360),
+        })),
+      },
+      {
+        reference: "AgentDocxNumberedParagraph",
+        levels: [0, 1, 2, 3].map((level) => ({
+          level,
+          format: LevelFormat.DECIMAL,
+          text: `%${level + 1}.`,
+          alignment: AlignmentType.LEFT,
+          style: {
+            paragraph: {
+              indent: {
+                left: profile.list.leftIndentTwips + (level + 1) * 360,
+                hanging: Math.max(180, profile.list.hangingIndentTwips || 360),
+              },
             },
           },
-        },
-      })),
-    },
-  ],
-});
+        })),
+      },
+    ],
+  };
+};
 
 const toTable = (
   block: TableFlowBlock,
   profile: LayoutProfile,
   usableWidth: number,
   footnoteIds: ReadonlyMap<string, number>,
+  fonts?: LoadedFonts,
 ): Table => {
-  const gridWidths = tableGridWidths(block, profile, usableWidth);
+  const gridWidths = tableGridWidths(block, profile, usableWidth, fonts);
   const borderSize =
     profile.table.borderTwips === 0
       ? 0
@@ -849,27 +823,21 @@ export const createNativeDocumentChrome = (
         })
       : undefined;
   };
+  const defaultHeader = makeHeader(headerTemplates.default);
+  const firstHeader = makeHeader(headerTemplates.first);
+  const evenHeader = makeHeader(headerTemplates.even);
   const headers = {
-    ...(makeHeader(headerTemplates.default)
-      ? { default: makeHeader(headerTemplates.default)! }
-      : {}),
-    ...(makeHeader(headerTemplates.first)
-      ? { first: makeHeader(headerTemplates.first)! }
-      : {}),
-    ...(makeHeader(headerTemplates.even)
-      ? { even: makeHeader(headerTemplates.even)! }
-      : {}),
+    ...(defaultHeader ? { default: defaultHeader } : {}),
+    ...(firstHeader ? { first: firstHeader } : {}),
+    ...(evenHeader ? { even: evenHeader } : {}),
   };
+  const defaultFooter = makeFooter(footerTemplates.default);
+  const firstFooter = makeFooter(footerTemplates.first);
+  const evenFooter = makeFooter(footerTemplates.even);
   const footers = {
-    ...(makeFooter(footerTemplates.default)
-      ? { default: makeFooter(footerTemplates.default)! }
-      : {}),
-    ...(makeFooter(footerTemplates.first)
-      ? { first: makeFooter(footerTemplates.first)! }
-      : {}),
-    ...(makeFooter(footerTemplates.even)
-      ? { even: makeFooter(footerTemplates.even)! }
-      : {}),
+    ...(defaultFooter ? { default: defaultFooter } : {}),
+    ...(firstFooter ? { first: firstFooter } : {}),
+    ...(evenFooter ? { even: evenFooter } : {}),
   };
   return {
     bodyBounds,
@@ -943,7 +911,9 @@ export async function generateDocx(
   options = {
     ...options,
     assets: { ...assets, ...options.assets },
-    createdAt: options.createdAt ?? options.revision?.createdAt,
+    ...(options.createdAt ?? options.revision?.createdAt
+      ? { createdAt: options.createdAt ?? options.revision!.createdAt }
+      : {}),
   };
   const flow: NormalizedDocument = legalDocument
     ? lowerLegalDocument(legalDocument)
@@ -1002,14 +972,16 @@ export async function generateDocx(
   };
 
   for (const rawBlock of flow.blocks) {
-    const sectionBreak = (rawBlock as SectionBreakFlowBlock).sectionBreak;
+    const sectionBreak =
+      rawBlock.kind === "pagebreak" ? rawBlock.sectionBreak : undefined;
     if (sectionBreak) {
       finishSection();
       current.type =
         sectionBreak.kind === "continuous"
           ? SectionType.CONTINUOUS
           : SectionType.NEXT_PAGE;
-      current.pageNumber = sectionBreak.pageNumber;
+      if (sectionBreak.pageNumber !== undefined)
+        current.pageNumber = sectionBreak.pageNumber;
       continue;
     }
     if (rawBlock.kind === "pagebreak") {
@@ -1045,10 +1017,12 @@ export async function generateDocx(
       continue;
     }
     if (rawBlock.kind === "table") {
-      current.children.push(toTable(rawBlock, profile, usableWidth, footnoteIds));
+      current.children.push(
+        toTable(rawBlock, profile, usableWidth, footnoteIds, options.fonts),
+      );
       continue;
     }
-    const block = rawBlock as SemanticTextFlowBlock;
+    const block = rawBlock;
     const resolved = styleFor(block, profile);
     const legalBlockId = block.legalBlockId;
     const id = legalBlockId
@@ -1074,7 +1048,9 @@ export async function generateDocx(
             }
           : {
               reference: block.listOrdered
-                ? "AgentDocxOrderedList"
+                ? block.listStart !== undefined
+                  ? `AgentDocxOrderedListFrom${block.listStart}`
+                  : "AgentDocxOrderedList"
                 : "AgentDocxBulletList",
               level: Math.min(3, Math.max(0, block.listLevel ?? 0)),
             }
@@ -1118,10 +1094,23 @@ export async function generateDocx(
     options.metadata,
     options.pageCount,
   );
+  const orderedListStarts = [
+    ...new Set(
+      flow.blocks.flatMap((block) =>
+        block.kind === "pagebreak" ||
+        block.kind === "table" ||
+        block.kind === "thematic-break"
+          ? []
+          : block.listStart !== undefined
+            ? [block.listStart]
+            : [],
+      ),
+    ),
+  ].sort((left, right) => left - right);
   const document = new Document({
     footnotes,
     styles: { paragraphStyles: nativeStyles(profile) },
-    numbering: numbering(profile),
+    numbering: numbering(profile, orderedListStarts),
     features: { updateFields: true },
     evenAndOddHeaderAndFooters:
       nativeChrome.evenAndOddHeaderAndFooters,

@@ -1,12 +1,35 @@
 import { AgentDocxError, type ErrorCode } from "./types.js";
 
+export type ObjectRecordOptions = {
+  code?: ErrorCode;
+  message?: string;
+};
+
 /** Validates one JSON object boundary before callers inspect named fields. */
 export const objectRecord = (
   value: unknown,
   label: string,
-  code: ErrorCode = "INVALID_ARGUMENT",
+  options: ObjectRecordOptions = {},
 ): Record<string, unknown> => {
   if (typeof value !== "object" || value === null || Array.isArray(value))
-    throw new AgentDocxError(code, `${label} must be an object`);
+    throw new AgentDocxError(
+      options.code ?? "INVALID_ARGUMENT",
+      options.message ?? `${label} must be an object`,
+    );
   return value as Record<string, unknown>;
+};
+
+type DefinedProps<T> = {
+  [K in keyof T as T[K] extends undefined ? never : K]: Exclude<T[K], undefined>;
+};
+
+/**
+ * Drops undefined-valued entries so the result can be spread into
+ * `exactOptionalPropertyTypes` targets without weakening their types.
+ */
+export const definedProps = <T extends object>(value: T): DefinedProps<T> => {
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value))
+    if (entry !== undefined) out[key] = entry;
+  return out as DefinedProps<T>;
 };

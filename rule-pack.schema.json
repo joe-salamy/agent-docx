@@ -7,17 +7,17 @@
   "required": ["id", "sourceUrl", "effectiveDate", "sourceSha256", "sourceExcerpt", "checks", "unmodeledProvisions"],
   "properties": {
     "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9@.-]{0,127}$" },
-    "sourceUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+    "sourceUrl": { "type": "string", "pattern": "^https://" },
     "effectiveDate": { "type": "string", "format": "date" },
     "sourceSha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
-    "sourceExcerpt": { "type": "string", "pattern": "^[a-z0-9-]+\\.txt$" },
+    "sourceExcerpt": { "type": "string", "minLength": 1 },
     "checks": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "kind", "citation", "predicate"],
+        "required": ["id", "kind", "citation", "predicate", "params"],
         "properties": {
           "id": { "type": "string", "pattern": "^[a-z0-9.-]+$" },
           "kind": { "enum": ["length-alternative", "page-size", "margin-minimum", "typeface", "line-spacing", "counted-lines-maximum", "required-metadata", "required-block", "required-footer", "reference-integrity"] },

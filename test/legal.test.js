@@ -5,17 +5,7 @@ import {
   parseLegalMarkdown,
 } from "../dist/legal/parse.js";
 import { lowerLegalDocument } from "../dist/legal/lower.js";
-
-const metadata = {
-  court: "United States District Court",
-  jurisdiction: "Northern District of California",
-  caseName: "Example v. Example",
-  docketNumber: "3:26-cv-00001",
-  documentTitle: "Motion",
-  parties: [],
-  counsel: [],
-  certificates: [],
-};
+import { metadata } from "./helpers.js";
 
 test("legal parser materializes stable block markers and source-mapped runs", () => {
   const source = `# Argument

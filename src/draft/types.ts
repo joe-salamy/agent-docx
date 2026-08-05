@@ -1,6 +1,13 @@
-import type { CliErrorPayload, MeasurementResult, RendererMode } from "../types.js";
+import type { MeasurementResult } from "../measurement.js";
+import type { ErrorCode, JsonValue } from "../types.js";
 import type { BlockId, RevisionId } from "../legal/model.js";
 import type { ValidationResult } from "../legal/rules.js";
+
+export type DraftEvaluationError = {
+  code: ErrorCode;
+  message: string;
+  details?: Record<string, JsonValue>;
+};
 
 export type SourcePatch = {
   schemaVersion: 1;
@@ -52,7 +59,7 @@ export type PatchEvaluation = {
         validation: ValidationResult;
         deltas: PatchDeltas;
       }
-    | { status: "invalid"; error: CliErrorPayload };
+    | { status: "invalid"; error: DraftEvaluationError };
   passesConstraints: boolean;
   canApply: boolean;
   state: {
@@ -94,4 +101,3 @@ export type DraftGuidance = {
   }[];
 };
 
-export type DraftEvaluationOptions = { renderer?: RendererMode };

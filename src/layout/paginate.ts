@@ -1,29 +1,46 @@
-import type { Font } from "fontkit";
 import LineBreaker from "linebreak";
 import type {
   FlowBlock,
-  InlineRun,
   NormalizedDocument,
   SectionIndex,
   TableFlowBlock,
   TextFlowBlock,
 } from "../markdown.js";
 import type { LoadedFonts } from "../resolve.js";
+import { flowStyleFor } from "./style.js";
 import {
-  AgentDocxError,
-  type Diagnostic,
-  type LayoutProfile,
-  type ParagraphDiagnostic,
-  type TextStyle,
-  type SectionDiagnostic,
-  type SourcePosition,
-} from "../types.js";
+  candidateWidth,
+  role,
+  round,
+  tableColumnWidths,
+} from "./table.js";
+import {
+  applyWidowOrphan,
+  buildDiagnostics,
+  placeKeepUnit,
+  wrapBodyBlocks,
+  wrapFootnotes,
+  type FootnoteState,
+  type Page,
+  type PendingFootnote,
+  type Snapshot,
+  type WrappedBlock,
+  type WrappedLine,
+  type WrappedTable,
+} from "./wrap.js";
+import type { Diagnostic, SourcePosition } from "../types.js";
+import type { LayoutProfile, TextStyle } from "./profile.js";
+import type {
+  ParagraphDiagnostic,
+  SectionDiagnostic,
+} from "../measurement.js";
 
 export type PaginationOutput = {
   pageCount: number;
   equivalentPages: number;
   totalVisualLines: number;
   visualLinesByPage: number[];
+  countedLinesByPage: number[];
   lastPage: {
     visualLines: number;
     usedTwips: number;
@@ -36,117 +53,6 @@ export type PaginationOutput = {
   sections?: SectionDiagnostic[];
 };
 
-type WrappedLine = {
-  used: number;
-  available: number;
-  height: number;
-  text: string;
-  block: FlowBlock;
-  counted: boolean;
-  visualCount: number;
-  countedCount: number;
-  start: number;
-  end: number;
-  contentEnd: number;
-  startCause: "soft" | "hard" | "start";
-  overflowed: boolean;
-  footnoteRefs: string[];
-  rowStart?: boolean;
-  rowEnd?: boolean;
-};
-
-type PlacedFootnoteLine = {
-  footnoteId: string;
-  line: WrappedLine;
-  ownerIndex: number;
-};
-
-type Page = {
-  bodyUsed: number;
-  footnoteUsed: number;
-  visual: number;
-  counted: number;
-  bodyLines: WrappedLine[];
-  footnoteLines: PlacedFootnoteLine[];
-  sectionTouches?: Set<number>;
-};
-
-type PendingFootnote = {
-  footnoteId: string;
-  blocks: readonly (readonly WrappedLine[])[];
-  blockIndex: number;
-  nextLine: number;
-  warningEmitted: boolean;
-  ownerIndex: number;
-};
-
-type FootnoteState = {
-  placed: Set<string>;
-  pending: PendingFootnote[];
-  relaxed: Set<string>;
-};
-
-type WrappedBlock = {
-  block: FlowBlock;
-  style: TextStyle;
-  lines: WrappedLine[];
-  headerLineCount?: number;
-};
-
-type Snapshot = {
-  pages: Page[];
-  page: Page;
-  footnotes: FootnoteState;
-};
-
-const round = (number: number) =>
-  Math.sign(number) * Math.floor(Math.abs(number) + 0.5);
-
-const role = (run: InlineRun, style: TextStyle) =>
-  (style.bold || run.bold
-    ? style.italic || run.italic
-      ? "boldItalic"
-      : "bold"
-    : style.italic || run.italic
-      ? "italic"
-      : "regular") as keyof Pick<
-    LoadedFonts,
-    "regular" | "bold" | "italic" | "boldItalic"
-  >;
-
-function width(font: Font, text: string, size: number) {
-  const layout = font.layout(text);
-  return round(
-    (layout.positions.reduce((sum, position) => sum + position.xAdvance, 0) *
-      size) /
-      font.unitsPerEm,
-  );
-}
-
-function candidateWidth(
-  block: TextFlowBlock,
-  start: number,
-  end: number,
-  fonts: LoadedFonts,
-  style: TextStyle,
-) {
-  let cursor = 0;
-  let total = 0;
-  for (const run of block.runs) {
-    const next = cursor + run.text.length;
-    const from = Math.max(start, cursor);
-    const to = Math.min(end, next);
-    if (to > from) {
-      total += width(
-        fonts[role(run, style)].font,
-        run.text.slice(from - cursor, to - cursor),
-        style.fontSizeTwips,
-      );
-    }
-    cursor = next;
-  }
-  return total;
-}
 
 function naturalHeight(
   fonts: LoadedFonts,
@@ -395,140 +301,6 @@ function wrap(
   }
   return lines;
 }
-type WrappedTable = {
-  lines: WrappedLine[];
-  headerLineCount: number;
-  gridWidths: number[];
-};
-
-function allocateTableColumns(
-  block: TableFlowBlock,
-  profile: LayoutProfile,
-  fonts: LoadedFonts,
-  usableWidth: number,
-): number[] {
-  const columnCount = block.rows[0]?.length ?? 0;
-  if (columnCount === 0)
-    throw new AgentDocxError(
-      "INVALID_LAYOUT",
-      "A table must contain at least one column.",
-      { position: block.position as unknown as Record<string, never> },
-    );
-  const styleFloor = (style: TextStyle) =>
-    Math.max(0, style.leftIndentTwips) +
-    Math.max(0, style.rightIndentTwips) +
-    Math.max(0, style.firstLineIndentTwips - style.hangingIndentTwips);
-  const fixed =
-    profile.table.cellPaddingTwips.left +
-    profile.table.cellPaddingTwips.right +
-    2 * profile.table.borderTwips;
-  const structuralFloor =
-    fixed +
-    Math.max(styleFloor(profile.table.header), styleFloor(profile.table.body)) +
-    1;
-  const widths = Array<number>(columnCount).fill(structuralFloor);
-  if (widths.reduce((total, value) => total + value, 0) > usableWidth)
-    throw new AgentDocxError(
-      "INVALID_LAYOUT",
-      "Table structural column floors exceed the usable page width.",
-      { position: block.position as unknown as Record<string, never> },
-    );
-  const minimums = [...widths];
-  const preferred = [...widths];
-  for (let rowIndex = 0; rowIndex < block.rows.length; rowIndex++) {
-    const style = rowIndex === 0 ? profile.table.header : profile.table.body;
-    const structural = fixed + styleFloor(style);
-    const row = block.rows[rowIndex]!;
-    for (let columnIndex = 0; columnIndex < columnCount; columnIndex++) {
-      const cell = row[columnIndex];
-      if (!cell) continue;
-      const cellBlock: TextFlowBlock = {
-        kind: "paragraph",
-        runs: cell.runs,
-        normalizedText: cell.normalizedText,
-        sourceSegments: cell.sourceSegments,
-        position: cell.position,
-        footnoteRefs: [],
-      };
-      let unbreakable = 0;
-      let tokenStart = 0;
-      const breaker = new LineBreaker(cell.normalizedText);
-      let opportunity;
-      while ((opportunity = breaker.nextBreak()) !== null) {
-        const tokenEnd = opportunity.position;
-        unbreakable = Math.max(
-          unbreakable,
-          candidateWidth(cellBlock, tokenStart, tokenEnd, fonts, style),
-        );
-        tokenStart = tokenEnd;
-      }
-      unbreakable = Math.max(
-        unbreakable,
-        candidateWidth(
-          cellBlock,
-          tokenStart,
-          cell.normalizedText.length,
-          fonts,
-          style,
-        ),
-      );
-      minimums[columnIndex] = Math.max(
-        minimums[columnIndex]!,
-        structural + Math.max(1, unbreakable),
-      );
-      preferred[columnIndex] = Math.max(
-        preferred[columnIndex]!,
-        structural +
-          Math.max(
-            1,
-            candidateWidth(
-              cellBlock,
-              0,
-              cell.normalizedText.length,
-              fonts,
-              style,
-            ),
-          ),
-      );
-    }
-  }
-  const growToward = (targets: readonly number[]) => {
-    let remaining =
-      usableWidth - widths.reduce((total, value) => total + value, 0);
-    const deficits = targets.map((target, index) =>
-      Math.max(0, target - widths[index]!),
-    );
-    const totalDeficit = deficits.reduce((total, value) => total + value, 0);
-    if (remaining <= 0 || totalDeficit === 0) return;
-    const allocation = deficits.map((deficit) =>
-      Math.floor((Math.min(remaining, totalDeficit) * deficit) / totalDeficit),
-    );
-    const used = allocation.reduce((total, value) => total + value, 0);
-    let leftover = Math.min(remaining, totalDeficit) - used;
-    const order = deficits
-      .map((deficit, index) => ({
-        index,
-        fraction:
-          (Math.min(remaining, totalDeficit) * deficit) / totalDeficit -
-          allocation[index]!,
-      }))
-      .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
-    for (const entry of order) {
-      if (leftover-- <= 0) break;
-      allocation[entry.index]!++;
-    }
-    for (let index = 0; index < widths.length; index++)
-      widths[index]! += allocation[index]!;
-  };
-  growToward(minimums);
-  growToward(preferred);
-  let surplus = usableWidth - widths.reduce((total, value) => total + value, 0);
-  for (let index = 0; surplus > 0; index = (index + 1) % widths.length) {
-    widths[index]!++;
-    surplus--;
-  }
-  return widths;
-}
 
 function wrapTable(
   block: TableFlowBlock,
@@ -538,7 +310,7 @@ function wrapTable(
   usableHeight: number,
   warnings: Diagnostic[],
 ): WrappedTable {
-  const gridWidths = allocateTableColumns(block, profile, fonts, usableWidth);
+  const gridWidths = tableColumnWidths(block, profile, fonts, usableWidth);
   const lines: WrappedLine[] = [];
   let headerLineCount = 0;
   let relaxed = false;
@@ -631,15 +403,7 @@ function wrapTable(
 }
 
 function styleFor(profile: LayoutProfile, block: TextFlowBlock) {
-  return block.kind === "heading"
-    ? profile.headings[String(block.level ?? 1) as "1"]
-    : block.kind === "blockquote"
-      ? profile.blockquote
-      : block.kind === "list"
-        ? profile.list
-        : block.kind === "footnote"
-          ? profile.footnote
-          : profile.body;
+  return flowStyleFor(block, profile).style;
 }
 
 function emptyPage(trackSections = false): Page {
@@ -690,6 +454,7 @@ export function paginate(
       equivalentPages: 0,
       totalVisualLines: 0,
       visualLinesByPage: [],
+      countedLinesByPage: [],
       lastPage: null,
       paragraphs: [],
       warnings: [],
@@ -728,116 +493,27 @@ export function paginate(
       profile.page.marginsTwips.bottom;
   const warnings: Diagnostic[] = [];
   const headerRepeatWarnings = new Set<FlowBlock>();
-  const bodyBlocks: WrappedBlock[] = document.blocks.map((block) => {
-    if (block.kind === "pagebreak")
-      return { block, style: profile.body, lines: [] };
-    if (block.kind === "thematic-break") {
-      const style: TextStyle = {
-        ...profile.body,
-        beforeTwips: profile.thematicBreak.beforeTwips,
-        afterTwips: profile.thematicBreak.afterTwips,
-        keepWithNext: profile.thematicBreak.keepWithNext,
-        keepLines: true,
-        lineSpacing: {
-          rule: "exact",
-          twips: profile.thematicBreak.thicknessTwips,
-        },
-      };
-      return {
-        block,
-        style,
-        lines: [
-          {
-            used: usableWidth,
-            available: usableWidth,
-            height: profile.thematicBreak.thicknessTwips,
-            text: "",
-            block,
-            counted: false,
-            visualCount: 0,
-            countedCount: 0,
-            start: 0,
-            end: 0,
-            contentEnd: 0,
-            startCause: "start",
-            overflowed: false,
-            footnoteRefs: [],
-          },
-        ],
-      };
-    }
-    if (block.kind === "table") {
-      const wrapped = wrapTable(
-        block,
-        profile,
-        fonts,
-        usableWidth,
-        usableHeight,
-        warnings,
-      );
-      return {
-        block,
-        style: {
-          ...profile.table.body,
-          beforeTwips: 0,
-          afterTwips: 0,
-          keepWithNext: false,
-          keepLines: false,
-        },
-        lines: wrapped.lines,
-        headerLineCount: wrapped.headerLineCount,
-      };
-    }
-    let style = styleFor(profile, block);
-    const available =
-      usableWidth - style.leftIndentTwips - style.rightIndentTwips;
-    let lines = wrap(
-      block,
-      style,
-      available,
-      fonts,
-      warnings,
-      profile.pagination.lineCapExclusions,
-    );
-    if (
-      profile.id === "frap-32" &&
-      block.kind === "blockquote" &&
-      lines.length >= 3
-    ) {
-      style = {
-        ...style,
-        lineSpacing: { rule: "auto", numerator: 240, denominator: 240 },
-      };
-      lines = wrap(
-        block,
-        style,
-        available,
-        fonts,
-        warnings,
-        profile.pagination.lineCapExclusions,
-      );
-    }
-    return { block, style, lines };
-  });
-  const footnoteCache = new Map<string, readonly (readonly WrappedLine[])[]>();
-  const wrappedFootnote = (id: string) => {
-    let blocks = footnoteCache.get(id);
-    if (blocks) return blocks;
-    const definition = document.footnotes.get(id)!;
-    const style = profile.footnote;
-    blocks = definition.blocks.map((block) =>
-      wrap(
-        block,
-        style,
-        usableWidth - style.leftIndentTwips - style.rightIndentTwips,
-        fonts,
-        warnings,
-        profile.pagination.lineCapExclusions,
-      ),
-    );
-    footnoteCache.set(id, blocks);
-    return blocks;
-  };
+  const { bodyBlocks, bodyPitch } = wrapBodyBlocks(
+    document,
+    profile,
+    fonts,
+    usableWidth,
+    usableHeight,
+    warnings,
+    wrap,
+    wrapTable,
+    styleFor,
+    naturalHeight,
+    linePitch,
+  );
+  const wrappedFootnote = wrapFootnotes(
+    document,
+    profile,
+    usableWidth,
+    fonts,
+    warnings,
+    wrap,
+  );
 
   let pages: Page[] = [];
   let page = emptyPage(sectionIndex !== undefined);
@@ -852,10 +528,22 @@ export function paginate(
     page: clonePage(page),
     footnotes: cloneFootnotes(footnotes),
   });
-  const restore = (saved: Snapshot) => {
-    pages = saved.pages.map(clonePage);
-    page = clonePage(saved.page);
-    footnotes = cloneFootnotes(saved.footnotes);
+  const restore = (saved: Snapshot) => ({
+    pages: saved.pages.map(clonePage),
+    page: clonePage(saved.page),
+    footnotes: cloneFootnotes(saved.footnotes),
+  });
+  const commitRestored = (saved: {
+    pages: Page[];
+    page: Page;
+    footnotes: FootnoteState;
+  }) => {
+    saved.pages.push(saved.page);
+    return { ...saved, page: emptyPage(sectionIndex !== undefined) };
+  };
+  const commitTargetPage = (target: Page) => {
+    pages.push(target);
+    return emptyPage(sectionIndex !== undefined);
   };
   const commitPage = () => {
     pages.push(page);
@@ -1217,96 +905,43 @@ export function paginate(
           page.sectionTouches.add(index);
         }
       }
+      if (record.block.sectionBreak?.kind === "continuous") {
+        priorAfter = 0;
+        continue;
+      }
       commitPage();
       priorAfter = 0;
       continue;
     }
 
-    if (record.style.keepWithNext) {
-      const indexes = [blockIndex];
-      let cursor = blockIndex;
-      while (
-        bodyBlocks[cursor]!.style.keepWithNext &&
-        cursor + 1 < bodyBlocks.length &&
-        bodyBlocks[cursor + 1]!.block.kind !== "pagebreak"
-      ) {
-        cursor++;
-        indexes.push(cursor);
-      }
-      const terminator = bodyBlocks[indexes.at(-1)!]!;
-      const hasTerminatingBlock = !terminator.style.keepWithNext;
-      if (hasTerminatingBlock && indexes.length > 1) {
-        const terminatingLines = terminator.style.keepLines
-          ? terminator.lines.length
-          : 1;
-        const currentUnit = unitFromBlocks(
-          indexes,
-          terminatingLines,
-          priorAfter,
-          page.bodyLines.length > 0,
-        );
-        const emptyUnit = unitFromBlocks(indexes, terminatingLines, 0, false);
-        if (
-          simulateUnit(
-            emptyUnit,
-            emptyPage(sectionIndex !== undefined),
-            footnotes,
-          ) &&
-          !simulateUnit(currentUnit, page, footnotes) &&
-          hasContent(page)
-        ) {
-          commitPage();
-        }
-      }
-    }
+    page = placeKeepUnit({
+      record,
+      blockIndex,
+      bodyBlocks,
+      page,
+      footnotes,
+      priorAfter,
+      trackSections: sectionIndex !== undefined,
+      simulateUnit,
+      unitFromBlocks,
+      emptyPage,
+      commitPage: commitTargetPage,
+      hasContent,
+    });
 
-    if (record.style.keepLines) {
-      const currentUnit = unitFromBlocks(
-        [blockIndex],
-        null,
-        priorAfter,
-        page.bodyLines.length > 0,
-      );
-      const emptyUnit = unitFromBlocks([blockIndex], null, 0, false);
-      if (
-        simulateUnit(
-          emptyUnit,
-          emptyPage(sectionIndex !== undefined),
-          footnotes,
-        ) &&
-        !simulateUnit(currentUnit, page, footnotes) &&
-        hasContent(page)
-      ) {
-        commitPage();
-      }
-    }
-
-    if (
-      record.block.kind !== "table" &&
-      profile.pagination.widowOrphanControl &&
-      !record.style.keepLines &&
-      record.lines.length > 1 &&
-      hasContent(page)
-    ) {
-      const firstLine = unitFromBlocks(
-        [blockIndex],
-        1,
-        priorAfter,
-        page.bodyLines.length > 0,
-      );
-      const orphanLines = unitFromBlocks(
-        [blockIndex],
-        Math.min(profile.pagination.orphanLines, record.lines.length),
-        priorAfter,
-        page.bodyLines.length > 0,
-      );
-      if (
-        simulateUnit(firstLine, page, footnotes) &&
-        !simulateUnit(orphanLines, page, footnotes)
-      ) {
-        commitPage();
-      }
-    }
+    page = applyWidowOrphan({
+      phase: "before",
+      record,
+      blockIndex,
+      page,
+      footnotes,
+      priorAfter,
+      profile,
+      simulateUnit,
+      unitFromBlocks,
+      commitPage: commitTargetPage,
+      hasContent,
+    });
 
     const beforeLine: Snapshot[] = [];
     let lineIndex = 0;
@@ -1342,21 +977,21 @@ export function paginate(
           : 0;
       const result = attemptBodyLine(record.lines[lineIndex]!, spacing);
       if (!result) {
-        const remaining = record.lines.length - lineIndex;
-        const placedOnPage = page.bodyLines.filter(
-          (line) => line.block === record.block,
-        ).length;
-        if (
-          record.block.kind !== "table" &&
-          profile.pagination.widowOrphanControl &&
-          remaining < profile.pagination.widowLines &&
-          placedOnPage >= profile.pagination.orphanLines
-        ) {
-          const move = Math.min(profile.pagination.orphanLines, placedOnPage);
-          const targetIndex = lineIndex - move;
-          restore(beforeLine[targetIndex]!);
-          commitPage();
-          lineIndex = targetIndex;
+        const widowOrphanResult = applyWidowOrphan({
+          phase: "overflow",
+          record,
+          page,
+          lineIndex,
+          beforeLine,
+          profile,
+          restore,
+          commitRestored,
+        });
+        if (widowOrphanResult) {
+          pages = widowOrphanResult.pages;
+          page = widowOrphanResult.page;
+          footnotes = widowOrphanResult.footnotes;
+          lineIndex = widowOrphanResult.lineIndex;
           continue;
         }
         commitPage();
@@ -1373,191 +1008,19 @@ export function paginate(
   }
 
   if (hasContent(page) || pages.length === 0) pages.push(page);
-  const paragraphResults: ParagraphDiagnostic[] = [];
-  let paragraphIndex = 0;
-  for (const block of document.blocks) {
-    if (
-      block.kind === "pagebreak" ||
-      block.kind === "table" ||
-      block.kind === "thematic-break"
-    )
-      continue;
-    const occurrences: { page: number; line: WrappedLine }[] = [];
-    pages.forEach((placedPage, pageIndex) =>
-      placedPage.bodyLines.forEach((line) => {
-        if (line.block === block) {
-          occurrences.push({ page: pageIndex + 1, line });
-        }
-      }),
-    );
-    if (occurrences.length) {
-      const last = occurrences.at(-1)!;
-      const penultimate = occurrences.at(-2)?.line ?? null;
-      const style = styleFor(profile, block);
-      const oneLineReduction =
-        penultimate && last.line.startCause === "soft"
-          ? {
-              estimatedRemovalTwips: Math.max(
-                0,
-                candidateWidth(
-                  block,
-                  penultimate.start,
-                  last.line.contentEnd,
-                  fonts,
-                  style,
-                ) - penultimate.available,
-              ),
-              basis: "deterministic-tail-width-deficit" as const,
-              confidence: "heuristic" as const,
-            }
-          : null;
-      paragraphResults.push({
-        source: "deterministic",
-        index: paragraphIndex++,
-        position: block.position,
-        startPage: occurrences[0]!.page,
-        endPage: last.page,
-        visualLines: occurrences.length,
-        lastLineText: last.line.text,
-        lastLineTextRange: {
-          start: last.line.start,
-          end: last.line.contentEnd,
-        },
-        lastLineSourceRanges: sourceRangesFor(
-          block,
-          last.line.start,
-          last.line.contentEnd,
-        ),
-        lastLineUsedTwips: last.line.used,
-        lastLineAvailableTwips: last.line.available,
-        lastLineUnusedTwips: last.line.available - last.line.used,
-        lastLineRatio:
-          last.line.available === 0 ? 0 : last.line.used / last.line.available,
-        lastLineOverflow: last.line.overflowed,
-        penultimateLineText: penultimate?.text ?? null,
-        penultimateLineUnusedTwips: penultimate
-          ? penultimate.available - penultimate.used
-          : null,
-        oneLineReduction,
-        preview: block.normalizedText.replace(/\s+/g, " ").trim().slice(0, 80),
-      });
-    }
-  }
-
-  let sectionResults: SectionDiagnostic[] | undefined;
-  if (sectionIndex) {
-    type MutableSectionPage = {
-      page: number;
-      bodyVisualLines: number;
-      footnoteVisualLines: number;
-      visualLines: number;
-      countedLines: number;
-    };
-    const sectionPages = sectionIndex.sections.map(
-      () => new Map<number, MutableSectionPage>(),
-    );
-    pages.forEach((placedPage, pageIndex) => {
-      const pageNumber = pageIndex + 1;
-      for (const section of placedPage.sectionTouches ?? []) {
-        sectionPages[section]!.set(pageNumber, {
-          page: pageNumber,
-          bodyVisualLines: 0,
-          footnoteVisualLines: 0,
-          visualLines: 0,
-          countedLines: 0,
-        });
-      }
-      for (const line of placedPage.bodyLines) {
-        const owner = sectionIndex.deepestOwnerByBlock.get(line.block) ?? 0;
-        for (const section of sectionIndex.sections[owner]!.ancestors) {
-          let entry = sectionPages[section]!.get(pageNumber);
-          if (!entry) {
-            entry = {
-              page: pageNumber,
-              bodyVisualLines: 0,
-              footnoteVisualLines: 0,
-              visualLines: 0,
-              countedLines: 0,
-            };
-            sectionPages[section]!.set(pageNumber, entry);
-          }
-          entry.bodyVisualLines += line.visualCount;
-          entry.visualLines += line.visualCount;
-          entry.countedLines += line.countedCount;
-        }
-      }
-      for (const placed of placedPage.footnoteLines) {
-        for (const section of sectionIndex.sections[placed.ownerIndex]!
-          .ancestors) {
-          let entry = sectionPages[section]!.get(pageNumber);
-          if (!entry) {
-            entry = {
-              page: pageNumber,
-              bodyVisualLines: 0,
-              footnoteVisualLines: 0,
-              visualLines: 0,
-              countedLines: 0,
-            };
-            sectionPages[section]!.set(pageNumber, entry);
-          }
-          entry.footnoteVisualLines += placed.line.visualCount;
-          entry.visualLines += placed.line.visualCount;
-          entry.countedLines += placed.line.countedCount;
-        }
-      }
-    });
-    sectionResults = sectionIndex.sections.map((section) => {
-      const diagnosticPages = [...sectionPages[section.index]!.values()].sort(
-        (a, b) => a.page - b.page,
-      );
-      return {
-        source: "deterministic",
-        index: section.index,
-        parentIndex: section.parentIndex,
-        heading: section.heading,
-        position: section.position,
-        empty: section.empty,
-        startPage: diagnosticPages[0]?.page ?? null,
-        endPage: diagnosticPages.at(-1)?.page ?? null,
-        pageCount: diagnosticPages.length,
-        bodyVisualLines: diagnosticPages.reduce(
-          (total, page) => total + page.bodyVisualLines,
-          0,
-        ),
-        footnoteVisualLines: diagnosticPages.reduce(
-          (total, page) => total + page.footnoteVisualLines,
-          0,
-        ),
-        visualLines: diagnosticPages.reduce(
-          (total, page) => total + page.visualLines,
-          0,
-        ),
-        countedLines: diagnosticPages.reduce(
-          (total, page) => total + page.countedLines,
-          0,
-        ),
-        pages: diagnosticPages,
-      };
-    });
-  }
+  const diagnostics = buildDiagnostics(
+    pages,
+    document,
+    profile,
+    fonts,
+    sectionIndex,
+    warnings,
+    styleFor,
+    candidateWidth,
+    sourceRangesFor,
+  );
 
   const last = pages.at(-1)!;
-  const representative = document.blocks.find(
-    (block): block is TextFlowBlock =>
-      block.kind !== "pagebreak" &&
-      block.kind !== "table" &&
-      block.kind !== "thematic-break",
-  );
-  const metricProbe: TextFlowBlock = {
-    kind: "paragraph",
-    runs: [{ text: "Ag", bold: false, italic: false }],
-    normalizedText: "Ag",
-    sourceSegments: [],
-    position: representative?.position ?? document.blocks[0]!.position,
-    footnoteRefs: [],
-  };
-  const bodyNatural = naturalHeight(fonts, metricProbe, profile.body, 0, 2);
-  const bodyPitch = linePitch(bodyNatural, profile.body);
   return {
     pageCount: pages.length,
     equivalentPages: pages.length - 1 + occupied(last) / usableHeight,
@@ -1566,6 +1029,7 @@ export function paginate(
       0,
     ),
     visualLinesByPage: pages.map((placedPage) => placedPage.visual),
+    countedLinesByPage: pages.map((placedPage) => placedPage.counted),
     lastPage: {
       visualLines: last.visual,
       usedTwips: occupied(last),
@@ -1573,8 +1037,10 @@ export function paginate(
       bodyLineEquivalentsUsed: occupied(last) / bodyPitch,
       bodyLineCapacity: Math.floor(usableHeight / bodyPitch),
     },
-    paragraphs: paragraphResults,
-    warnings,
-    ...(sectionResults ? { sections: sectionResults } : {}),
+    paragraphs: diagnostics.paragraphResults,
+    warnings: diagnostics.warnings,
+    ...(diagnostics.sectionResults
+      ? { sections: diagnostics.sectionResults }
+      : {}),
   };
 }

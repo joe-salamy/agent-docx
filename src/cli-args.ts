@@ -1,5 +1,55 @@
-import { parseArgs } from "node:util";
+import { parseArgs, type ParseArgsConfig } from "node:util";
 import { AgentDocxError } from "./types.js";
+
+export type ParseArgsToken =
+  | {
+      kind: "option";
+      index: number;
+      name: string;
+      rawName: string;
+      value: string | undefined;
+      inlineValue: boolean | undefined;
+    }
+  | { kind: "positional"; index: number; value: string }
+  | { kind: "option-terminator"; index: number };
+
+export type StrictParsedArgs = {
+  values: Record<string, string | boolean | readonly string[] | undefined>;
+  positionals: string[];
+  tokens?: readonly ParseArgsToken[];
+};
+
+/**
+ * Strict parseArgs with a stable error taxonomy: unknown or malformed options
+ * surface as `INVALID_ARGUMENT` rather than a raw node error.
+ */
+export const parseCliArgsStrict = (
+  config: ParseArgsConfig & { args: readonly string[] },
+): StrictParsedArgs => {
+  try {
+    const parsed = parseArgs({
+      ...config,
+      tokens: true,
+    }) as StrictParsedArgs;
+    const seen = new Set<string>();
+    for (const token of parsed.tokens ?? []) {
+      if (token.kind !== "option" || !token.name) continue;
+      if (seen.has(token.name) && !["include", "exclude"].includes(token.name))
+        throw new AgentDocxError(
+          "INVALID_ARGUMENT",
+          `Duplicate option: --${token.name}`,
+        );
+      seen.add(token.name);
+    }
+    return parsed;
+  } catch (error) {
+    if (error instanceof AgentDocxError) throw error;
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+};
 
 export type CliOptionValues = Record<
   string,
@@ -83,8 +133,6 @@ const specs = {
   jsonl: { type: "boolean" },
   "debounce-ms": { type: "string" },
   poll: { type: "boolean" },
-  "inspect-template": { type: "boolean" },
-  "list-profiles": { type: "boolean" },
 } as const;
 
 export const cliHelp = `Usage:
@@ -118,7 +166,7 @@ Machine output is JSON/JSONL on stdout; fatal records are JSON on stderr.
 `;
 
 function parseMeasureArgs(args: readonly string[]): CliCommand {
-  const parsed = parseArgs({
+  const parsed = parseCliArgsStrict({
     args: [...args],
     options: specs,
     strict: true,
@@ -127,24 +175,8 @@ function parseMeasureArgs(args: readonly string[]): CliCommand {
   });
   const values = parsed.values as CliOptionValues;
 
-  const seen = new Set<string>();
-  for (const token of parsed.tokens) {
-    if (token.kind !== "option" || !token.name) continue;
-    if (seen.has(token.name) && !["include", "exclude"].includes(token.name)) {
-      throw new AgentDocxError(
-        "INVALID_ARGUMENT",
-        `Duplicate option: --${token.name}`,
-      );
-    }
-    seen.add(token.name);
-  }
 
-  if (
-    values.help ||
-    values.version ||
-    values["list-profiles"] ||
-    values["inspect-template"]
-  ) {
+  if (values.help || values.version) {
     throw new AgentDocxError(
       "INVALID_ARGUMENT",
       "Use an explicit command; --help and --version are global forms only",
@@ -301,7 +333,7 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
   }
   if (command === "measure") return parseMeasureArgs(rest);
   if (command === "profiles") {
-    const parsed = parseArgs({
+    const parsed = parseCliArgsStrict({
       args: rest,
       options: specs,
       strict: true,
@@ -326,7 +358,7 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
         "template requires the inspect subcommand",
       );
     }
-    const parsed = parseArgs({
+    const parsed = parseCliArgsStrict({
       args: rest.slice(1),
       options: specs,
       strict: true,

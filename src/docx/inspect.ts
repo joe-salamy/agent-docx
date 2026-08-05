@@ -1,32 +1,34 @@
-import { createHash } from "node:crypto";
 import {
   decodeDocxXml as decodeXml,
   docxXmlAttribute as attr,
   parseDocxXml as parse,
   readDocxParts,
   resolveOpcTarget,
+  sha256Hex,
 } from "./package.js";
-import { builtInProfiles } from "../profiles.js";
 import {
-  AgentDocxError,
-  type Diagnostic,
-  type DocxTemplateInspection,
-  type InspectTemplateOptions,
-  type LayoutProfile,
-  type PageGeometry,
-  type TextStyle,
-} from "../types.js";
+  isWordprocessingElement,
+  parseRelationships,
+  relationshipPartFor,
+  type Relationship,
+} from "./opc.js";
+import { builtInProfiles } from "../profiles.js";
+import { AgentDocxError } from "../types.js";
+import type { Diagnostic } from "../types.js";
+import type {
+  LayoutProfile,
+  PageGeometry,
+  TextStyle,
+} from "../layout/profile.js";
+import type {
+  DocxTemplateInspection,
+  InspectTemplateOptions,
+} from "./contracts.js";
 
 export { DOCX_LIMITS } from "./package.js";
 
 type Parts = Record<string, Uint8Array>;
 type LoadedParts = { parts: Parts; names: readonly string[] };
-type Relationship = {
-  id: string;
-  type: string;
-  target: string;
-  external: boolean;
-};
 type HeaderFooterReference = {
   kind: "header" | "footer";
   variant: "default" | "first" | "even";
@@ -35,17 +37,6 @@ type HeaderFooterReference = {
 type TemplateSection = {
   page: PageGeometry;
   headerFooterReferences: readonly HeaderFooterReference[];
-};
-
-const sha = (bytes: Uint8Array) =>
-  createHash("sha256").update(bytes).digest("hex");
-
-const relationshipPartFor = (sourcePart: string): string => {
-  if (sourcePart === "") return "_rels/.rels";
-  const components = sourcePart.split("/");
-  const name = components.pop();
-  if (!name) throw new AgentDocxError("DOCX_INVALID", "Relationship source has no name");
-  return [...components, "_rels", `${name}.rels`].join("/");
 };
 
 const readParts = async (bytes: Uint8Array): Promise<LoadedParts> => {
@@ -61,24 +52,18 @@ const readParts = async (bytes: Uint8Array): Promise<LoadedParts> => {
   return { parts: Object.fromEntries(loaded), names: names.sort() };
 };
 
-const relationships = (xml: string | undefined): readonly Relationship[] => {
-  if (!xml) return [];
-  const values: Relationship[] = [];
-  const ids = new Set<string>();
-  parse(xml, (tag) => {
-    if (tag.local !== "Relationship") return;
-    const id = attr(tag, "Id");
-    const type = attr(tag, "Type");
-    const target = attr(tag, "Target");
-    const targetMode = attr(tag, "TargetMode");
-    if (!id || !type || !target || ids.has(id))
-      throw new AgentDocxError("DOCX_INVALID", "Relationship has missing or duplicate attributes");
-    if (targetMode !== undefined && targetMode !== "External")
-      throw new AgentDocxError("DOCX_INVALID", "Relationship target mode is invalid");
-    ids.add(id);
-    values.push({ id, type, target, external: targetMode === "External" });
-  });
-  return values;
+const relationships = (
+  xml: string | undefined,
+  sourcePart: string,
+): readonly Relationship[] =>
+  xml ? parseRelationships(xml, sourcePart) : [];
+
+const sourcePartForRels = (partPath: string): string => {
+  if (partPath === "_rels/.rels") return "";
+  const components = partPath.split("/");
+  const name = components.pop()!.slice(0, -".rels".length);
+  components.pop();
+  return [...components, name].join("/");
 };
 
 function sectionGeometry(
@@ -91,6 +76,7 @@ function sectionGeometry(
   parse(
     xml,
     (tag) => {
+      if (!isWordprocessingElement(tag)) return;
       if (tag.local === "sectPr") {
         page = structuredClone(fallback);
         references = [];
@@ -134,6 +120,7 @@ function sectionGeometry(
       }
     },
     (tag) => {
+      if (!isWordprocessingElement(tag)) return;
       if (tag.local === "sectPr" && page) {
         sections.push({ page, headerFooterReferences: references });
         page = null;
@@ -611,6 +598,7 @@ export async function inspectDocxTemplate(
     parts[relationshipPartFor("")]
       ? decodeXml(parts[relationshipPartFor("")]!)
       : undefined,
+    "",
   ).filter((relationship) => /officeDocument$/.test(relationship.type));
   if (rootRelationships.length > 1)
     throw new AgentDocxError(
@@ -656,6 +644,7 @@ export async function inspectDocxTemplate(
     parts[relationshipPartFor(mainPart)]
       ? decodeXml(parts[relationshipPartFor(mainPart)]!)
       : undefined,
+    mainPart,
   );
   const relationshipById = new Map(
     mainRelationships.map((relationship) => [relationship.id, relationship]),
@@ -758,7 +747,7 @@ export async function inspectDocxTemplate(
     ...Object.entries(parts)
       .filter(([partPath]) => partPath.endsWith(".rels"))
       .flatMap(([partPath, bytes]) =>
-        relationships(decodeXml(bytes))
+        relationships(decodeXml(bytes), sourcePartForRels(partPath))
           .filter((relationship) => relationship.external)
           .map((relationship) => ({
             partPath: `${partPath}#${relationship.id}`,
@@ -818,7 +807,7 @@ export async function inspectDocxTemplate(
         .map(([family, sourcePart]) => ({ family, sourcePart })),
     },
     unsupportedParts,
-    package: { sha256: sha(docx), mainPart, macroEnabled },
+    package: { sha256: sha256Hex(docx), mainPart, macroEnabled },
     warnings,
   };
 }

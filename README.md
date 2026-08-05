@@ -372,7 +372,11 @@ Schemas are closed where a protocol or stored record needs a stable contract. Th
 ## Development
 
 ```sh
+pnpm typecheck
+pnpm format
 pnpm test
+pnpm accuracy
+pnpm smoke:agent
 pnpm verify:pack
 pnpm social:preview
 ```

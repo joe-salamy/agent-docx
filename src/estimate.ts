@@ -6,13 +6,13 @@ import {
 import { paginate } from "./layout/paginate.js";
 import { conservativeBodyBounds } from "./layout/body.js";
 import { loadFonts, resolveProfile, resolvedProfile } from "./resolve.js";
-import {
-  AgentDocxError,
-  type Budget,
-  type DeterministicResult,
-  type EstimateOptions,
-  type TrimOpportunity,
-} from "./types.js";
+import { AgentDocxError } from "./types.js";
+import type {
+  Budget,
+  DeterministicResult,
+  EstimateOptions,
+  TrimOpportunity,
+} from "./measurement.js";
 export async function estimateNormalizedDocument(
   document: NormalizedDocument,
   options: EstimateOptions = {},
@@ -114,6 +114,7 @@ export async function estimateNormalizedDocument(
     equivalentPages: layout.equivalentPages,
     totalVisualLines: layout.totalVisualLines,
     visualLinesByPage: layout.visualLinesByPage,
+    countedLinesByPage: layout.countedLinesByPage,
     lastPage: layout.lastPage
       ? { source: "deterministic", ...layout.lastPage }
       : null,

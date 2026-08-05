@@ -24,7 +24,6 @@ export {
   validateLegalDocument,
   validateUserRulePack,
 } from "./legal/rules.js";
-export { emptyValidationResult } from "./legal/rules.js";
 export type {
   AddReviewInput,
   AgentDocxDocumentConfig,
@@ -91,10 +90,6 @@ export type {
 export type {
   BuiltInRulePack,
   RuleCheckKind,
-  ValidationFinding,
-  ValidationResult,
-} from "./legal/rules.js";
-export type {
   RuleCheckParams,
   UserRulePack,
   UserRulePackCheck,
@@ -108,7 +103,9 @@ export type {
   UserRulePackRequiredFooter,
   UserRulePackRequiredMetadata,
   UserRulePackTypeface,
-} from "./types.js";
+  ValidationFinding,
+  ValidationResult,
+} from "./legal/rules.js";
 export type {
   DraftGuidance,
   PatchDeltas,
@@ -121,7 +118,6 @@ export type {
   AgentRequest,
 } from "./agent.js";
 export type {
-  Budget,
   CliErrorPayload,
   CliErrorRecord,
   CliFatalRecord,
@@ -131,47 +127,56 @@ export type {
   CliTrigger,
   CliWatchEndRecord,
   CliWatchReadyRecord,
+} from "./cli-contract.js";
+export type {
   BuiltInProfileId,
-  DeterministicResult,
-  Diagnostic,
-  DiagnosticCode,
-  DocxTemplateInspection,
-  ErrorCode,
-  EstimateOptions,
-  FilingKind,
   FontSetInput,
-  InspectTemplateOptions,
-  InspectedSection,
-  InspectedStyle,
-  JsonValue,
-  LastPageMetrics,
   LayoutOverrides,
   LayoutProfile,
-  LibreOfficeRendererOptions,
-  LibreOfficeRendering,
   LineSpacing,
-  MeasureOptions,
-  MeasurementResult,
   MetricFont,
-  PageCountSource,
   PageGeometry,
   PaginationRules,
+  ResolvedLayoutProfile,
+  TableStyle,
+  TextStyle,
+  ThematicBreakStyle,
+} from "./layout/profile.js";
+export type {
+  Budget,
+  DeterministicResult,
+  EstimateOptions,
+  FilingKind,
+  LastPageMetrics,
+  LibreOfficeRendererOptions,
+  LibreOfficeRendering,
+  MeasureOptions,
+  MeasurementResult,
+  PageCountSource,
   ParagraphDiagnostic,
   ProvenanceSource,
   RendererError,
   RendererMode,
   RendererStatus,
-  ResolvedLayoutProfile,
   SectionDiagnostic,
-  SectionHeading,
   SectionPageBudget,
   SectionPageDiagnostic,
-  SourcePosition,
-  TextStyle,
-  TableStyle,
-  ThematicBreakStyle,
   TrimOpportunity,
+  WordParagraphDiagnostic,
   WordRendererOptions,
   WordRendering,
-  WordParagraphDiagnostic,
+} from "./measurement.js";
+export type {
+  Diagnostic,
+  DiagnosticCode,
+  ErrorCode,
+  JsonValue,
+  SectionHeading,
+  SourcePosition,
 } from "./types.js";
+export type {
+  DocxTemplateInspection,
+  InspectTemplateOptions,
+  InspectedSection,
+  InspectedStyle,
+} from "./docx/contracts.js";

@@ -1,3 +1,5 @@
 # Hash-locked external corpus inputs must remain byte-for-byte stable.
 test/fixtures/corpus/
 test/fixtures/blind-corpus/
+dist/
+.agent-docx/

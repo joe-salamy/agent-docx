@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Ajv2020 } from "ajv/dist/2020.js";
+import { metadata } from "./helpers.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const supportedProtocolVersions = new Set([
@@ -144,17 +146,33 @@ test("MCP stdio serves agent tools and dispatches a project workflow", async () 
     assert.ok(names.includes("project.init"));
     assert.ok(names.includes("document.validate"));
     assert.ok(names.includes("docx.export"));
+    for (const tool of listed.result.tools) {
+      const ajv = new Ajv2020({ strict: false });
+      assert.doesNotThrow(
+        () => ajv.compile(tool.inputSchema),
+        `tool ${tool.name} inputSchema must compile with no dangling refs`,
+      );
+    }
+    const initSchema = listed.result.tools.find(
+      (tool) => tool.name === "project.init",
+    ).inputSchema;
+    assert.ok(
+      ["documentId", "source", "profile", "metadata"].every((key) =>
+        initSchema.required.includes(key),
+      ),
+      "project.init inputSchema should carry action-specific required params",
+    );
+    assert.equal(typeof initSchema.properties.documentId.$ref, "string");
+    assert.equal(typeof initSchema.properties.project.type, "string");
 
-    const metadata = {
-      court: "United States District Court",
-      jurisdiction: "Northern District of California",
-      caseName: "Example v. Example",
-      docketNumber: "3:26-cv-00001",
-      documentTitle: "Motion",
-      parties: [],
-      counsel: [],
-      certificates: [],
-    };
+    const badProject = await call(session, "bad-project", "tools/call", {
+      name: "project.init",
+      arguments: { project: 42 },
+    });
+    assert.equal(badProject.result, undefined);
+    assert.equal(badProject.error.code, -32602);
+    assert.equal(badProject.error.message, "project must be a non-empty string");
+
     const initializedProject = await call(session, "project", "tools/call", {
       name: "project.init",
       arguments: {
@@ -218,6 +236,37 @@ test("MCP stdio serves agent tools and dispatches a project workflow", async () 
     ]);
     const batch = JSON.parse(await session.nextLine());
     assert.equal(batch.error.code, -32600);
+  } finally {
+    await session.close().catch((error) => {
+      assert.fail(`${error.message}\n${session.stderr()}`);
+    });
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("MCP error responses carry structured details", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-docx-mcp-details-"));
+  await writeFile(join(directory, "agent-docx.json"), "{not json");
+  const session = spawnMcp(directory);
+  try {
+    await call(session, "initialize", "initialize", {
+      protocolVersion: "2025-06-18",
+    });
+    session.send({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+      params: {},
+    });
+    const failed = await call(session, "details", "tools/call", {
+      name: "document.get",
+      arguments: { project: "agent-docx.json", documentId: "motion" },
+    });
+    assert.equal(failed.result.isError, true);
+    assert.equal(failed.result.structuredContent.code, "PROJECT_INVALID");
+    assert.ok(
+      failed.result.structuredContent.details !== undefined,
+      "structuredContent should include details",
+    );
   } finally {
     await session.close().catch((error) => {
       assert.fail(`${error.message}\n${session.stderr()}`);

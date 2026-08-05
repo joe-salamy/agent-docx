@@ -1,26 +1,24 @@
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
+  AgentDocxError,
   builtInProfiles,
   compileMarkdown,
   generateDocx,
   generateRedlineDocx,
   inspectDocx,
+  lowerLegalDocument,
   parseLegalMarkdown,
 } from "../dist/index.js";
+import { measureNormalizedDocument } from "../dist/renderers/index.js";
+import { loadFonts } from "../dist/resolve.js";
+import { tableColumnWidths } from "../dist/layout/table.js";
 import { inspectDocxMaterial } from "../dist/docx/import.js";
-import { readDocxParts } from "../dist/docx/package.js";
-
-const metadata = {
-  court: "United States District Court",
-  jurisdiction: "Northern District of California",
-  caseName: "Example v. Example",
-  docketNumber: "3:26-cv-00001",
-  documentTitle: "Motion",
-  parties: [],
-  counsel: [],
-  certificates: [],
-};
+import { readDocxParts, repackDocxParts } from "../dist/docx/package.js";
+import { metadata } from "./helpers.js";
 
 test("standalone compilation parses legal Markdown and emits stable block bookmarks", async () => {
   const compiled = await compileMarkdown("# Motion\n\nThe requested relief follows.\n", {
@@ -34,6 +32,115 @@ test("standalone compilation parses legal Markdown and emits stable block bookma
   assert.equal(compiled.blocks.length, 2);
   for (const block of compiled.blocks)
     assert.match(block.bookmark, /^adx_[0-9a-f]{32}$/);
+});
+
+test("authority annotations survive compilation into the semantic manifest", async () => {
+  const compiled = await compileMarkdown(
+    ':authority[Section claim]{id="42-u-s-c-1983" category="statutes" short="42 U.S.C. § 1983"}\n\nBody.\n',
+    {
+      documentId: "motion",
+      profile: "us-district-conventional",
+      metadata,
+    },
+  );
+  const inspected = await inspectDocx(compiled.bytes);
+  const recognizedAuthority = inspected.recognized.blocks.flatMap(
+    (block) => block.runs?.flatMap((run) => (run.authority ? [run.authority] : [])) ?? [],
+  );
+  assert.ok(
+    recognizedAuthority.some(
+      (authority) =>
+        authority.id === "42-u-s-c-1983" &&
+        authority.category === "statutes" &&
+        authority.short === "42 U.S.C. § 1983",
+    ),
+  );
+});
+
+test("ordered lists starting above one export a numbering start override", async () => {
+  const parsed = parseLegalMarkdown(
+    ["4. Fourth item", "5. Fifth item", "", "1. Ordinary list"].join("\n"),
+    {
+      documentId: "motion",
+      profile: "us-district-conventional",
+      metadata,
+    },
+  );
+  const generated = await generateDocx(
+    parsed.document,
+    builtInProfiles["us-district-conventional"],
+  );
+  const parts = await readDocxParts(generated.bytes);
+  const numberingXml = new TextDecoder().decode(parts.get("word/numbering.xml"));
+  assert.match(numberingXml, /<w:start w:val="4"\/>/);
+  assert.ok(
+    (numberingXml.match(/<w:abstractNum/g) ?? []).length >= 4,
+    "numbering.xml should carry the ordinary and start-override ordered definitions",
+  );
+});
+
+test("continuous section breaks preserve the deterministic page", async () => {
+  const before = Array.from({ length: 8 }, (_, index) => `Before ${index}`).join(
+    "\n\n",
+  );
+  const after = Array.from({ length: 8 }, (_, index) => `After ${index}`).join(
+    "\n\n",
+  );
+  const base = `${before}\n\n${after}\n`;
+  const continuous = `${before}\n\n::sectionbreak{kind="continuous"}\n\n${after}\n`;
+  const nextPage = `${before}\n\n::sectionbreak{kind="next-page"}\n\n${after}\n`;
+  const parseOptions = {
+    documentId: "motion",
+    profile: "us-district-conventional",
+    metadata,
+  };
+  const measure = (markdown) =>
+    measureNormalizedDocument(
+      lowerLegalDocument(parseLegalMarkdown(markdown, parseOptions).document),
+      { renderer: "deterministic" },
+    );
+  const [withoutBreak, withContinuous, withNextPage] = await Promise.all([
+    measure(base),
+    measure(continuous),
+    measure(nextPage),
+  ]);
+  assert.equal(
+    withContinuous.deterministic.pageCount,
+    withoutBreak.deterministic.pageCount,
+  );
+  assert.equal(
+    withNextPage.deterministic.pageCount,
+    withoutBreak.deterministic.pageCount + 1,
+  );
+});
+
+test("DOCX export allocates table columns with the deterministic widths", async () => {
+  const parsed = parseLegalMarkdown(
+    [
+      "| Wide header column | X |",
+      "| --- | --- |",
+      "| A long phrase that needs room to breathe | Y |",
+      "| Short | Z |",
+    ].join("\n"),
+    { documentId: "motion", profile: "us-district-conventional", metadata },
+  );
+  const lowered = lowerLegalDocument(parsed.document);
+  const table = lowered.blocks.find((block) => block.kind === "table");
+  const profile = builtInProfiles["us-district-conventional"];
+  const fonts = await loadFonts(undefined, profile.requestedFontFamily);
+  const usableWidth =
+    profile.page.widthTwips -
+    profile.page.marginsTwips.left -
+    profile.page.marginsTwips.right -
+    profile.page.gutterTwips;
+  const expected = tableColumnWidths(table, profile, fonts, usableWidth);
+  const generated = await generateDocx(lowered, profile, { fonts });
+  const parts = await readDocxParts(generated.bytes);
+  const documentXml = new TextDecoder().decode(parts.get("word/document.xml"));
+  const grid = [...documentXml.matchAll(/<w:gridCol w:w="(\d+)"/g)].map(
+    (match) => Number(match[1]),
+  );
+  assert.deepEqual(grid, expected);
 });
 
 test("native DOCX generation accepts legal IR and its document chrome", async () => {
@@ -54,7 +161,7 @@ test("native DOCX generation accepts legal IR and its document chrome", async ()
   );
 });
 
-test("native redline export accepts tables, lists, and footnotes", async () => {
+test("native redline export accepts lists and footnotes and rejects tables", async () => {
   const parsed = parseLegalMarkdown(
     [
       "- First item",
@@ -72,9 +179,28 @@ test("native redline export accepts tables, lists, and footnotes", async () => {
       metadata,
     },
   );
+  const options = {
+    changes: [],
+    profile: builtInProfiles["us-district-conventional"],
+  };
+  await assert.rejects(
+    generateRedlineDocx(parsed.document, parsed.document, options.changes, options.profile),
+    (error) =>
+      error instanceof AgentDocxError &&
+      error.code === "DOCX_REDLINE_UNSUPPORTED" &&
+      /table/.test(error.message),
+  );
+  const textOnly = parseLegalMarkdown(
+    "- First item\n- Second item[^note]\n\n[^note]: Supporting note.\n",
+    {
+      documentId: "motion",
+      profile: "us-district-conventional",
+      metadata,
+    },
+  );
   const generated = await generateRedlineDocx(
-    parsed.document,
-    parsed.document,
+    textOnly.document,
+    textOnly.document,
     { changes: [] },
     builtInProfiles["us-district-conventional"],
   );
@@ -245,6 +371,62 @@ test("semantic DOCX import requires and verifies declared attachment bundles", a
     inspected.recognized.assets["record.pdf"]?.sha256,
     compiled.attachments.manifest.entries[0]?.sha256,
   );
+});
+
+test("attachment bundles enforce file and path budgets", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-docx-attachments-"));
+  try {
+    const oversized = new Uint8Array(26 * 1024 * 1024);
+    const compiled = await compileMarkdown(
+      ':::exhibit{id="exhibit-a" label="Exhibit A" source="big.pdf"}\n\nAttached record.\n\n:::',
+      {
+        documentId: "motion",
+        profile: "us-district-conventional",
+        metadata,
+        assets: {
+          "big.pdf": { bytes: oversized, mediaType: "application/pdf" },
+        },
+      },
+    );
+    assert.ok(compiled.attachments);
+    await mkdir(join(directory, "files"), { recursive: true });
+    await writeFile(
+      join(directory, "manifest.json"),
+      JSON.stringify(compiled.attachments.manifest),
+    );
+    await writeFile(join(directory, "files/big.pdf"), Buffer.from(oversized));
+    await assert.rejects(
+      inspectDocxMaterial(compiled.bytes, {
+        attachments: { directory },
+      }),
+      (error) =>
+        error instanceof AgentDocxError && error.code === "DOCX_TOO_LARGE",
+    );
+
+    const parts = await readDocxParts(compiled.bytes);
+    const manifestXml = new TextDecoder().decode(
+      parts.get("customXml/itemAgentDocx.xml"),
+    );
+    const tampered = manifestXml.replace('"files/big.pdf"', '"files//big.pdf"');
+    assert.notEqual(tampered, manifestXml);
+    const tamperedParts = new Map(parts);
+    tamperedParts.set(
+      "customXml/itemAgentDocx.xml",
+      new TextEncoder().encode(tampered),
+    );
+    const tamperedBytes = repackDocxParts(tamperedParts);
+    await assert.rejects(
+      inspectDocxMaterial(tamperedBytes, {
+        attachments: { directory },
+      }),
+      (error) =>
+        error instanceof AgentDocxError &&
+        error.code === "DOCX_IMPORT_UNSUPPORTED" &&
+        /version-1 shape/.test(error.message),
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 

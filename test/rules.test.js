@@ -2,16 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { builtInProfiles, builtInRulePacks, compileMarkdown } from "../dist/index.js";
+import { metadata } from "./helpers.js";
 
-const metadata = {
-  court: "United States District Court",
-  jurisdiction: "Northern District of California",
-  caseName: "Example v. Example",
-  docketNumber: "3:26-cv-00001",
-  documentTitle: "Motion",
-  parties: [],
+const metadataWithCounsel = {
+  ...metadata,
   counsel: [{ id: "counsel", name: "A. Counsel" }],
-  certificates: [],
 };
 
 test("rule packs bind validation to checked-in legal source snapshots", async () => {
@@ -25,7 +20,7 @@ test("rule packs bind validation to checked-in legal source snapshots", async ()
     profile: "cand-civil",
     filingKind: "motion-document",
     rulePack: "cand-civil@2026-05-01",
-    metadata,
+    metadata: metadataWithCounsel,
   });
   const footer = compiled.validation.findings.find((finding) => finding.checkId === "cand.footer");
   assert.equal(footer?.status, "fail");
@@ -65,4 +60,37 @@ test("FRAP selects the monospaced predicate from verified pitch evidence", async
     ),
     false,
   );
+});
+
+test("cand.lines counts excluded blockquote lines out of the per-page cap", async () => {
+  const single = { rule: "auto", numerator: 240, denominator: 240 };
+  const base = builtInProfiles["cand-civil"];
+  const profile = {
+    ...base,
+    id: "cand-counted-lines-test",
+    body: { ...base.body, lineSpacing: single },
+    blockquote: { ...base.blockquote, lineSpacing: single },
+    list: { ...base.list, lineSpacing: single },
+    footnote: { ...base.footnote, lineSpacing: single },
+  };
+  const body = Array.from({ length: 26 }, (_, index) => `Body line ${index}.`);
+  const quotes = Array.from({ length: 4 }, (_, index) => `> Quote ${index}.`);
+  const compiled = await compileMarkdown(
+    [...body, ...quotes, ""].join("\n"),
+    {
+      documentId: "motion",
+      profile,
+      filingKind: "motion-document",
+      rulePack: "cand-civil@2026-05-01",
+      metadata,
+    },
+  );
+  const lines = compiled.validation.findings.find(
+    (finding) => finding.checkId === "cand.lines",
+  );
+  assert.equal(lines?.status, "pass");
+  assert.equal(lines?.evidence.lines?.length, 1);
+  assert.equal(lines?.evidence.lines[0], 26);
+  assert.equal(lines?.evidence.countedLineSource, "deterministic-counted-lines");
+  assert.equal(lines?.evidence.maximum, 28);
 });

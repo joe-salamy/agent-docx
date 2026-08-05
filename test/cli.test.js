@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { Ajv2020 } from "ajv/dist/2020.js";
-import { spawn } from "node:child_process";
 import {
   mkdir,
   mkdtemp,
@@ -10,123 +8,49 @@ import {
   writeFile,
 } from "node:fs/promises";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseCliArgs } from "../dist/cli-args.js";
 import { runCli, writeOutputExclusive } from "../dist/cli-run.js";
 import { inspectDocxTemplate } from "../dist/index.js";
 import { parseAgentRequest, serializeAgentValue } from "../dist/agent.js";
+import {
+  memoryRuntime,
+  metadata,
+  pkg,
+  root,
+  runInProcess,
+  runSubprocess,
+  validatorFor,
+} from "./helpers.js";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
-const pkg = JSON.parse(
-  await readFile(new URL("../package.json", import.meta.url), "utf8"),
-);
-const schemaNames = [
-  "measurement-request.schema.json",
-  "measurement-result.schema.json",
-  "docx-template-inspection.schema.json",
-  "measurement-stream.schema.json",
-  "cli-error.schema.json",
-  "agent-stream.schema.json",
-  "agent-request.schema.json",
-  "agent-response.schema.json",
-  "project.schema.json",
-  "rule-pack.schema.json",
-  "revision.schema.json",
-  "change-set.schema.json",
-  "source-patch.schema.json",
-  "validation-result.schema.json",
-  "artifact-result.schema.json",
-  "compiled-docx.schema.json",
-  "docx-import-result.schema.json",
-  "redline-import-result.schema.json",
-  "filing-set.schema.json",
-  "filing-set-validation.schema.json",
-  "profile-catalog.schema.json",
-];
-const schemas = await Promise.all(
-  schemaNames.map(async (name) =>
-    JSON.parse(await readFile(new URL(`../${name}`, import.meta.url), "utf8")),
-  ),
-);
-const ajv = new Ajv2020({
-  strict: true,
-  allowUnionTypes: true,
-  formats: { date: true, "date-time": true, uri: true },
-});
-for (const schema of schemas) ajv.addSchema(schema);
-const validateMeasurement = ajv.getSchema(
+const validateMeasurement = validatorFor(
   "https://agent-docx.dev/schemas/measurement-result-v1.json",
 );
-const validateRequest = ajv.getSchema(
+const validateRequest = validatorFor(
   "https://agent-docx.dev/schemas/measurement-request-v1.json",
 );
-const validateJsonl = ajv.getSchema(
+const validateJsonl = validatorFor(
   "https://agent-docx.dev/schemas/measurement-stream-v1.json",
 );
-const validateInspection = ajv.getSchema(
+const validateInspection = validatorFor(
   "https://agent-docx.dev/schemas/docx-template-inspection-v1.json",
 );
-const validateFatal = ajv.getSchema(
+const validateFatal = validatorFor(
   "https://agent-docx.dev/schemas/cli-error-v1.json",
 );
-const validateProfileCatalog = ajv.getSchema(
+const validateProfileCatalog = validatorFor(
   "https://agent-docx.dev/schemas/profile-catalog-v1.json",
 );
-const validateAgentStream = ajv.getSchema(
+const validateAgentStream = validatorFor(
   "https://agent-docx.dev/schemas/agent-stream-v1.json",
 );
-const validateAgentRequest = ajv.getSchema(
+const validateAgentRequest = validatorFor(
   "https://agent-docx.dev/schemas/agent-request-v1.json",
 );
-const validateAgentResponse = ajv.getSchema(
+const validateAgentResponse = validatorFor(
   "https://agent-docx.dev/schemas/agent-response-v1.json",
 );
-
-function memoryRuntime(input = "", overrides = {}) {
-  const stdout = [];
-  const stderr = [];
-  const runtime = {
-    cwd: root,
-    stdinIsTTY: false,
-    version: pkg.version,
-    readStdin: async () =>
-      typeof input === "string" ? new TextEncoder().encode(input) : input,
-    writeStdout: async (text) => void stdout.push(text),
-    writeStderr: async (text) => void stderr.push(text),
-    onceSignal() {},
-    ...overrides,
-  };
-  return {
-    runtime,
-    stdout: () => stdout.join(""),
-    stderr: () => stderr.join(""),
-  };
-}
-
-async function runInProcess(args, input = "", overrides = {}) {
-  const capture = memoryRuntime(input, overrides);
-  const code = await runCli(args, capture.runtime);
-  return { code, stdout: capture.stdout(), stderr: capture.stderr() };
-}
-
-function runSubprocess(args, input = "") {
-  const { promise, resolve, reject } = Promise.withResolvers();
-  const child = spawn(process.execPath, [cli, ...args], {
-    cwd: root,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
-  child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
-  child.once("error", reject);
-  child.once("close", (code) => resolve({ code, stdout, stderr }));
-  child.stdin.end(input);
-  return promise;
-}
 
 test("explicit project and agent commands execute a revision-bound workflow", async () => {
   const directory = await mkdtemp(join(tmpdir(), "agent-docx-cli-"));
@@ -135,16 +59,7 @@ test("explicit project and agent commands execute a revision-bound workflow", as
     await writeFile(join(directory, "motion.md"), "# Motion\n\nBody text.\n");
     await writeFile(
       join(directory, "metadata.json"),
-      JSON.stringify({
-        court: "United States District Court",
-        jurisdiction: "Northern District of California",
-        caseName: "Example v. Example",
-        docketNumber: "3:26-cv-00001",
-        documentTitle: "Motion",
-        parties: [],
-        counsel: [],
-        certificates: [],
-      }),
+      JSON.stringify(metadata),
     );
     const initialized = await runInProcess(
       [
@@ -246,12 +161,24 @@ test("agent JSONL rejects oversized request lines", async () => {
     ["agent", "--input-jsonl"],
     `x${" ".repeat(8 * 1024 * 1024 + 1)}\n`,
   );
-  assert.equal(result.code, 0, result.stderr);
-  const response = JSON.parse(result.stdout);
-  assert.equal(response.kind, "error");
+  assert.equal(result.code, 2);
+  const response = JSON.parse(result.stderr);
+  assert.equal(response.kind, "fatal");
   assert.equal(response.error.code, "INVALID_ARGUMENT");
-  assert.match(response.error.message, /JSONL input line exceeds/);
+  assert.match(response.error.message, /JSONL line exceeds/);
   assert.equal(validateAgentResponse(response), true);
+});
+
+test("measure batch rejects oversized JSONL lines in the shared decoder", async () => {
+  const result = await runInProcess(
+    ["measure", "--batch", "--input-jsonl"],
+    `x${" ".repeat(8 * 1024 * 1024 + 1)}\n`,
+  );
+  assert.equal(result.code, 2);
+  const response = JSON.parse(result.stderr);
+  assert.equal(response.kind, "fatal");
+  assert.equal(response.error.code, "INVALID_ARGUMENT");
+  assert.match(response.error.message, /JSONL line exceeds/);
 });
 
 test("help and version are standalone", async () => {
@@ -483,16 +410,6 @@ test("request schema accepts exactly one closed source shape", () => {
 });
 
 test("agent request schema accepts every supported filing kind", () => {
-  const metadata = {
-    court: "United States District Court",
-    jurisdiction: "Northern District of California",
-    caseName: "Example v. Example",
-    docketNumber: "3:26-cv-00001",
-    documentTitle: "Motion",
-    parties: [],
-    counsel: [],
-    certificates: [],
-  };
   for (const filingKind of [
     "principal-brief",
     "reply-brief",

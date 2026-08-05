@@ -351,7 +351,7 @@ const inline = (
         const id = node.identifier?.toLowerCase();
         if (!id)
           errorAt("REFERENCE_INVALID", "Missing footnote identifier", node);
-        appendInline(result, "⁎", node, state, { footnoteId: id });
+        appendInline(result, "⁎", node, state, { footnoteId: id as string });
         break;
       }
       case "textDirective": {
@@ -1140,11 +1140,17 @@ export function documentFromSpecification(
   specification: LegalDocumentSpecification,
 ): ParsedLegalMarkdown {
   return parseLegalMarkdown(markdown, {
-    projectId: specification.projectId,
+    ...(specification.projectId !== undefined
+      ? { projectId: specification.projectId }
+      : {}),
     documentId: specification.documentId,
     metadata: specification.metadata,
-    chrome: specification.chrome,
-    assets: specification.assets,
+    ...(specification.chrome !== undefined
+      ? { chrome: specification.chrome }
+      : {}),
+    ...(specification.assets !== undefined
+      ? { assets: specification.assets }
+      : {}),
     exactAssets: true,
   });
 }

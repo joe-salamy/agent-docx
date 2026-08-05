@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import canonicalize from "canonicalize";
 import { lowerLegalDocument } from "../legal/lower.js";
 import type {
@@ -14,7 +13,9 @@ import {
   type ValidationResult,
 } from "../legal/rules.js";
 import { measureNormalizedDocument } from "../renderers/index.js";
-import { AgentDocxError, type MeasurementResult } from "../types.js";
+import { AgentDocxError } from "../types.js";
+import type { MeasurementResult } from "../measurement.js";
+import { sha256Hex } from "./package.js";
 import {
   generateDocx,
   type GeneratedDocx,
@@ -30,6 +31,7 @@ import type {
 } from "./contracts.js";
 import type { CompileOptions } from "../project/contracts.js";
 import type { Change, ChangeSet } from "../revisions/types.js";
+import { definedProps } from "../json-contract.js";
 import { visibleTextForBlock } from "../revisions/diff.js";
 export type CompileMarkdownOptions = CompileOptions & {
   generation?: Pick<
@@ -37,9 +39,6 @@ export type CompileMarkdownOptions = CompileOptions & {
     "revision" | "changeSet" | "annotations" | "dependencies" | "createdAt"
   >;
 };
-const sha256 = (bytes: Uint8Array | string): `sha256:${string}` =>
-  `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-
 type FlattenedBlock = {
   block: LegalBlock;
   parentId: LegalBlock["id"] | null;
@@ -153,13 +152,13 @@ const attachmentBundle = (
       name,
       mediaType: asset.mediaType,
       byteLength: asset.bytes.byteLength,
-      sha256: sha256(asset.bytes),
+      sha256: sha256Hex(asset.bytes),
       payloadPath: `files/${name}`,
     };
   });
   const manifest = { schemaVersion: 1 as const, entries };
   return {
-    manifestSha256: sha256(canonicalize(manifest)!),
+    manifestSha256: sha256Hex(canonicalize(manifest)!),
     manifest,
     files,
   };
@@ -244,17 +243,35 @@ export const createSemanticManifest = (input: {
   projectId: input.document.projectId,
   documentId: input.document.documentId,
   source: input.source,
-  sourceSha256: sha256(input.source),
+  sourceSha256: sha256Hex(input.source),
   document: semanticDocumentProjection(input.document),
   blocks: flattenBlocks(input.document.blocks).map(
-    ({ block, parentId, depth }, order) => ({
-      id: block.id,
-      bookmark: blockBookmark(block.id),
-      parentId,
-      depth,
-      order,
-      kind: block.kind,
-    }),
+    ({ block, parentId, depth }, order) => {
+      const authorities =
+        "runs" in block
+          ? block.runs.flatMap((run, runIndex) =>
+              run.authority
+                ? [
+                    {
+                      run: runIndex,
+                      id: run.authority.id,
+                      category: run.authority.category,
+                      short: run.authority.short,
+                    },
+                  ]
+                : [],
+            )
+          : [];
+      return {
+        id: block.id,
+        bookmark: blockBookmark(block.id),
+        parentId,
+        depth,
+        order,
+        kind: block.kind,
+        ...(authorities.length > 0 ? { authorities } : {}),
+      };
+    },
   ),
   attachments: input.attachments,
   revision: input.revision,
@@ -323,19 +340,29 @@ export const compileMarkdown = async (
   const measurement = await measureNormalizedDocument(
     lowerLegalDocument(document),
     {
-      ...measurementOptions,
+      ...definedProps(measurementOptions),
       profile: specification.profile,
-      filingKind: specification.filingKind,
-      fontSet: specification.fontSet,
-      chrome: document.chrome,
+      ...(specification.filingKind !== undefined
+        ? { filingKind: specification.filingKind }
+        : {}),
+      ...(specification.fontSet !== undefined
+        ? { fontSet: specification.fontSet }
+        : {}),
+      ...(document.chrome !== undefined ? { chrome: document.chrome } : {}),
       ...(template ? { template } : {}),
     },
   );
   const validation = validateLegalDocument(document, {
     ...(generation?.revision ? { revision: generation.revision.id } : {}),
-    rulePack: specification.rulePack,
-    customPacks: options.rulePacks,
-    filingKind: specification.filingKind,
+    ...(specification.rulePack !== undefined
+      ? { rulePack: specification.rulePack }
+      : {}),
+    ...(options.rulePacks !== undefined
+      ? { customPacks: options.rulePacks }
+      : {}),
+    ...(specification.filingKind !== undefined
+      ? { filingKind: specification.filingKind }
+      : {}),
     measurement: serializableMeasurement(measurement),
   });
   const semanticManifest = createSemanticManifest({
@@ -346,19 +373,25 @@ export const compileMarkdown = async (
     revision: generation?.revision?.id ?? null,
     baseRevision: generation?.changeSet?.baseRevision ?? null,
     validation,
-    dependencies: generation?.dependencies,
-    changeSet: generation?.changeSet,
-    annotations: generation?.annotations,
+    ...(generation?.dependencies
+      ? { dependencies: generation.dependencies }
+      : {}),
+    ...(generation?.changeSet ? { changeSet: generation.changeSet } : {}),
+    ...(generation?.annotations
+      ? { annotations: generation.annotations }
+      : {}),
   });
   const generated = await generateDocx(
     document,
     measurement.deterministic.profile,
     {
-      assets: specification.assets,
-      chrome: document.chrome,
+      ...(specification.assets !== undefined
+        ? { assets: specification.assets }
+        : {}),
+      ...(document.chrome !== undefined ? { chrome: document.chrome } : {}),
       pageCount: Math.max(1, measurement.deterministic.pageCount),
       metadata: document.metadata,
-      ...generation,
+      ...(generation ? definedProps(generation) : {}),
       validation,
       semanticManifest,
     },
@@ -369,7 +402,7 @@ export const compileMarkdown = async (
     mode: "clean",
     profile: measurement.deterministic.profile.id,
     rulePack: specification.rulePack ?? null,
-    docxSha256: sha256(generated.bytes),
+    docxSha256: sha256Hex(generated.bytes),
     dependencies: Object.entries(document.assets)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([name, asset]) => ({ name, sha256: asset.sha256 })),
@@ -391,8 +424,8 @@ export const compileMarkdown = async (
     mediaType:
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     byteLength: generated.bytes.byteLength,
-    sha256: sha256(generated.bytes),
-    provenanceSha256: sha256(canonicalize(provenance)!),
+    sha256: sha256Hex(generated.bytes),
+    provenanceSha256: sha256Hex(canonicalize(provenance)!),
     documentId: specification.documentId,
     profile: measurement.deterministic.profile.id,
     rulePack: specification.rulePack ?? null,

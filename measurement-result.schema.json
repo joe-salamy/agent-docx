@@ -463,6 +463,7 @@
         "equivalentPages",
         "totalVisualLines",
         "visualLinesByPage",
+        "countedLinesByPage",
         "lastPage",
         "profile",
         "warnings"
@@ -475,6 +476,10 @@
         "visualLinesByPage": {
           "type": "array",
           "items": { "type": "integer" }
+        },
+        "countedLinesByPage": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
         },
         "lastPage": {
           "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/lastPage" }]

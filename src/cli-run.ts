@@ -11,83 +11,67 @@ import type { Stats } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import chokidar from "chokidar";
 import { parseCliArgs, cliHelp, type CliOptionValues } from "./cli-args.js";
+import { readInputFile } from "./input.js";
+import { toErrorPayload } from "./errors.js";
 import { inspectDocxTemplate } from "./docx/inspect.js";
 import { measureMarkdown } from "./renderers/index.js";
 import { runWorkflowCommand } from "./cli-workflow.js";
 import { builtInProfiles } from "./profiles.js";
 import { jsonlLines, strictUtf8 } from "./jsonl.js";
-import { runMcpServer, type McpRuntime } from "./mcp.js";
+import { runMcpServer } from "./mcp.js";
 import {
   AgentDocxError,
+} from "./types.js";
+import type {
+  EstimateOptions,
+  MeasureOptions,
+  MeasurementResult,
+  RendererMode,
+} from "./measurement.js";
+import type {
+  FontSetInput,
+  LayoutOverrides,
+} from "./layout/profile.js";
+import {
+  type BatchSelection,
   type CliErrorPayload,
   type CliErrorRecord,
   type CliFatalRecord,
+  type CliJsonlRequest,
   type CliResultRecord,
+  type CliRuntime,
+  type CliSequenceState,
   type CliSource,
   type CliTrigger,
   type CliWatchEndRecord,
   type CliWatchReadyRecord,
-  type EstimateOptions,
-  type FontSetInput,
-  type LayoutOverrides,
-  type MeasureOptions,
-  type MeasurementResult,
-  type RendererMode,
-} from "./types.js";
+  type OutputFileHandle,
+  type OutputFileIo,
+  type SerializableConfig,
+  type Source,
+} from "./cli-contract.js";
+import { runWatchController } from "./watch.js";
 
-export interface CliRuntime {
-  readonly cwd: string;
-  readonly stdinIsTTY: boolean;
-  readonly version: string;
-  readStdin(): Promise<Uint8Array>;
-  readStdinChunks?(): AsyncIterable<Uint8Array>;
-  writeStdout(text: string): Promise<void>;
-  writeStderr(text: string): Promise<void>;
-  onceSignal(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
-}
+export type {
+  BatchSelection,
+  CliErrorPayload,
+  CliErrorRecord,
+  CliFatalRecord,
+  CliJsonlRequest,
+  CliResultRecord,
+  CliRuntime,
+  CliSequenceState,
+  CliSource,
+  CliTrigger,
+  CliWatchEndRecord,
+  CliWatchReadyRecord,
+  OutputFileHandle,
+  OutputFileIo,
+  SerializableConfig,
+  Source,
+} from "./cli-contract.js";
 
-type SerializableConfig = {
-  profile?: "us-district-conventional" | "frap-32" | "cand-civil";
-  templatePath?: string;
-  layout?: LayoutOverrides;
-  fontSet?: {
-    family: string;
-    regularPath: string;
-    boldPath?: string;
-    italicPath?: string;
-    boldItalicPath?: string;
-  };
-  filingKind?: EstimateOptions["filingKind"];
-  pageLimit?: number;
-  paragraphDiagnostics?: boolean;
-  sectionDiagnostics?: boolean;
-  trim?: EstimateOptions["trim"];
-  renderer?: RendererMode;
-  officeTimeoutMs?: number;
-  word?: { powerShellPath?: string };
-  libreoffice?: {
-    executablePath?: string;
-    installedFonts?: { family: string; path: string }[];
-  };
-  batch?: {
-    recursive?: boolean;
-    include?: string[];
-    exclude?: string[];
-  };
-};
-
-type Source =
-  | { kind: "file"; path: string; resolvedPath: string }
-  | { kind: "stdin" }
-  | { kind: "inline"; name: string | null };
-
-type BatchSelection = {
-  readonly recursive: boolean;
-  readonly include: readonly string[];
-  readonly exclude: readonly string[];
-};
 
 function invalidPattern(pattern: string) {
   if (!pattern || isAbsolute(pattern) || pattern.startsWith("!")) return true;
@@ -111,7 +95,7 @@ function invalidPattern(pattern: string) {
 const normalizedRelativePath = (cwd: string, path: string) =>
   relative(cwd, path).split(sep).join("/");
 
-export async function resolveBatchInputs(
+async function resolveBatchInputs(
   selectors: readonly string[],
   selection: BatchSelection,
   cwd: string,
@@ -315,18 +299,7 @@ export async function resolveBatchInputs(
   }
   return output;
 }
-export type CliSequenceState = { sequence: number };
 type SequenceState = CliSequenceState;
-
-export type OutputFileHandle = {
-  writeFile(bytes: Uint8Array): Promise<void>;
-  close(): Promise<void>;
-};
-export type OutputFileIo = {
-  open(path: string, flags: "wx"): Promise<OutputFileHandle>;
-  unlink(path: string): Promise<void>;
-};
-
 const outputFileIo: OutputFileIo = { open, unlink };
 
 export async function writeOutputExclusive(
@@ -419,15 +392,7 @@ async function loadConfig(pathToken: string): Promise<{
   path: string;
 }> {
   const path = resolve(pathToken);
-  let bytes: Uint8Array;
-  try {
-    bytes = await readFile(path);
-  } catch {
-    throw new AgentDocxError(
-      "INPUT_NOT_FOUND",
-      `Configuration not found: ${pathToken}`,
-    );
-  }
+  const bytes = await readInputFile(path, "Configuration");
   let value: unknown;
   try {
     value = JSON.parse(await strictUtf8(bytes));
@@ -528,7 +493,9 @@ async function optionsFrom(
     options.template = await inspectDocxTemplate(
       await readFile(templateToken),
       {
-        fallbackProfile: options.profile,
+        ...(options.profile !== undefined
+          ? { fallbackProfile: options.profile }
+          : {}),
       },
     );
     dependencies.push(templateToken);
@@ -592,10 +559,10 @@ async function optionsFrom(
   }
 
   if (typeof values.profile === "string") {
-    options.profile = values.profile as MeasureOptions["profile"];
+    options.profile = values.profile as NonNullable<MeasureOptions["profile"]>;
   }
   if (typeof values["filing-kind"] === "string") {
-    options.filingKind = values["filing-kind"] as EstimateOptions["filingKind"];
+    options.filingKind = values["filing-kind"] as NonNullable<EstimateOptions["filingKind"]>;
   }
   if (typeof values["page-limit"] === "string") {
     options.pageLimit = asciiInteger(values["page-limit"], "--page-limit");
@@ -888,16 +855,7 @@ function resultRecord(
 }
 
 function errorObject(error: unknown): CliErrorPayload {
-  return error instanceof AgentDocxError
-    ? {
-        code: error.code,
-        message: error.message,
-        ...(error.details ? { details: error.details } : {}),
-      }
-    : {
-        code: "INTERNAL_ERROR",
-        message: error instanceof Error ? error.message : String(error),
-      };
+  return toErrorPayload(error);
 }
 
 function errorRecord(
@@ -938,7 +896,6 @@ function readyRecord(
       .sort(),
   };
 }
-
 function endRecord(
   state: SequenceState,
   source: Source,
@@ -954,6 +911,7 @@ function endRecord(
     reason,
   };
 }
+
 
 function fatalRecord(error: unknown): CliFatalRecord {
   return { schemaVersion: 1, kind: "fatal", error: errorObject(error) };
@@ -1008,7 +966,7 @@ async function executeCli(
   }
   if (command.mode === "inspect") {
     const result = await inspectDocxTemplate(
-      await readFile(resolve(runtime.cwd, command.path)),
+      await readInputFile(resolve(runtime.cwd, command.path), "DOCX template"),
     );
     await runtime.writeStdout(
       command.json
@@ -1018,8 +976,7 @@ async function executeCli(
     return 0;
   }
 
-  if (command.mode === "mcp")
-    return runMcpServer(runtime as unknown as McpRuntime);
+  if (command.mode === "mcp") return runMcpServer(runtime);
 
   if (command.mode === "workflow")
     return runWorkflowCommand(command, runtime, state);
@@ -1081,19 +1038,24 @@ async function executeCli(
               "request must be an object",
             );
           }
-          const record = request as Record<string, unknown>;
-          const hasPath = typeof record.path === "string";
-          const hasMarkdown = typeof record.markdown === "string";
-          if (hasPath && record.path !== "") {
+          const record = request as CliJsonlRequest;
+          const hasPath =
+            "path" in record && typeof record.path === "string";
+          const hasMarkdown =
+            "markdown" in record && typeof record.markdown === "string";
+          if (hasPath && "path" in record && record.path !== "") {
             source = {
               kind: "file",
-              path: record.path as string,
-              resolvedPath: resolve(runtime.cwd, record.path as string),
+              path: record.path,
+              resolvedPath: resolve(runtime.cwd, record.path),
             };
           } else if (hasMarkdown) {
             source = {
               kind: "inline",
-              name: typeof record.name === "string" ? record.name : null,
+              name:
+                "name" in record && typeof record.name === "string"
+                  ? record.name
+                  : null,
             };
           }
           if ("id" in record) {
@@ -1107,7 +1069,7 @@ async function executeCli(
                 "id must be a string, finite number, or null",
               );
             }
-            requestId = record.id as string | number | null;
+            requestId = record.id;
           }
           if (hasPath === hasMarkdown) {
             throw new AgentDocxError(
@@ -1115,7 +1077,7 @@ async function executeCli(
               "exactly one of path or markdown is required",
             );
           }
-          if (hasPath && record.path === "") {
+          if (hasPath && "path" in record && record.path === "") {
             throw new AgentDocxError(
               "INVALID_ARGUMENT",
               "path must not be empty",
@@ -1123,6 +1085,7 @@ async function executeCli(
           }
           if (
             hasMarkdown &&
+            "name" in record &&
             record.name !== undefined &&
             typeof record.name !== "string"
           ) {
@@ -1143,11 +1106,17 @@ async function executeCli(
               `unknown request key: ${unknown}`,
             );
           }
-          const markdown = hasPath
-            ? await strictUtf8(
-                await readFile(resolve(runtime.cwd, record.path as string)),
-              )
-            : (record.markdown as string);
+          const markdown =
+            hasPath && "path" in record
+              ? await strictUtf8(
+                  await readInputFile(
+                    resolve(runtime.cwd, record.path),
+                    "Markdown input",
+                  ),
+                )
+              : "markdown" in record
+                ? record.markdown
+                : "";
           const measurement = await measureMarkdown(markdown, base.options);
           await runtime.writeStdout(
             `${JSON.stringify(
@@ -1189,7 +1158,7 @@ async function executeCli(
         const resolvedPath = source.resolvedPath;
         try {
           const measurement = await measureMarkdown(
-            await strictUtf8(await readFile(resolvedPath)),
+            await strictUtf8(await readInputFile(resolvedPath, "Markdown input")),
             base.options,
           );
           await runtime.writeStdout(
@@ -1226,21 +1195,42 @@ async function executeCli(
       typeof values["debounce-ms"] === "string"
         ? asciiInteger(values["debounce-ms"], "--debounce-ms", 0, 60000)
         : 75;
-    let timer: NodeJS.Timeout | undefined;
-    let running = false;
-    let dirty = false;
-    const execute = async (trigger: CliTrigger) => {
-      if (running) {
-        dirty = true;
-        return;
-      }
-      running = true;
-      try {
-        const loaded = await optionsFrom(values, runtime.cwd);
-        const measurement = await measureMarkdown(
+    const loaded = await optionsFrom(values, runtime.cwd);
+    const dependencies = [path, ...loaded.dependencies];
+    const toCliTrigger = (trigger: {
+      kind: "initial" | "change";
+      paths: readonly string[];
+    }): CliTrigger => {
+      if (trigger.kind === "initial")
+        return { kind: "initial", paths: trigger.paths };
+      const changed = trigger.paths[0] ?? path;
+      return {
+        kind: changed === path ? "source-change" : "dependency-change",
+        paths: [resolve(changed)],
+      };
+    };
+    const watchCode = await runWatchController<MeasurementResult>({
+      watchPaths: dependencies,
+      watchOptions: {
+        atomic: 200,
+        awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+        usePolling: values.poll === true,
+      },
+      debounceMs: debounce,
+      run: async (trigger) => {
+        if (trigger.kind === "initial" && values.jsonl)
+          await runtime.writeStdout(
+            `${JSON.stringify(
+              readyRecord(state, source, dependencies, runtime.cwd),
+            )}\n`,
+          );
+        return measureMarkdown(
           await strictUtf8(await readFile(path)),
           loaded.options,
         );
+      },
+      emitResult: async (measurement, trigger) => {
+        const cliTrigger = toCliTrigger(trigger);
         await runtime.writeStdout(
           values.jsonl
             ? `${JSON.stringify(
@@ -1251,15 +1241,16 @@ async function executeCli(
                   measurement,
                   runtime.cwd,
                   null,
-                  trigger,
+                  cliTrigger,
                 ),
               )}\n`
-            : `\n[${trigger.kind}]\n${human(measurement, {
+            : `\n[${cliTrigger.kind}]\n${human(measurement, {
                 paragraphs: values.paragraphs === true,
                 trim: loaded.options.trim !== undefined,
               })}`,
         );
-      } catch (error) {
+      },
+      emitError: async (error, trigger) => {
         const text = `${JSON.stringify(
           errorRecord(
             state,
@@ -1268,67 +1259,22 @@ async function executeCli(
             error,
             runtime.cwd,
             null,
-            trigger,
+            toCliTrigger(trigger),
           ),
         )}\n`;
         await (values.jsonl
           ? runtime.writeStdout(text)
           : runtime.writeStderr(text));
-      } finally {
-        running = false;
-        if (dirty) {
-          dirty = false;
-          void execute({ kind: "dependency-change", paths: [path] });
-        }
-      }
-    };
-    const loaded = await optionsFrom(values, runtime.cwd);
-    const dependencies = [path, ...loaded.dependencies];
-    const watcher = chokidar.watch(dependencies, {
-      ignoreInitial: true,
-      atomic: 200,
-      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-      usePolling: values.poll === true,
+      },
+      signal: (name, listener) => runtime.onceSignal(name, listener),
+      onStop: async (reason) => {
+        if (values.jsonl)
+          await runtime.writeStdout(
+            `${JSON.stringify(endRecord(state, source, reason, runtime.cwd))}\n`,
+          );
+      },
     });
-    if (values.jsonl) {
-      await runtime.writeStdout(
-        `${JSON.stringify(
-          readyRecord(state, source, dependencies, runtime.cwd),
-        )}\n`,
-      );
-    }
-    await execute({ kind: "initial", paths: [path] });
-    watcher.on("all", (_event, changed) => {
-      clearTimeout(timer);
-      timer = setTimeout(
-        () =>
-          void execute({
-            kind: changed === path ? "source-change" : "dependency-change",
-            paths: [resolve(changed)],
-          }),
-        debounce,
-      );
-    });
-    const { promise, resolve: finish } = Promise.withResolvers<number>();
-    for (const [signal, code] of [
-      ["SIGINT", 130],
-      ["SIGTERM", 143],
-    ] as const) {
-      runtime.onceSignal(signal, () => {
-        void (async () => {
-          await watcher.close();
-          if (values.jsonl) {
-            await runtime.writeStdout(
-              `${JSON.stringify(
-                endRecord(state, source, signal, runtime.cwd),
-              )}\n`,
-            );
-          }
-          finish(code);
-        })();
-      });
-    }
-    return promise;
+    return watchCode;
   }
 
   const loaded = await optionsFrom(command.values, runtime.cwd);
@@ -1340,7 +1286,10 @@ async function executeCli(
   let markdown: string;
   if (command.input.kind === "file") {
     markdown = await strictUtf8(
-      await readFile(resolve(runtime.cwd, command.input.path)),
+      await readInputFile(
+        resolve(runtime.cwd, command.input.path),
+        "Markdown input",
+      ),
     );
   } else {
     if (!command.input.explicit && runtime.stdinIsTTY) {
