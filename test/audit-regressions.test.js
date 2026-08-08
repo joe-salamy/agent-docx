@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,7 +9,11 @@ import {
   compileMarkdown,
   builtInRulePacks,
 } from "../dist/index.js";
-import { parseLegalMarkdown } from "../dist/legal/parse.js";
+import {
+  parseLegalMarkdown,
+  insertMissingBlockMarkers,
+} from "../dist/legal/parse.js";
+import { createChangeSet, defaultAttribution } from "../dist/revisions/diff.js";
 import { validateLegalDocument } from "../dist/legal/rules.js";
 import { lowerLegalDocument } from "../dist/legal/lower.js";
 import { visibleBlock } from "../dist/legal/visible-text.js";
@@ -468,6 +472,193 @@ test("input reads enforce byte caps and reject symlinks", async () => {
         (error) => error?.code === "INPUT_NOT_FOUND",
       );
     }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("astral and decomposed characters survive parse and lower in lists and tables", () => {
+  const source =
+    "# Motion\n\n- Item A😀B e\u0301\n\n| A😀B e\u0301 |\n| --- |\n";
+  const { document } = parseLegalMarkdown(source, {
+    documentId: "motion",
+    metadata,
+  });
+  const list = document.blocks.find((block) => block.kind === "list");
+  const table = document.blocks.find((block) => block.kind === "table");
+  assert.equal(list?.kind, "list");
+  assert.equal(table?.kind, "table");
+  const itemParagraph = list.items[0].paragraphs[0];
+  assert.equal(itemParagraph.runs[0].text, "Item A😀B e\u0301");
+  assert.equal(
+    itemParagraph.segments.at(-1)?.normalizedEnd,
+    "Item A😀B e\u0301".length,
+    "segment offsets must count the astral pair as two UTF-16 units",
+  );
+  assert.equal(visibleBlock(list), "Item A😀B e\u0301");
+  assert.equal(visibleBlock(table), "A😀B e\u0301");
+  const lowered = lowerLegalDocument(document);
+  assert.equal(
+    lowered.blocks.find((block) => block.kind === "list")?.normalizedText,
+    "Item A😀B e\u0301",
+  );
+});
+
+test("diff source ranges keep astral and decomposed characters intact", () => {
+  const base =
+    "# Motion\n\n- Item A😀B e\u0301 old\n\n| A😀B e\u0301 old |\n| --- |\n";
+  const markedBase = insertMissingBlockMarkers(base, {
+    documentId: "motion",
+    metadata,
+  });
+  const markedHead = markedBase.replaceAll("old", "new");
+  const baseDocument = parseLegalMarkdown(markedBase, {
+    documentId: "motion",
+    metadata,
+    requireMarkers: true,
+  }).document;
+  const headDocument = parseLegalMarkdown(markedHead, {
+    documentId: "motion",
+    metadata,
+    requireMarkers: true,
+  }).document;
+  const changeSet = createChangeSet(
+    "motion",
+    `sha256:${"a".repeat(64)}`,
+    `sha256:${"b".repeat(64)}`,
+    baseDocument,
+    headDocument,
+    [],
+    [],
+    defaultAttribution({ name: "Drafter" }, new Date(0)),
+  );
+  const shell = changeSet.changes.find(
+    (change) => change.kind === "replace-container-shell",
+  );
+  assert.ok(shell, "list item text edit must produce a container shell change");
+  const expectedStart = markedBase.indexOf("- Item A😀B e\u0301 old");
+  assert.equal(shell.oldShell.sourceRanges[0]?.start, expectedStart);
+  assert.equal(shell.oldShell.sourceRanges[0]?.text, "- Item A😀B e\u0301 old");
+  const table = changeSet.changes.find(
+    (change) => change.kind === "replace-block",
+  );
+  assert.ok(table, "table cell text edit must produce a block replacement");
+  assert.ok(
+    table.oldBlock.sourceText.includes("A😀B e\u0301 old"),
+    "the replaced table block must carry the astral text intact",
+  );
+});
+
+test("redline round-trip preserves astral text through list and paragraph edits", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-docx-astral-redline-"));
+  try {
+    const manifestPath = join(root, "agent-docx.json");
+    const sourcePath = join(root, "motion.md");
+    await writeFile(
+      sourcePath,
+      "# Motion\n\n- Item A😀B e\u0301 old\n\nBody e\u0301😀 old.\n",
+    );
+    const project = await createProject(manifestPath, {
+      documentId: "motion",
+      source: "motion.md",
+      profile: "us-district-conventional",
+      metadata,
+    });
+    const base = await project.checkpoint("motion", {
+      baseRevision: null,
+      author: { name: "Drafter" },
+      message: "Initial draft",
+    });
+    // Edit the markerized working copy so block ids stay stable across the
+    // revision (rewriting the file from scratch would re-derive ids and turn
+    // text edits into block replacements).
+    await writeFile(
+      sourcePath,
+      (await readFile(sourcePath, "utf8"))
+        .replaceAll("A😀B e\u0301 old", "A😀B e\u0301 new")
+        .replaceAll("Body e\u0301😀 old.", "Body e\u0301😀 new."),
+    );
+    const head = await project.checkpoint("motion", {
+      baseRevision: base.revision.id,
+      author: { name: "Drafter" },
+      message: "Edit list item and paragraph",
+    });
+    const exported = await project.exportDocx("motion", {
+      revision: head.revision.id,
+      mode: "redline",
+      baseRevision: base.revision.id,
+      output: join(root, "motion-redline.docx"),
+    });
+    assert.ok(exported.bytes.byteLength > 0);
+    const imported = await project.importRedline({
+      documentId: "motion",
+      input: join(root, "motion-redline.docx"),
+      author: { name: "Reviewer" },
+      message: "Review redline",
+    });
+    assert.equal(imported.headRevision, head.revision.id);
+    assert.equal(imported.baseRevision, base.revision.id);
+    const changes = imported.changeSet.changes;
+    const shell = changes.find(
+      (change) => change.kind === "replace-container-shell",
+    );
+    assert.ok(shell, "list item edit must survive the redline round-trip");
+    assert.ok(
+      shell.oldShell.sourceRanges.some((range) =>
+        range.text.includes("A😀B e\u0301 old"),
+      ),
+      "list shell ranges must keep the astral text intact",
+    );
+    const paragraphChange = changes.find(
+      (change) => change.kind === "replace-text",
+    );
+    assert.ok(
+      paragraphChange,
+      "paragraph edit must survive the redline round-trip",
+    );
+    assert.equal(paragraphChange.oldText, "old.");
+    assert.equal(paragraphChange.newText, "new.");
+    assert.equal(paragraphChange.oldSource.text, "old.");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("redline export rejects table blocks with a stable code", async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), "agent-docx-astral-table-redline-"),
+  );
+  try {
+    const manifestPath = join(root, "agent-docx.json");
+    const sourcePath = join(root, "motion.md");
+    await writeFile(sourcePath, "# Motion\n\n| A😀B e\u0301 old |\n| --- |\n");
+    const project = await createProject(manifestPath, {
+      documentId: "motion",
+      source: "motion.md",
+      profile: "us-district-conventional",
+      metadata,
+    });
+    const base = await project.checkpoint("motion", {
+      baseRevision: null,
+      author: { name: "Drafter" },
+      message: "Initial draft",
+    });
+    await writeFile(sourcePath, "# Motion\n\n| A😀B e\u0301 new |\n| --- |\n");
+    const head = await project.checkpoint("motion", {
+      baseRevision: base.revision.id,
+      author: { name: "Drafter" },
+      message: "Edit table cell",
+    });
+    await assert.rejects(
+      () =>
+        project.exportDocx("motion", {
+          revision: head.revision.id,
+          mode: "redline",
+          baseRevision: base.revision.id,
+          output: join(root, "motion-redline.docx"),
+        }),
+      (error) => error?.code === "DOCX_REDLINE_UNSUPPORTED",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
