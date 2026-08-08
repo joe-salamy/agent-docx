@@ -95,7 +95,6 @@ export type MeasureOptions = EstimateOptions & {
   rulePacks?: readonly UserRulePack[];
 };
 
-
 export type LastPageMetrics = {
   source: "deterministic";
   visualLines: number;
@@ -229,4 +228,12 @@ export type MeasurementResult = {
   budget?: Budget;
   generatedDocx?: Uint8Array;
   budgetBySource?: Readonly<Partial<Record<PageCountSource, Budget>>>;
+};
+
+/** Projection of a measurement result without the generated DOCX payload. */
+export const serializableMeasurement = (
+  measurement: MeasurementResult,
+): Omit<MeasurementResult, "generatedDocx"> => {
+  const { generatedDocx: _generatedDocx, ...serializable } = measurement;
+  return serializable;
 };

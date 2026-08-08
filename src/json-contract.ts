@@ -20,7 +20,10 @@ export const objectRecord = (
 };
 
 type DefinedProps<T> = {
-  [K in keyof T as T[K] extends undefined ? never : K]: Exclude<T[K], undefined>;
+  [K in keyof T as T[K] extends undefined ? never : K]: Exclude<
+    T[K],
+    undefined
+  >;
 };
 
 /**
@@ -33,3 +36,22 @@ export const definedProps = <T extends object>(value: T): DefinedProps<T> => {
     if (entry !== undefined) out[key] = entry;
   return out as DefinedProps<T>;
 };
+
+/** True when every property of `value` is in `keys` (unknown properties rejected). */
+export const hasOnlyKeys = (
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean => {
+  const allowed = new Set(keys);
+  return Object.keys(value).every((key) => allowed.has(key));
+};
+
+/**
+ * True when `value`'s property set is exactly `keys`: `hasOnlyKeys` plus equal
+ * cardinality, for records where every allowed key is required.
+ */
+export const hasExactKeys = (
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean =>
+  hasOnlyKeys(value, keys) && Object.keys(value).length === keys.length;
