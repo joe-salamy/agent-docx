@@ -1,5 +1,5 @@
 import { randomUUID as systemRandomUuid } from "node:crypto";
-import { lstat, readFile } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
   currentRevision,
@@ -72,6 +72,7 @@ import {
   openStore,
   readHead,
   readObject,
+  readProjectFile,
   removeInitializedProject,
   removeOwnedFile,
   replaceOwnedFile,
@@ -131,7 +132,7 @@ export const snapshotWithDependencies = async (
 ): Promise<ProjectSnapshot> => {
   const sortedDependencies = Object.fromEntries(
     Object.entries(dependencyObjects).sort(([left], [right]) =>
-      left.localeCompare(right),
+      left < right ? -1 : left > right ? 1 : 0,
     ),
   ) as Readonly<Record<string, RevisionId>>;
   const dependencyBytes = new Map<
@@ -220,7 +221,11 @@ class Project implements AgentDocxProject {
       const sourcePath = sourcePathFor(opened, config);
       const originalSource = input.createSource
         ? null
-        : await readFile(sourcePath);
+        : await readProjectFile(
+            sourcePath,
+            "Document source",
+            opened.projectDirectory,
+          );
       if (input.createSource)
         await createEmptySource(opened.projectDirectory, input.source);
       const manifest: AgentDocxManifest = {
@@ -313,18 +318,14 @@ class Project implements AgentDocxProject {
     input: AddReviewInput,
   ): Promise<RevisionMutationResult> {
     return withLockedStore(this.ctx.manifestPath, async (opened) => {
-      const record = await currentRevision(this.ctx, 
-        opened,
-        documentId,
-        input.revision,
-      );
+      const record = await currentRevision(opened, documentId, input.revision);
       const head = await readHead(opened.storePath, documentId);
       if (head !== record.id)
         throw new AgentDocxError(
           "REVISION_CONFLICT",
           "Review must target the current head",
         );
-      const material = await materialFor(this.ctx, opened, record);
+      const material = await materialFor(opened, record);
       const block = [
         ...material.document.blocks,
         ...material.document.footnotes,
@@ -401,7 +402,8 @@ class Project implements AgentDocxProject {
           "WORKING_COPY_CONFLICT",
           "Working copy differs from the review revision",
         );
-      return commitLocked(this.ctx, 
+      return commitLocked(
+        this.ctx,
         opened,
         config,
         snapshot,
@@ -423,18 +425,14 @@ class Project implements AgentDocxProject {
     input: ResolveReviewInput,
   ): Promise<RevisionMutationResult> {
     return withLockedStore(this.ctx.manifestPath, async (opened) => {
-      const record = await currentRevision(this.ctx, 
-        opened,
-        documentId,
-        input.revision,
-      );
+      const record = await currentRevision(opened, documentId, input.revision);
       const head = await readHead(opened.storePath, documentId);
       if (head !== record.id)
         throw new AgentDocxError(
           "REVISION_CONFLICT",
           "Review must target the current head",
         );
-      const material = await materialFor(this.ctx, opened, record);
+      const material = await materialFor(opened, record);
       const annotations = material.annotations.map((annotation) =>
         annotation.id === input.annotationId
           ? { ...annotation, status: "resolved" as const }
@@ -454,7 +452,8 @@ class Project implements AgentDocxProject {
           "WORKING_COPY_CONFLICT",
           "Working copy differs from the review revision",
         );
-      return commitLocked(this.ctx, 
+      return commitLocked(
+        this.ctx,
         opened,
         config,
         snapshot,
@@ -570,7 +569,11 @@ export const createProject = async (
   const config = await documentConfigFromInput(projectDirectory, input);
   const originalSource = input.createSource
     ? null
-    : await readFile(resolve(projectDirectory, config.source));
+    : await readProjectFile(
+        resolve(projectDirectory, config.source),
+        "Document source",
+        projectDirectory,
+      );
   const projectId = options.randomUUID?.() ?? systemRandomUuid();
   const manifest: AgentDocxManifest = {
     schemaVersion: 1,
@@ -599,10 +602,20 @@ export const createProject = async (
         if (entry.isFile() && !entry.isSymbolicLink())
           await removeOwnedFile(
             sourcePath,
-            objectId(await readFile(sourcePath)),
+            objectId(
+              await readProjectFile(
+                sourcePath,
+                "Document source",
+                projectDirectory,
+              ),
+            ),
           );
       } else if (originalSource !== null && sourceMaterialized) {
-        const current = await readFile(sourcePath);
+        const current = await readProjectFile(
+          sourcePath,
+          "Document source",
+          projectDirectory,
+        );
         await replaceOwnedFile(sourcePath, objectId(current), originalSource);
       }
       await removeInitializedProject(absoluteManifestPath, manifest);

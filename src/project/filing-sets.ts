@@ -1,17 +1,12 @@
 import { AgentDocxError } from "../types.js";
 import {
-  openStore,
   readHead,
   readRevisionJson,
   snapshotProjectDocument,
   updateManifest,
   withLockedStore,
 } from "./store.js";
-import {
-  getStateLocked,
-  measureLocked,
-  validateLocked,
-} from "./documents.js";
+import { getStateLocked, measureLocked, validateLocked } from "./documents.js";
 import { documentById } from "./index.js";
 import { isDocumentId } from "../legal/model.js";
 import type {
@@ -25,102 +20,108 @@ import type { RevisionRecord } from "../revisions/types.js";
 import type { ValidationResult } from "../legal/rules.js";
 import type { ProjectContext } from "./context.js";
 
-export const addFilingSet = async (ctx: ProjectContext, input: {
+export const addFilingSet = async (
+  ctx: ProjectContext,
+  input: {
     id: string;
     label?: string;
     documentIds: readonly string[];
     pageCap?: number;
-  }): Promise<ProjectState> => {
-    return withLockedStore(ctx.manifestPath, async (opened) => {
-      if (
-        !input ||
-        typeof input !== "object" ||
-        Array.isArray(input) ||
-        typeof input.id !== "string" ||
-        !isDocumentId(input.id)
-      )
+  },
+): Promise<ProjectState> => {
+  return withLockedStore(ctx.manifestPath, async (opened) => {
+    if (
+      !input ||
+      typeof input !== "object" ||
+      Array.isArray(input) ||
+      typeof input.id !== "string" ||
+      !isDocumentId(input.id)
+    )
+      throw new AgentDocxError("INVALID_ARGUMENT", "Filing set id is invalid");
+    if (
+      input.label !== undefined &&
+      (typeof input.label !== "string" || input.label.length === 0)
+    )
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        `Filing set ${input.id} label is invalid`,
+      );
+    if (
+      input.pageCap !== undefined &&
+      (!Number.isInteger(input.pageCap) || input.pageCap < 1)
+    )
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        `Filing set ${input.id} pageCap is invalid`,
+      );
+    if (!Array.isArray(input.documentIds) || input.documentIds.length === 0)
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        `Filing set ${input.id} documentIds must be a nonempty array`,
+      );
+    const existing = opened.manifest.filingSets ?? [];
+    if (existing.some((entry) => entry.id === input.id))
+      throw new AgentDocxError("PROJECT_INVALID", "Filing set already exists");
+    const references: string[] = [];
+    const seen = new Set<string>();
+    for (const reference of input.documentIds) {
+      if (typeof reference !== "string")
         throw new AgentDocxError(
           "INVALID_ARGUMENT",
-          "Filing set id is invalid",
+          `Filing set ${input.id} document id is invalid`,
         );
-      if (
-        input.label !== undefined &&
-        (typeof input.label !== "string" || input.label.length === 0)
-      )
-        throw new AgentDocxError(
-          "INVALID_ARGUMENT",
-          `Filing set ${input.id} label is invalid`,
-        );
-      if (
-        input.pageCap !== undefined &&
-        (!Number.isInteger(input.pageCap) || input.pageCap < 1)
-      )
-        throw new AgentDocxError(
-          "INVALID_ARGUMENT",
-          `Filing set ${input.id} pageCap is invalid`,
-        );
-      if (!Array.isArray(input.documentIds) || input.documentIds.length === 0)
-        throw new AgentDocxError(
-          "INVALID_ARGUMENT",
-          `Filing set ${input.id} documentIds must be a nonempty array`,
-        );
-      const existing = opened.manifest.filingSets ?? [];
-      if (existing.some((entry) => entry.id === input.id))
+      if (seen.has(reference))
         throw new AgentDocxError(
           "PROJECT_INVALID",
-          "Filing set already exists",
+          `Filing set ${input.id} references duplicate document ${reference}`,
         );
-      const references: string[] = [];
-      const seen = new Set<string>();
-      for (const reference of input.documentIds) {
-        if (typeof reference !== "string")
-          throw new AgentDocxError(
-            "INVALID_ARGUMENT",
-            `Filing set ${input.id} document id is invalid`,
-          );
-        if (seen.has(reference))
-          throw new AgentDocxError(
-            "PROJECT_INVALID",
-            `Filing set ${input.id} references duplicate document ${reference}`,
-          );
-        if (!opened.manifest.documents.some((entry) => entry.id === reference))
-          throw new AgentDocxError(
-            "PROJECT_INVALID",
-            `Filing set ${input.id} references unknown document ${reference}`,
-          );
-        seen.add(reference);
-        references.push(reference);
-      }
-      const filingSet: FilingSet = {
-        id: input.id,
-        ...(input.label !== undefined ? { label: input.label } : {}),
-        documentIds: references,
-        ...(input.pageCap !== undefined ? { pageCap: input.pageCap } : {}),
-      };
-      const filingSets = [...existing, filingSet].sort((left, right) =>
-        left.id.localeCompare(right.id),
-      );
-      const next = await updateManifest(opened, { ...opened.manifest, filingSets });
-      return getStateLocked(ctx, next);
+      if (!opened.manifest.documents.some((entry) => entry.id === reference))
+        throw new AgentDocxError(
+          "PROJECT_INVALID",
+          `Filing set ${input.id} references unknown document ${reference}`,
+        );
+      seen.add(reference);
+      references.push(reference);
+    }
+    const filingSet: FilingSet = {
+      id: input.id,
+      ...(input.label !== undefined ? { label: input.label } : {}),
+      documentIds: references,
+      ...(input.pageCap !== undefined ? { pageCap: input.pageCap } : {}),
+    };
+    const filingSets = [...existing, filingSet].sort((left, right) =>
+      left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+    );
+    const next = await updateManifest(opened, {
+      ...opened.manifest,
+      filingSets,
     });
-  };
+    return getStateLocked(ctx, next);
+  });
+};
 
-export const removeFilingSet = async (ctx: ProjectContext, id: string): Promise<ProjectState> => {
-    return withLockedStore(ctx.manifestPath, async (opened) => {
-      const existing = opened.manifest.filingSets ?? [];
-      if (!existing.some((entry) => entry.id === id))
-        throw new AgentDocxError("PROJECT_INVALID", "Filing set not found");
-      const filingSets = existing.filter((entry) => entry.id !== id);
-      const manifest: AgentDocxManifest = { ...opened.manifest };
-      if (filingSets.length > 0) manifest.filingSets = filingSets;
-      else delete manifest.filingSets;
-      const next = await updateManifest(opened, manifest);
-      return getStateLocked(ctx, next);
-    });
-  };
+export const removeFilingSet = async (
+  ctx: ProjectContext,
+  id: string,
+): Promise<ProjectState> => {
+  return withLockedStore(ctx.manifestPath, async (opened) => {
+    const existing = opened.manifest.filingSets ?? [];
+    if (!existing.some((entry) => entry.id === id))
+      throw new AgentDocxError("PROJECT_INVALID", "Filing set not found");
+    const filingSets = existing.filter((entry) => entry.id !== id);
+    const manifest: AgentDocxManifest = { ...opened.manifest };
+    if (filingSets.length > 0) manifest.filingSets = filingSets;
+    else delete manifest.filingSets;
+    const next = await updateManifest(opened, manifest);
+    return getStateLocked(ctx, next);
+  });
+};
 
-export const getFilingSet = async (ctx: ProjectContext, id: string): Promise<FilingSetSnapshot> => {
-    const opened = await openStore(ctx.manifestPath);
+export const getFilingSet = async (
+  ctx: ProjectContext,
+  id: string,
+): Promise<FilingSetSnapshot> =>
+  withLockedStore(ctx.manifestPath, async (opened) => {
     const filingSet = filingSetById(opened.manifest, id);
     const documents = await Promise.all(
       filingSet.documentIds.map(async (documentId) => {
@@ -146,24 +147,26 @@ export const getFilingSet = async (ctx: ProjectContext, id: string): Promise<Fil
       pageCap: filingSet.pageCap ?? null,
       documents,
     };
-  };
+  });
 
-export const validateFilingSet = async (ctx: ProjectContext, id: string): Promise<FilingSetValidation> => {
-    return withLockedStore(ctx.manifestPath, async (opened) => {
-      const filingSet = filingSetById(opened.manifest, id);
-      const documents: FilingSetValidation["documents"][number][] = [];
-      for (const documentId of filingSet.documentIds) {
-        const head = await readHead(opened.storePath, documentId);
-        let validation: ValidationResult | null = null;
-        let pageCount: number | null = null;
-        if (head !== null) {
-          validation = await validateLocked(ctx, opened, documentId);
-          pageCount = (
-            await measureLocked(ctx, opened, documentId)
-          ).deterministic.pageCount;
-        }
-        documents.push({ documentId, head, validation, pageCount });
+export const validateFilingSet = async (
+  ctx: ProjectContext,
+  id: string,
+): Promise<FilingSetValidation> => {
+  return withLockedStore(ctx.manifestPath, async (opened) => {
+    const filingSet = filingSetById(opened.manifest, id);
+    const documents: FilingSetValidation["documents"][number][] = [];
+    for (const documentId of filingSet.documentIds) {
+      const head = await readHead(opened.storePath, documentId);
+      let validation: ValidationResult | null = null;
+      let pageCount: number | null = null;
+      if (head !== null) {
+        validation = await validateLocked(opened, documentId);
+        pageCount = (await measureLocked(opened, documentId)).deterministic
+          .pageCount;
       }
+      documents.push({ documentId, head, validation, pageCount });
+    }
     const pageCap =
       filingSet.pageCap === undefined
         ? null
@@ -217,8 +220,8 @@ export const validateFilingSet = async (ctx: ProjectContext, id: string): Promis
       pageCap,
       status,
     };
-    });
-  };
+  });
+};
 
 const filingSetById = (
   manifest: AgentDocxManifest,
@@ -231,4 +234,3 @@ const filingSetById = (
     throw new AgentDocxError("PROJECT_INVALID", "Filing set not found");
   return filingSet;
 };
-

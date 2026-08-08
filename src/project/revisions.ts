@@ -2,9 +2,9 @@ import { AgentDocxError } from "../types.js";
 import {
   canonicalJson,
   objectId,
-  openStore,
   readHead,
   readObject,
+  readProjectFile,
   readRevisionJson,
   removeOwnedFile,
   replaceOwnedFile,
@@ -30,9 +30,9 @@ import {
   type JsonObject,
 } from "../revisions/diff.js";
 import { visibleTextForBlock } from "../legal/visible-text.js";
-import { pathsOverlap } from "./fs-util.js";
-import { lstat, mkdir, readFile } from "node:fs/promises";
+import { lstat, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { pathsOverlap } from "./fs-util.js";
 import type {
   Actor,
   AddressableBlock,
@@ -78,9 +78,7 @@ export type AttributionState = {
   dependencyOperations: Map<string, ChangeAttribution>;
 };
 
-
 export type MutableJsonObject = Record<string, unknown>;
-
 
 export type RawReplacement = {
   start: number;
@@ -88,7 +86,6 @@ export type RawReplacement = {
   expectedText: string;
   replacement: string;
 };
-
 
 export type SourceMarkerLine = { id: string; start: number; end: number };
 
@@ -194,7 +191,6 @@ export const provenanceForRevision = async (
   return state;
 };
 
-
 export const provenanceBlocks = (
   document: LegalDocument,
 ): readonly AddressableBlock[] => {
@@ -218,7 +214,6 @@ export const textSpans = (
   attribution: ChangeAttribution,
 ): readonly AttributionSpan[] =>
   text.length === 0 ? [] : [{ start: 0, end: text.length, attribution }];
-
 
 export const seedAttributionState = (
   document: LegalDocument,
@@ -289,7 +284,6 @@ export const removeConfigAttribution = (
   for (const key of config.keys())
     if (key === path || key.startsWith(`${path}/`)) config.delete(key);
 };
-
 
 export const applyRevisionDelta = (
   state: AttributionState,
@@ -450,7 +444,6 @@ export const applyRevisionDelta = (
   }
 };
 
-
 export const applyRejectedConfigChanges = (
   head: AgentDocxDocumentConfig,
   changes: readonly Change[],
@@ -496,7 +489,6 @@ export const applyRejectedConfigChanges = (
   return result as AgentDocxDocumentConfig;
 };
 
-
 export const applyRejectedDependencyChanges = (
   head: Readonly<Record<string, RevisionId>>,
   changes: readonly Change[],
@@ -530,11 +522,10 @@ export const applyRejectedDependencyChanges = (
   }
   return Object.fromEntries(
     Object.entries(result).sort(([left], [right]) =>
-      left.localeCompare(right),
+      left < right ? -1 : left > right ? 1 : 0,
     ),
   ) as Record<string, RevisionId>;
 };
-
 
 export const dependencyPath = (
   projectDirectory: string,
@@ -591,7 +582,6 @@ export const dependencyPathsChanged = (
       dependencyPath(projectDirectory, targetConfig, key),
   );
 
-
 export const materializeSelectedDependencies = async (
   opened: OpenedStore,
   currentConfig: AgentDocxDocumentConfig,
@@ -604,7 +594,7 @@ export const materializeSelectedDependencies = async (
       ...Object.keys(currentDependencies),
       ...Object.keys(targetDependencies),
     ]),
-  ].sort((left, right) => left.localeCompare(right));
+  ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   const targetPaths = new Map<string, RevisionId>();
   const expectedIds = new Map<string, Set<RevisionId>>();
   const expectedId = (
@@ -653,7 +643,7 @@ export const materializeSelectedDependencies = async (
   }
   const paths = [
     ...new Set([...expectedIds.keys(), ...targetPaths.keys()]),
-  ].sort((left, right) => left.localeCompare(right));
+  ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   const states = new Map<
     string,
     { bytes: Uint8Array | null; id: RevisionId | null }
@@ -670,7 +660,11 @@ export const materializeSelectedDependencies = async (
           "WORKING_COPY_CONFLICT",
           `Owned dependency is not a regular file: ${path}`,
         );
-      const bytes = await readFile(path);
+      const bytes = await readProjectFile(
+        path,
+        "Owned dependency",
+        opened.projectDirectory,
+      );
       const id = objectId(bytes);
       if (!expectedIds.get(path)?.has(id))
         throw new AgentDocxError(
@@ -685,7 +679,9 @@ export const materializeSelectedDependencies = async (
   }
   const restore = async (): Promise<void> => {
     const restorePaths = [...paths].sort(
-      (left, right) => right.length - left.length || left.localeCompare(right),
+      (left, right) =>
+        right.length - left.length ||
+        (left < right ? -1 : left > right ? 1 : 0),
     );
     for (const path of restorePaths) {
       const original = states.get(path)!;
@@ -697,9 +693,17 @@ export const materializeSelectedDependencies = async (
             "PROJECT_INVALID",
             `Cannot roll back non-regular dependency: ${path}`,
           );
-        currentBytes = await readFile(path);
+        currentBytes = await readProjectFile(
+          path,
+          "Owned dependency",
+          opened.projectDirectory,
+        );
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        const code =
+          error instanceof AgentDocxError
+            ? error.code
+            : (error as NodeJS.ErrnoException).code;
+        if (code !== "INPUT_NOT_FOUND" && code !== "ENOENT") throw error;
       }
       if (original.bytes === null) {
         if (currentBytes === null) continue;
@@ -740,12 +744,14 @@ export const materializeSelectedDependencies = async (
         ),
     )
     .sort(
-      (left, right) => right.length - left.length || left.localeCompare(right),
+      (left, right) =>
+        right.length - left.length ||
+        (left < right ? -1 : left > right ? 1 : 0),
     );
   try {
     for (const path of overlappingOldPaths) await removeCurrent(path);
     for (const [targetPath, targetObject] of [...targetPaths.entries()].sort(
-      ([left], [right]) => left.localeCompare(right),
+      ([left], [right]) => (left < right ? -1 : left > right ? 1 : 0),
     )) {
       const state = states.get(targetPath)!;
       if (state.id === targetObject) continue;
@@ -967,8 +973,9 @@ export const sourceRangeWithMarker = (
   };
 };
 
-
-export const sourceMarkerLines = (source: string): readonly SourceMarkerLine[] => {
+export const sourceMarkerLines = (
+  source: string,
+): readonly SourceMarkerLine[] => {
   const markers: SourceMarkerLine[] = [];
   const pattern = /<!--[ \t]*agent-docx:block[ \t]+id="([^"]+)"[ \t]*-->/g;
   for (const match of source.matchAll(pattern)) {
@@ -1034,7 +1041,6 @@ export const jsonPointerParts = (path: string): readonly string[] => {
     .map((part) => part.replaceAll("~1", "/").replaceAll("~0", "~"));
 };
 
-
 export const configParent = (
   root: MutableJsonObject,
   path: string,
@@ -1058,7 +1064,6 @@ export const configParent = (
   return { parent, key: parts.at(-1)! };
 };
 
-
 export const isUtf16Boundary = (text: string, offset: number): boolean =>
   Number.isInteger(offset) &&
   offset >= 0 &&
@@ -1072,165 +1077,169 @@ export const isUtf16Boundary = (text: string, offset: number): boolean =>
       text.charCodeAt(offset) <= 0xdfff
     ));
 
-
-export const currentRevision = async (_ctx: ProjectContext, 
-    opened: OpenedStore,
-    documentId: string,
-    selector: RevisionId | "HEAD",
-  ): Promise<RevisionRecord> => {
-    const head = await readHead(opened.storePath, documentId);
-    const requested = selector === "HEAD" ? head : selector;
-    if (!requested)
-      throw new AgentDocxError(
-        "REVISION_NOT_FOUND",
-        `Document has no revision: ${documentId}`,
-      );
-    const visited = new Set<RevisionId>();
-    const pending: {
-      id: RevisionId;
-      ancestry: ReadonlySet<RevisionId>;
-    }[] = head ? [{ id: head, ancestry: new Set() }] : [];
-    while (pending.length > 0) {
-      const entry = pending.pop()!;
-      if (entry.ancestry.has(entry.id))
-        throw new AgentDocxError(
-          "PROJECT_INVALID",
-          "Revision graph contains a cycle",
-        );
-      if (visited.has(entry.id)) continue;
-      visited.add(entry.id);
-      const record = await readRevisionJson<RevisionRecord>(
-        opened.storePath,
-        entry.id,
-      );
-      if (record.documentId !== documentId)
-        throw new AgentDocxError(
-          "PROJECT_INVALID",
-          `Revision belongs to another document: ${entry.id}`,
-        );
-      if (record.id === requested) return record;
-      const ancestry = new Set(entry.ancestry);
-      ancestry.add(entry.id);
-      pending.push(...record.parents.map((id) => ({ id, ancestry })));
-    }
+export const currentRevision = async (
+  opened: OpenedStore,
+  documentId: string,
+  selector: RevisionId | "HEAD",
+): Promise<RevisionRecord> => {
+  const head = await readHead(opened.storePath, documentId);
+  const requested = selector === "HEAD" ? head : selector;
+  if (!requested)
     throw new AgentDocxError(
       "REVISION_NOT_FOUND",
-      `Revision not found: ${requested}`,
+      `Document has no revision: ${documentId}`,
     );
-  };
-
-export const isFirstParentAncestor = async (_ctx: ProjectContext, 
-    opened: OpenedStore,
-    ancestor: RevisionId,
-    descendant: RevisionRecord,
-  ): Promise<boolean> => {
-    const visited = new Set<RevisionId>();
-    let current: RevisionRecord | null = descendant;
-    while (current) {
-      if (visited.has(current.id))
-        throw new AgentDocxError(
-          "PROJECT_INVALID",
-          "Revision graph contains a cycle",
-        );
-      visited.add(current.id);
-      if (current.documentId !== descendant.documentId)
-        throw new AgentDocxError(
-          "PROJECT_INVALID",
-          "Revision graph crosses documents",
-        );
-      if (current.id === ancestor) return true;
-      const parent: RevisionId | undefined = current.parents[0];
-      current = parent
-        ? await readRevisionJson<RevisionRecord>(opened.storePath, parent)
-        : null;
-    }
-    return false;
-  };
-
-export const materialFor = async (_ctx: ProjectContext, 
-    opened: OpenedStore,
-    record: RevisionRecord,
-  ): Promise<RevisionMaterial> => {
-    const source = new TextDecoder("utf-8", { fatal: true }).decode(
-      await readObject(opened.storePath, record.sourceObject),
-    );
-    const config = assertStoredConfig(
-      strictJson(
-        await readObject(opened.storePath, record.documentConfigObject),
-        record.documentConfigObject,
-      ),
-      record.documentConfigObject,
-    );
-    const document = assertStoredDocument(
-      strictJson(
-        await readObject(opened.storePath, record.legalDocumentObject),
-        record.legalDocumentObject,
-      ),
-      record.legalDocumentObject,
-    );
-    const annotations = assertStoredAnnotations(
-      strictJson(
-        await readObject(opened.storePath, record.annotationsObject),
-        record.annotationsObject,
-      ),
-      record.annotationsObject,
-    );
-    return { revision: record, source, config, document, annotations };
-  };
-
-export const snapshotForMaterial = async (_ctx: ProjectContext, 
-    opened: OpenedStore,
-    material: RevisionMaterial,
-  ): Promise<ProjectSnapshot> => {
-    const dependencyBytes = new Map<
-      string,
-      { bytes: Uint8Array; mediaType: string }
-    >();
-    for (const [key, id] of Object.entries(material.revision.dependencyObjects))
-      dependencyBytes.set(key, {
-        bytes: await readObject(opened.storePath, id),
-        mediaType: storedMediaType(key),
-      });
-    return {
-      source: material.source,
-      sourceObject: material.revision.sourceObject,
-      documentConfigObject: material.revision.documentConfigObject,
-      dependencyObjects: material.revision.dependencyObjects,
-      dependencyBytes,
-      workingTreeHash: material.revision.workingTreeHash,
-    };
-  };
-
-export const annotationsForHead = async (_ctx: ProjectContext, 
-    opened: OpenedStore,
-    documentId: string,
-  ): Promise<readonly ReviewAnnotation[]> => {
-    const head = await readHead(opened.storePath, documentId);
-    if (!head) return [];
+  const visited = new Set<RevisionId>();
+  const pending: {
+    id: RevisionId;
+    ancestry: ReadonlySet<RevisionId>;
+  }[] = head ? [{ id: head, ancestry: new Set() }] : [];
+  while (pending.length > 0) {
+    const entry = pending.pop()!;
+    if (entry.ancestry.has(entry.id))
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        "Revision graph contains a cycle",
+      );
+    if (visited.has(entry.id)) continue;
+    visited.add(entry.id);
     const record = await readRevisionJson<RevisionRecord>(
       opened.storePath,
-      head,
+      entry.id,
     );
-    return assertStoredAnnotations(
-      strictJson(
-        await readObject(opened.storePath, record.annotationsObject),
-        record.annotationsObject,
-      ),
-      record.annotationsObject,
-    );
-  };
+    if (record.documentId !== documentId)
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        `Revision belongs to another document: ${entry.id}`,
+      );
+    if (record.id === requested) return record;
+    const ancestry = new Set(entry.ancestry);
+    ancestry.add(entry.id);
+    pending.push(...record.parents.map((id) => ({ id, ancestry })));
+  }
+  throw new AgentDocxError(
+    "REVISION_NOT_FOUND",
+    `Revision not found: ${requested}`,
+  );
+};
 
-export const listRevisions = async (ctx: ProjectContext, 
-    documentId: string,
-    input: { limit?: number; cursor?: RevisionId } = {},
-  ): Promise<RevisionPage> => {
-    const opened = await openStore(ctx.manifestPath);
+export const isFirstParentAncestor = async (
+  opened: OpenedStore,
+  ancestor: RevisionId,
+  descendant: RevisionRecord,
+): Promise<boolean> => {
+  const visited = new Set<RevisionId>();
+  let current: RevisionRecord | null = descendant;
+  while (current) {
+    if (visited.has(current.id))
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        "Revision graph contains a cycle",
+      );
+    visited.add(current.id);
+    if (current.documentId !== descendant.documentId)
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        "Revision graph crosses documents",
+      );
+    if (current.id === ancestor) return true;
+    const parent: RevisionId | undefined = current.parents[0];
+    current = parent
+      ? await readRevisionJson<RevisionRecord>(opened.storePath, parent)
+      : null;
+  }
+  return false;
+};
+
+export const materialFor = async (
+  opened: OpenedStore,
+  record: RevisionRecord,
+): Promise<RevisionMaterial> => {
+  const source = new TextDecoder("utf-8", { fatal: true }).decode(
+    await readObject(opened.storePath, record.sourceObject),
+  );
+  const config = assertStoredConfig(
+    strictJson(
+      await readObject(opened.storePath, record.documentConfigObject),
+      record.documentConfigObject,
+    ),
+    record.documentConfigObject,
+  );
+  const document = assertStoredDocument(
+    strictJson(
+      await readObject(opened.storePath, record.legalDocumentObject),
+      record.legalDocumentObject,
+    ),
+    record.legalDocumentObject,
+  );
+  const annotations = assertStoredAnnotations(
+    strictJson(
+      await readObject(opened.storePath, record.annotationsObject),
+      record.annotationsObject,
+    ),
+    record.annotationsObject,
+  );
+  return { revision: record, source, config, document, annotations };
+};
+
+export const snapshotForMaterial = async (
+  opened: OpenedStore,
+  material: RevisionMaterial,
+): Promise<ProjectSnapshot> => {
+  const dependencyBytes = new Map<
+    string,
+    { bytes: Uint8Array; mediaType: string }
+  >();
+  for (const [key, id] of Object.entries(material.revision.dependencyObjects))
+    dependencyBytes.set(key, {
+      bytes: await readObject(opened.storePath, id),
+      mediaType: storedMediaType(key),
+    });
+  return {
+    source: material.source,
+    sourceObject: material.revision.sourceObject,
+    documentConfigObject: material.revision.documentConfigObject,
+    dependencyObjects: material.revision.dependencyObjects,
+    dependencyBytes,
+    workingTreeHash: material.revision.workingTreeHash,
+  };
+};
+
+export const annotationsForHead = async (
+  opened: OpenedStore,
+  documentId: string,
+): Promise<readonly ReviewAnnotation[]> => {
+  const head = await readHead(opened.storePath, documentId);
+  if (!head) return [];
+  const record = await readRevisionJson<RevisionRecord>(opened.storePath, head);
+  return assertStoredAnnotations(
+    strictJson(
+      await readObject(opened.storePath, record.annotationsObject),
+      record.annotationsObject,
+    ),
+    record.annotationsObject,
+  );
+};
+
+export const listRevisions = async (
+  ctx: ProjectContext,
+  documentId: string,
+  input: { limit?: number; cursor?: RevisionId } = {},
+): Promise<RevisionPage> => {
+  const limit = input.limit ?? 100;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000)
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "Revision limit must be 1 through 1000",
+    );
+  return withLockedStore(ctx.manifestPath, async (opened) => {
     const head = await readHead(opened.storePath, documentId);
     const reachable = new Map<RevisionId, RevisionRecord>();
     const pending: {
       id: RevisionId;
       ancestry: ReadonlySet<RevisionId>;
     }[] = head ? [{ id: head, ancestry: new Set() }] : [];
+    let cursorFound = input.cursor === undefined;
     while (pending.length > 0) {
       const entry = pending.pop()!;
       if (entry.ancestry.has(entry.id))
@@ -1249,21 +1258,35 @@ export const listRevisions = async (ctx: ProjectContext,
           "Revision graph crosses documents",
         );
       reachable.set(entry.id, record);
+      if (record.id === input.cursor) cursorFound = true;
       const ancestry = new Set(entry.ancestry);
       ancestry.add(entry.id);
       pending.push(...record.parents.map((id) => ({ id, ancestry })));
+      const ordered = [...reachable.values()].sort(
+        (left, right) =>
+          (right.createdAt < left.createdAt
+            ? -1
+            : right.createdAt > left.createdAt
+              ? 1
+              : 0) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+      );
+      if (input.cursor === undefined && ordered.length >= limit + 1) break;
+      if (cursorFound && input.cursor !== undefined) {
+        const cursorIndex = ordered.findIndex(
+          (candidate) => candidate.id === input.cursor,
+        );
+        if (cursorIndex >= 0 && ordered.length >= cursorIndex + limit + 2)
+          break;
+      }
     }
     const ordered = [...reachable.values()].sort(
       (left, right) =>
-        right.createdAt.localeCompare(left.createdAt) ||
-        left.id.localeCompare(right.id),
+        (right.createdAt < left.createdAt
+          ? -1
+          : right.createdAt > left.createdAt
+            ? 1
+            : 0) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
     );
-    const limit = input.limit ?? 100;
-    if (!Number.isInteger(limit) || limit < 1 || limit > 1000)
-      throw new AgentDocxError(
-        "INVALID_ARGUMENT",
-        "Revision limit must be 1 through 1000",
-      );
     const start = input.cursor
       ? Math.max(
           0,
@@ -1281,34 +1304,37 @@ export const listRevisions = async (ctx: ProjectContext,
       items,
       nextCursor: ordered[start + limit]?.id ?? null,
     };
-  };
+  });
+};
 
-export const getRevision = async (ctx: ProjectContext, 
-    documentId: string,
-    revision: RevisionId | "HEAD",
-  ): Promise<RevisionRecord> => {
-    const opened = await openStore(ctx.manifestPath);
-    return currentRevision(ctx, opened, documentId, revision);
-  };
+export const getRevision = async (
+  ctx: ProjectContext,
+  documentId: string,
+  revision: RevisionId | "HEAD",
+): Promise<RevisionRecord> =>
+  withLockedStore(ctx.manifestPath, async (opened) =>
+    currentRevision(opened, documentId, revision),
+  );
 
-export const diff = async (ctx: ProjectContext, 
-    documentId: string,
-    base: RevisionId | "HEAD",
-    head: RevisionId | "HEAD",
-  ): Promise<ChangeSet> => {
-    const opened = await openStore(ctx.manifestPath);
-    const baseRecord = await currentRevision(ctx, opened, documentId, base);
-    const headRecord = await currentRevision(ctx, opened, documentId, head);
+export const diff = async (
+  ctx: ProjectContext,
+  documentId: string,
+  base: RevisionId | "HEAD",
+  head: RevisionId | "HEAD",
+): Promise<ChangeSet> =>
+  withLockedStore(ctx.manifestPath, async (opened) => {
+    const baseRecord = await currentRevision(opened, documentId, base);
+    const headRecord = await currentRevision(opened, documentId, head);
     if (
       baseRecord.id !== headRecord.id &&
-      !(await isFirstParentAncestor(ctx, opened, baseRecord.id, headRecord))
+      !(await isFirstParentAncestor(opened, baseRecord.id, headRecord))
     )
       throw new AgentDocxError(
         "REVISION_CONFLICT",
         "Diff base must be a first-parent ancestor of head",
       );
-    const baseMaterial = await materialFor(ctx, opened, baseRecord);
-    const headMaterial = await materialFor(ctx, opened, headRecord);
+    const baseMaterial = await materialFor(opened, baseRecord);
+    const headMaterial = await materialFor(opened, headRecord);
     const changeSet = createChangeSet(
       documentId,
       baseRecord.id,
@@ -1346,246 +1372,248 @@ export const diff = async (ctx: ProjectContext,
       headDocument: headMaterial.document,
     };
     return reattributeChangeSet(changeSet, provenance);
-  };
+  });
 
-export const restore = async (ctx: ProjectContext, 
-    documentId: string,
-    input: {
-      baseRevision: RevisionId | "HEAD";
-      targetRevision: RevisionId | "HEAD";
-      author: Actor;
-      message: string;
-    },
-  ): Promise<RevisionMutationResult> => {
-    return withLockedStore(ctx.manifestPath, async (opened) => {
-      const base = await currentRevision(ctx, 
-        opened,
-        documentId,
-        input.baseRevision,
+export const restore = async (
+  ctx: ProjectContext,
+  documentId: string,
+  input: {
+    baseRevision: RevisionId | "HEAD";
+    targetRevision: RevisionId | "HEAD";
+    author: Actor;
+    message: string;
+  },
+): Promise<RevisionMutationResult> => {
+  return withLockedStore(ctx.manifestPath, async (opened) => {
+    const base = await currentRevision(opened, documentId, input.baseRevision);
+    const target = await currentRevision(
+      opened,
+      documentId,
+      input.targetRevision,
+    );
+    if ((await readHead(opened.storePath, documentId)) !== base.id)
+      throw new AgentDocxError(
+        "REVISION_CONFLICT",
+        "Restore base is not the current head",
       );
-      const target = await currentRevision(ctx, 
-        opened,
-        documentId,
-        input.targetRevision,
+    const currentConfig = documentById(opened.manifest, documentId);
+    const currentSnapshot = await snapshotProjectDocument(
+      opened,
+      currentConfig,
+    );
+    if (currentSnapshot.workingTreeHash !== base.workingTreeHash)
+      throw new AgentDocxError(
+        "WORKING_COPY_CONFLICT",
+        "Working copy differs from restore base",
       );
-      if ((await readHead(opened.storePath, documentId)) !== base.id)
-        throw new AgentDocxError(
-          "REVISION_CONFLICT",
-          "Restore base is not the current head",
-        );
-      const currentConfig = documentById(opened.manifest, documentId);
-      const currentSnapshot = await snapshotProjectDocument(
-        opened,
-        currentConfig,
+    const material = await materialFor(opened, target);
+    if (material.config.source !== currentConfig.source)
+      throw new AgentDocxError(
+        "PROJECT_INVALID",
+        "Restore cannot change the document source path",
       );
-      if (currentSnapshot.workingTreeHash !== base.workingTreeHash)
-        throw new AgentDocxError(
-          "WORKING_COPY_CONFLICT",
-          "Working copy differs from restore base",
-        );
-      const material = await materialFor(ctx, opened, target);
-      if (material.config.source !== currentConfig.source)
-        throw new AgentDocxError(
-          "PROJECT_INVALID",
-          "Restore cannot change the document source path",
-        );
-      const targetSnapshot = await snapshotWithDependencies(
-        opened,
-        currentSnapshot,
-        material.config,
-        target.dependencyObjects,
-      );
-      const snapshot = snapshotWithSource(targetSnapshot, material.source);
-      return commitLocked(ctx, 
-        opened,
-        material.config,
-        snapshot,
-        material.document,
-        material.annotations,
-        base.id,
-        input.author,
-        input.message,
-        undefined,
-        true,
-        true,
-        { expectedWorkingTreeHash: currentSnapshot.workingTreeHash },
-      );
-    });
-  };
+    const targetSnapshot = await snapshotWithDependencies(
+      opened,
+      currentSnapshot,
+      material.config,
+      target.dependencyObjects,
+    );
+    const snapshot = snapshotWithSource(targetSnapshot, material.source);
+    return commitLocked(
+      ctx,
+      opened,
+      material.config,
+      snapshot,
+      material.document,
+      material.annotations,
+      base.id,
+      input.author,
+      input.message,
+      undefined,
+      true,
+      true,
+      { expectedWorkingTreeHash: currentSnapshot.workingTreeHash },
+    );
+  });
+};
 
-export const resolveChanges = async (ctx: ProjectContext, 
-    documentId: string,
-    input: ResolveChangesInput,
-  ): Promise<RevisionMutationResult> => {
-    return withLockedStore(ctx.manifestPath, async (opened) => {
-      const base = await currentRevision(ctx, 
-        opened,
-        documentId,
-        input.changeSet.baseRevision,
+export const resolveChanges = async (
+  ctx: ProjectContext,
+  documentId: string,
+  input: ResolveChangesInput,
+): Promise<RevisionMutationResult> => {
+  return withLockedStore(ctx.manifestPath, async (opened) => {
+    const base = await currentRevision(
+      opened,
+      documentId,
+      input.changeSet.baseRevision,
+    );
+    const head = await currentRevision(
+      opened,
+      documentId,
+      input.changeSet.headRevision,
+    );
+    if (
+      base.id === head.id ||
+      !(await isFirstParentAncestor(opened, base.id, head))
+    )
+      throw new AgentDocxError(
+        "CHANGESET_INVALID",
+        "Change-set base must be a distinct first-parent ancestor",
       );
-      const head = await currentRevision(ctx, 
-        opened,
-        documentId,
-        input.changeSet.headRevision,
-      );
-      if (
-        base.id === head.id ||
-        !(await isFirstParentAncestor(ctx, opened, base.id, head))
-      )
-        throw new AgentDocxError(
-          "CHANGESET_INVALID",
-          "Change-set base must be a distinct first-parent ancestor",
-        );
-      const baseMaterial = await materialFor(ctx, opened, base);
-      const headMaterial = await materialFor(ctx, opened, head);
-      const rawExpected = createChangeSet(
-        documentId,
-        base.id,
-        head.id,
-        baseMaterial.document,
-        headMaterial.document,
-        baseMaterial.annotations,
-        headMaterial.annotations,
-        defaultAttribution(head.author, head.createdAt),
-        {
-          baseConfig: baseMaterial.config as unknown as JsonObject,
-          headConfig: headMaterial.config as unknown as JsonObject,
-          baseDependencies: base.dependencyObjects,
-          headDependencies: head.dependencyObjects,
-          baseSource: baseMaterial.source,
-          headSource: headMaterial.source,
-        },
-      );
-      const baseProvenance = await provenanceForRevision(opened, base);
-      const headProvenance = await provenanceForRevision(opened, head);
-      const expected = reattributeChangeSet(rawExpected, {
-        baseBlocks: baseProvenance.blocks,
-        headBlocks: headProvenance.blocks,
-        baseOperations: baseProvenance.operations,
-        headOperations: headProvenance.operations,
-        baseConfig: baseProvenance.config,
-        headConfig: headProvenance.config,
-        baseConfigOperations: baseProvenance.configOperations,
-        headConfigOperations: headProvenance.configOperations,
-        baseDependencyOperations: baseProvenance.dependencyOperations,
-        headDependencyOperations: headProvenance.dependencyOperations,
-        baseDocument: baseMaterial.document,
-        headDocument: headMaterial.document,
-        baseDependencies: baseProvenance.dependencies,
-        headDependencies: headProvenance.dependencies,
-      });
-      if (canonicalJson(expected) !== canonicalJson(input.changeSet))
-        throw new AgentDocxError(
-          "CHANGESET_INVALID",
-          "Change set does not match the selected immutable revisions",
-        );
-      if (
-        base.id === head.id ||
-        (await readHead(opened.storePath, documentId)) !== head.id
-      )
-        throw new AgentDocxError(
-          "REVISION_CONFLICT",
-          "Change-set head must be the distinct current document head",
-        );
-      const changeIds = [
-        ...expected.changes.map((change) => change.id),
-        ...expected.annotations.map((change) => change.id),
-      ].sort();
-      const decisionIds = Object.keys(input.decisions).sort();
-      if (
-        Object.values(input.decisions).some(
-          (decision) => decision !== "accept" && decision !== "reject",
-        )
-      )
-        throw new AgentDocxError(
-          "CHANGESET_INVALID",
-          "Change-set decisions must be accept or reject",
-        );
-      if (
-        changeIds.length !== decisionIds.length ||
-        changeIds.some((id, index) => id !== decisionIds[index])
-      )
-        throw new AgentDocxError(
-          "CHANGESET_INVALID",
-          "Change-set decisions must select every change exactly once",
-        );
-      const currentConfig = documentById(opened.manifest, documentId);
-      const snapshot = await snapshotProjectDocument(opened, currentConfig);
-      if (
-        snapshot.workingTreeHash !== head.workingTreeHash ||
-        snapshot.sourceObject !== head.sourceObject ||
-        snapshot.documentConfigObject !== head.documentConfigObject ||
-        canonicalJson(snapshot.dependencyObjects) !==
-          canonicalJson(head.dependencyObjects)
-      )
-        throw new AgentDocxError(
-          "WORKING_COPY_CONFLICT",
-          "Working copy differs from the change-set head",
-        );
-      const targetConfig = applyRejectedConfigChanges(
-        headMaterial.config,
-        expected.changes,
-        input.decisions,
-      );
-      const targetDependencies = applyRejectedDependencyChanges(
-        head.dependencyObjects,
-        expected.changes,
-        input.decisions,
-      );
-      const replacements = rejectedSourceReplacements(
-        snapshot.source,
-        baseMaterial.source,
-        expected.changes,
-        input.decisions,
-      );
-      let source = snapshot.source;
-      for (const replacement of replacements)
-        source = `${source.slice(0, replacement.start)}${replacement.replacement}${source.slice(replacement.end)}`;
-      let annotations = [...headMaterial.annotations];
-      for (const change of expected.annotations) {
-        if (input.decisions[change.id] !== "reject") continue;
-        if (change.kind === "add")
-          annotations = annotations.filter(
-            (annotation) => annotation.id !== change.newValue.id,
-          );
-        else if (change.kind === "remove") annotations.push(change.oldValue);
-        else
-          annotations = annotations.map((annotation) =>
-            annotation.id === change.newValue.id ? change.oldValue : annotation,
-          );
-      }
-      const targetSnapshot = await snapshotWithDependencies(
-        opened,
-        snapshot,
-        targetConfig,
-        targetDependencies,
-      );
-      const preparedSnapshot = snapshotWithSource(targetSnapshot, source);
-      const document = documentFor(
-        source,
-        targetConfig,
-        preparedSnapshot,
-        opened.manifest.projectId,
-        annotations,
-        true,
-      );
-      return commitLocked(ctx, 
-        opened,
-        targetConfig,
-        preparedSnapshot,
-        document,
-        annotations,
-        head.id,
-        input.author,
-        input.message,
-        { schemaVersion: 1, changeSet: expected, decisions: input.decisions },
-        false,
-        true,
-        {
-          expectedWorkingTreeHash: snapshot.workingTreeHash,
-          parentIds: [base.id, head.id],
-          firstParent: base,
-        },
-      );
+    const baseMaterial = await materialFor(opened, base);
+    const headMaterial = await materialFor(opened, head);
+    const rawExpected = createChangeSet(
+      documentId,
+      base.id,
+      head.id,
+      baseMaterial.document,
+      headMaterial.document,
+      baseMaterial.annotations,
+      headMaterial.annotations,
+      defaultAttribution(head.author, head.createdAt),
+      {
+        baseConfig: baseMaterial.config as unknown as JsonObject,
+        headConfig: headMaterial.config as unknown as JsonObject,
+        baseDependencies: base.dependencyObjects,
+        headDependencies: head.dependencyObjects,
+        baseSource: baseMaterial.source,
+        headSource: headMaterial.source,
+      },
+    );
+    const baseProvenance = await provenanceForRevision(opened, base);
+    const headProvenance = await provenanceForRevision(opened, head);
+    const expected = reattributeChangeSet(rawExpected, {
+      baseBlocks: baseProvenance.blocks,
+      headBlocks: headProvenance.blocks,
+      baseOperations: baseProvenance.operations,
+      headOperations: headProvenance.operations,
+      baseConfig: baseProvenance.config,
+      headConfig: headProvenance.config,
+      baseConfigOperations: baseProvenance.configOperations,
+      headConfigOperations: headProvenance.configOperations,
+      baseDependencyOperations: baseProvenance.dependencyOperations,
+      headDependencyOperations: headProvenance.dependencyOperations,
+      baseDocument: baseMaterial.document,
+      headDocument: headMaterial.document,
+      baseDependencies: baseProvenance.dependencies,
+      headDependencies: headProvenance.dependencies,
     });
-  };
+    if (canonicalJson(expected) !== canonicalJson(input.changeSet))
+      throw new AgentDocxError(
+        "CHANGESET_INVALID",
+        "Change set does not match the selected immutable revisions",
+      );
+    if (
+      base.id === head.id ||
+      (await readHead(opened.storePath, documentId)) !== head.id
+    )
+      throw new AgentDocxError(
+        "REVISION_CONFLICT",
+        "Change-set head must be the distinct current document head",
+      );
+    const changeIds = [
+      ...expected.changes.map((change) => change.id),
+      ...expected.annotations.map((change) => change.id),
+    ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+    const decisionIds = Object.keys(input.decisions).sort((left, right) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    );
+    if (
+      Object.values(input.decisions).some(
+        (decision) => decision !== "accept" && decision !== "reject",
+      )
+    )
+      throw new AgentDocxError(
+        "CHANGESET_INVALID",
+        "Change-set decisions must be accept or reject",
+      );
+    if (
+      changeIds.length !== decisionIds.length ||
+      changeIds.some((id, index) => id !== decisionIds[index])
+    )
+      throw new AgentDocxError(
+        "CHANGESET_INVALID",
+        "Change-set decisions must select every change exactly once",
+      );
+    const currentConfig = documentById(opened.manifest, documentId);
+    const snapshot = await snapshotProjectDocument(opened, currentConfig);
+    if (
+      snapshot.workingTreeHash !== head.workingTreeHash ||
+      snapshot.sourceObject !== head.sourceObject ||
+      snapshot.documentConfigObject !== head.documentConfigObject ||
+      canonicalJson(snapshot.dependencyObjects) !==
+        canonicalJson(head.dependencyObjects)
+    )
+      throw new AgentDocxError(
+        "WORKING_COPY_CONFLICT",
+        "Working copy differs from the change-set head",
+      );
+    const targetConfig = applyRejectedConfigChanges(
+      headMaterial.config,
+      expected.changes,
+      input.decisions,
+    );
+    const targetDependencies = applyRejectedDependencyChanges(
+      head.dependencyObjects,
+      expected.changes,
+      input.decisions,
+    );
+    const replacements = rejectedSourceReplacements(
+      snapshot.source,
+      baseMaterial.source,
+      expected.changes,
+      input.decisions,
+    );
+    let source = snapshot.source;
+    for (const replacement of replacements)
+      source = `${source.slice(0, replacement.start)}${replacement.replacement}${source.slice(replacement.end)}`;
+    let annotations = [...headMaterial.annotations];
+    for (const change of expected.annotations) {
+      if (input.decisions[change.id] !== "reject") continue;
+      if (change.kind === "add")
+        annotations = annotations.filter(
+          (annotation) => annotation.id !== change.newValue.id,
+        );
+      else if (change.kind === "remove") annotations.push(change.oldValue);
+      else
+        annotations = annotations.map((annotation) =>
+          annotation.id === change.newValue.id ? change.oldValue : annotation,
+        );
+    }
+    const targetSnapshot = await snapshotWithDependencies(
+      opened,
+      snapshot,
+      targetConfig,
+      targetDependencies,
+    );
+    const preparedSnapshot = snapshotWithSource(targetSnapshot, source);
+    const document = documentFor(
+      source,
+      targetConfig,
+      preparedSnapshot,
+      opened.manifest.projectId,
+      annotations,
+      true,
+    );
+    return commitLocked(
+      ctx,
+      opened,
+      targetConfig,
+      preparedSnapshot,
+      document,
+      annotations,
+      head.id,
+      input.author,
+      input.message,
+      { schemaVersion: 1, changeSet: expected, decisions: input.decisions },
+      false,
+      true,
+      {
+        expectedWorkingTreeHash: snapshot.workingTreeHash,
+        parentIds: [head.id, base.id],
+        firstParent: head,
+      },
+    );
+  });
+};

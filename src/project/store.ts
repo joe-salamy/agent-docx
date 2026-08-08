@@ -1,13 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import {
   link,
   lstat,
   mkdir,
+  open,
   readFile,
   readdir,
   realpath,
   rename,
   rm,
+  type FileHandle,
 } from "node:fs/promises";
 import {
   basename,
@@ -25,8 +28,10 @@ import { objectRecord } from "../json-contract.js";
 import {
   pathExists,
   pathsOverlap,
+  writeAtomicFile,
   writeExclusiveFile,
 } from "./fs-util.js";
+import { isSafeRelativePath, publicPath } from "../path-util.js";
 import { builtInProfiles } from "../profiles.js";
 import { isDocumentId, type RevisionId } from "../legal/model.js";
 import { builtInRulePacks } from "../legal/rules.js";
@@ -141,11 +146,13 @@ export const canonicalJson = (value: unknown): string => {
   return serialized;
 };
 
-export const canonicalObjectId = (value: unknown): RevisionId =>
-  objectId(canonicalJson(value));
-
 const relativePath = (projectDirectory: string, absolutePath: string): string =>
   relative(projectDirectory, absolutePath).split(sep).join("/");
+
+export const canonicalObjectId = (value: unknown): RevisionId =>
+  objectId(canonicalJson(value));
+const displayPath = (path: string, projectDirectory?: string): string =>
+  projectDirectory === undefined ? path : publicPath(projectDirectory, path);
 
 const assertRelativeManifestPath = (path: string, name: string): string => {
   const parts = path.split("/");
@@ -155,13 +162,7 @@ const assertRelativeManifestPath = (path: string, name: string): string => {
     parts[0] === EXPORT_INTENT ||
     parts[0] === LOCK_NAME ||
     parts[0]?.startsWith(".agent-docx.init-") === true;
-  if (
-    path.length === 0 ||
-    isAbsolute(path) ||
-    path.includes("\\") ||
-    reservedRoot ||
-    parts.some((part) => part.length === 0 || part === "." || part === "..")
-  )
+  if (!isSafeRelativePath(path) || reservedRoot)
     throw new AgentDocxError(
       "PATH_OUTSIDE_PROJECT",
       `${name} must be a normalized project-relative path`,
@@ -194,39 +195,49 @@ export const assertNoSymlinkComponents = async (
   }
 };
 
-const assertRegularFile = async (path: string, name: string): Promise<void> => {
+const assertRegularFile = async (
+  path: string,
+  name: string,
+  projectDirectory?: string,
+): Promise<void> => {
   await assertNoSymlinkComponents(path, name);
   let entry;
   try {
     entry = await lstat(path);
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     throw new AgentDocxError(
       "INPUT_NOT_FOUND",
-      `${name} does not exist: ${path}`,
+      `${name} does not exist: ${displayPath(path, projectDirectory)}`,
     );
   }
   if (!entry.isFile() || entry.isSymbolicLink())
     throw new AgentDocxError(
       "PATH_OUTSIDE_PROJECT",
-      `${name} must be a regular nonsymlink file`,
+      `${name} must be a regular nonsymlink file: ${displayPath(path, projectDirectory)}`,
     );
 };
 
-const assertDirectory = async (path: string, name: string): Promise<void> => {
+const assertDirectory = async (
+  path: string,
+  name: string,
+  projectDirectory?: string,
+): Promise<void> => {
   await assertNoSymlinkComponents(path, name);
   let entry;
   try {
     entry = await lstat(path);
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     throw new AgentDocxError(
       "INPUT_NOT_FOUND",
-      `${name} does not exist: ${path}`,
+      `${name} does not exist: ${displayPath(path, projectDirectory)}`,
     );
   }
   if (!entry.isDirectory() || entry.isSymbolicLink())
     throw new AgentDocxError(
       "PATH_OUTSIDE_PROJECT",
-      `${name} must be a directory, not a symlink`,
+      `${name} must be a directory, not a symlink: ${displayPath(path, projectDirectory)}`,
     );
 };
 
@@ -234,21 +245,79 @@ const assertWithin = (
   projectDirectory: string,
   path: string,
   name: string,
-): string => {
-  const normalizedPath = assertRelativeManifestPath(path, name);
-  const absolutePath = resolve(projectDirectory, normalizedPath);
-  const relativePathValue = relative(projectDirectory, absolutePath);
-  if (
-    relativePathValue === "" ||
-    relativePathValue === ".." ||
-    relativePathValue.startsWith(`..${sep}`) ||
-    isAbsolute(relativePathValue)
-  )
+): string => resolve(projectDirectory, assertRelativeManifestPath(path, name));
+
+const sameFile = (
+  left: { dev: number; ino: number },
+  right: { dev: number; ino: number },
+): boolean => left.dev === right.dev && left.ino === right.ino;
+
+const regularFileError = (
+  path: string,
+  name: string,
+  projectDirectory?: string,
+): AgentDocxError =>
+  new AgentDocxError(
+    "PATH_OUTSIDE_PROJECT",
+    `${name} must remain the same regular file: ${displayPath(path, projectDirectory)}`,
+  );
+
+/**
+ * Read a project file through one stable file handle. The initial lstat and
+ * final fstat pair catches replacement races; O_NOFOLLOW closes the final
+ * symlink race on platforms that support it.
+ */
+export const readProjectFile = async (
+  path: string,
+  name: string,
+  projectDirectory?: string,
+): Promise<Uint8Array> => {
+  await assertNoSymlinkComponents(path, name);
+  let before;
+  try {
+    before = await lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     throw new AgentDocxError(
-      "PATH_OUTSIDE_PROJECT",
-      `${name} is outside the project directory`,
+      "INPUT_NOT_FOUND",
+      `${name} does not exist: ${displayPath(path, projectDirectory)}`,
     );
-  return absolutePath;
+  }
+  if (!before.isFile() || before.isSymbolicLink())
+    throw regularFileError(path, name, projectDirectory);
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  let handle: FileHandle | undefined;
+  try {
+    try {
+      handle = await open(path, fsConstants.O_RDONLY | noFollow);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        noFollow === 0 ||
+        !["EINVAL", "ENOTSUP", "EOPNOTSUPP"].includes(code ?? "")
+      )
+        throw error;
+      handle = await open(path, fsConstants.O_RDONLY);
+    }
+    const opened = await handle.stat();
+    if (
+      !opened.isFile() ||
+      opened.isSymbolicLink() ||
+      !sameFile(before, opened)
+    )
+      throw regularFileError(path, name, projectDirectory);
+    const bytes = await handle.readFile();
+    const after = await handle.stat();
+    if (!after.isFile() || after.isSymbolicLink() || !sameFile(opened, after))
+      throw regularFileError(path, name, projectDirectory);
+    return bytes;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOOP")
+      throw regularFileError(path, name, projectDirectory);
+    throw error;
+  } finally {
+    await handle?.close();
+  }
 };
 
 export const strictJson = <T>(bytes: Uint8Array, path: string): T => {
@@ -267,8 +336,6 @@ const hasOnlyKeys = (
   value: Record<string, unknown>,
   allowed: Record<string, true>,
 ): boolean => Object.keys(value).every((key) => allowed[key] === true);
-
-
 
 const assertClosedKeys = (
   value: Record<string, unknown>,
@@ -289,7 +356,9 @@ const assertString = (value: unknown, name: string): string => {
 };
 
 const assertMetadata = (value: unknown): void => {
-  const metadata = objectRecord(value, "Document metadata", { code: "PROJECT_INVALID" });
+  const metadata = objectRecord(value, "Document metadata", {
+    code: "PROJECT_INVALID",
+  });
   assertClosedKeys(
     metadata,
     [
@@ -336,7 +405,9 @@ const assertMetadata = (value: unknown): void => {
       );
     const ids = new Set<string>();
     for (const entry of metadata[key]) {
-      const record = objectRecord(entry, `Document metadata ${key} entry`, { code: "PROJECT_INVALID" });
+      const record = objectRecord(entry, `Document metadata ${key} entry`, {
+        code: "PROJECT_INVALID",
+      });
       assertClosedKeys(record, allowed, `Document metadata ${key} entry`);
       const id = assertString(record.id, `Document metadata ${key} entry id`);
       if (!isDocumentId(id) || ids.has(id))
@@ -373,7 +444,9 @@ const assertMetadata = (value: unknown): void => {
     );
   const certificateIds = new Set<string>();
   for (const certificate of metadata.certificates) {
-    const record = objectRecord(certificate, "Document metadata certificate", { code: "PROJECT_INVALID" });
+    const record = objectRecord(certificate, "Document metadata certificate", {
+      code: "PROJECT_INVALID",
+    });
     const id = assertString(record.id, "Document metadata certificate id");
     if (!isDocumentId(id) || certificateIds.has(id))
       throw new AgentDocxError(
@@ -435,7 +508,9 @@ const assertMetadata = (value: unknown): void => {
 };
 
 const assertChrome = (value: unknown): void => {
-  const chrome = objectRecord(value, "Document chrome", { code: "PROJECT_INVALID" });
+  const chrome = objectRecord(value, "Document chrome", {
+    code: "PROJECT_INVALID",
+  });
   assertClosedKeys(
     chrome,
     ["headers", "footers", "pageNumber", "lineNumbers"],
@@ -617,7 +692,9 @@ const validateDocumentConfig = (value: unknown): AgentDocxDocumentConfig => {
       Array.isArray(config.fontSet)
     )
       throw new AgentDocxError("PROJECT_INVALID", "fontSet is invalid");
-    const fontSet = objectRecord(config.fontSet, "fontSet", { code: "PROJECT_INVALID" });
+    const fontSet = objectRecord(config.fontSet, "fontSet", {
+      code: "PROJECT_INVALID",
+    });
     assertClosedKeys(
       fontSet,
       ["family", "regularPath", "boldPath", "italicPath", "boldItalicPath"],
@@ -875,7 +952,7 @@ export const writeObject = async (
   const path = objectPath(storePath, id);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   try {
-    await writeExclusiveFile(path, bytes);
+    await writeAtomicFile(path, bytes);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const current = await readFile(path);
@@ -993,7 +1070,7 @@ export const writeRevisionJson = async (
   const path = revisionPath(storePath, id);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   try {
-    await writeExclusiveFile(path, record);
+    await writeAtomicFile(path, record);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const existing = strictJson<Record<string, unknown>>(
@@ -1022,11 +1099,12 @@ const mediaTypeFor = (path: string): string => {
 const collectAssets = async (
   directory: string,
   relativeDirectory = "",
+  projectDirectory?: string,
 ): Promise<ReadonlyMap<string, { bytes: Uint8Array; mediaType: string }>> => {
   const assets = new Map<string, { bytes: Uint8Array; mediaType: string }>();
   const entries = await readdir(directory, { withFileTypes: true });
   for (const entry of entries.sort((left, right) =>
-    left.name.localeCompare(right.name),
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
   )) {
     const logical = relativeDirectory
       ? `${relativeDirectory}/${entry.name}`
@@ -1038,7 +1116,11 @@ const collectAssets = async (
         `Asset is a symlink: ${logical}`,
       );
     if (entry.isDirectory()) {
-      for (const [key, value] of await collectAssets(path, logical))
+      for (const [key, value] of await collectAssets(
+        path,
+        logical,
+        projectDirectory,
+      ))
         assets.set(key, value);
       continue;
     }
@@ -1048,7 +1130,7 @@ const collectAssets = async (
         `Unsupported asset entry: ${logical}`,
       );
     assets.set(logical, {
-      bytes: await readFile(path),
+      bytes: await readProjectFile(path, `Asset ${logical}`, projectDirectory),
       mediaType: mediaTypeFor(logical),
     });
   }
@@ -1076,8 +1158,11 @@ export const snapshotProjectDocument = async (
     document.source,
     "Document source",
   );
-  await assertRegularFile(sourcePath, "Document source");
-  const sourceBytes = await readFile(sourcePath);
+  const sourceBytes = await readProjectFile(
+    sourcePath,
+    "Document source",
+    opened.projectDirectory,
+  );
   let source: string;
   try {
     source = new TextDecoder("utf-8", { fatal: true }).decode(sourceBytes);
@@ -1139,9 +1224,13 @@ export const snapshotProjectDocument = async (
       configuredPath,
       `Rule pack ${index}`,
     );
-    await assertRegularFile(packPath, `Rule pack ${index}`);
+    const bytes = await readProjectFile(
+      packPath,
+      `Rule pack ${index}`,
+      opened.projectDirectory,
+    );
     dependencyObjects[`rule-pack:${index}`] = await addDependency(
-      await readFile(packPath),
+      bytes,
       "application/json",
       `rule-pack:${index}`,
       dependencies,
@@ -1153,8 +1242,11 @@ export const snapshotProjectDocument = async (
       document.template,
       "Template",
     );
-    await assertRegularFile(templatePath, "Template");
-    const bytes = await readFile(templatePath);
+    const bytes = await readProjectFile(
+      templatePath,
+      "Template",
+      opened.projectDirectory,
+    );
     dependencyObjects.template = await addDependency(
       bytes,
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1168,8 +1260,16 @@ export const snapshotProjectDocument = async (
       document.assetsDir,
       "Assets directory",
     );
-    await assertDirectory(assetsPath, "Assets directory");
-    for (const [name, asset] of await collectAssets(assetsPath))
+    await assertDirectory(
+      assetsPath,
+      "Assets directory",
+      opened.projectDirectory,
+    );
+    for (const [name, asset] of await collectAssets(
+      assetsPath,
+      "",
+      opened.projectDirectory,
+    ))
       dependencyObjects[`asset/${name}`] = await addDependency(
         asset.bytes,
         asset.mediaType,
@@ -1191,9 +1291,13 @@ export const snapshotProjectDocument = async (
         configuredPath,
         `Font ${role}`,
       );
-      await assertRegularFile(fontPath, `Font ${role}`);
+      const bytes = await readProjectFile(
+        fontPath,
+        `Font ${role}`,
+        opened.projectDirectory,
+      );
       dependencyObjects[`font/${role}`] = await addDependency(
-        await readFile(fontPath),
+        bytes,
         "font/ttf",
         `font/${role}`,
         dependencies,
@@ -1204,7 +1308,7 @@ export const snapshotProjectDocument = async (
   const documentConfigObject = canonicalObjectId(document);
   const sortedDependencies = Object.fromEntries(
     Object.entries(dependencyObjects).sort(([left], [right]) =>
-      left.localeCompare(right),
+      left < right ? -1 : left > right ? 1 : 0,
     ),
   ) as DependencyHashes;
   const workingTreeHash = canonicalObjectId({
@@ -1293,10 +1397,75 @@ const recoverInitialization = async (
   const binding = await readJsonFile<ProjectBinding>(
     bindingPath(storePath),
   ).catch(() => null);
-  if (binding?.projectId === intent.projectId)
+  if (binding?.projectId === intent.projectId) {
     await rm(storePath, { recursive: true, force: true });
+    await rm(manifestPath, { force: true });
+  }
   await rm(intentPath, { force: true });
 };
+const UUID_SUFFIX =
+  "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const staleStageFilePattern = new RegExp(
+  `\\.${UUID_SUFFIX}\\.(?:stage|backup)$`,
+);
+const exportStageDirectoryPattern = new RegExp(
+  `\\.agent-docx-${UUID_SUFFIX}\\.stage$`,
+);
+
+const sweepOwnedStages = async (
+  projectDirectory: string,
+  manifestPath: string,
+): Promise<void> => {
+  const visit = async (directory: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries.sort((left, right) =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+    )) {
+      const path = resolve(directory, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        if (exportStageDirectoryPattern.test(entry.name)) {
+          try {
+            const marker = strictJson<Record<string, unknown>>(
+              await readFile(stageMarker(path)),
+              stageMarker(path),
+            );
+            if (
+              marker.schemaVersion === 1 &&
+              typeof marker.owner === "string" &&
+              marker.owner.length > 0 &&
+              typeof marker.projectId === "string" &&
+              marker.projectId.length > 0 &&
+              marker.manifestPath === manifestPath
+            )
+              await rm(path, { recursive: true, force: true });
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+          continue;
+        }
+        if (
+          entry.name === ".git" ||
+          entry.name === "node_modules" ||
+          entry.name === "dist"
+        )
+          continue;
+        await visit(path);
+        continue;
+      }
+      if (entry.isFile() && staleStageFilePattern.test(entry.name))
+        await rm(path, { force: true });
+    }
+  };
+  await visit(projectDirectory);
+};
+
 const exportIntentPath = (projectDirectory: string): string =>
   resolve(projectDirectory, EXPORT_INTENT);
 
@@ -1327,7 +1496,9 @@ const exportIntentFrom = (
   projectDirectory: string,
   value: unknown,
 ): ExportIntent => {
-  const intent = objectRecord(value, "Export intent", { code: "PROJECT_INVALID" });
+  const intent = objectRecord(value, "Export intent", {
+    code: "PROJECT_INVALID",
+  });
   const state = intent.state;
   if (
     intent.schemaVersion !== 1 ||
@@ -1497,8 +1668,6 @@ const exportIntentFrom = (
     pdfSha256,
   };
 };
-
-
 
 const stageMarker = (stagePath: string): string =>
   resolve(stagePath, "owner.json");
@@ -1706,7 +1875,7 @@ const publishStagedDirectory = async (
   const visit = async (source: string, target: string): Promise<void> => {
     const entries = await readdir(source, { withFileTypes: true });
     for (const entry of entries.sort((left, right) =>
-      left.name.localeCompare(right.name),
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
     )) {
       if (source === stage && entry.name === "owner.json") continue;
       const sourcePath = resolve(source, entry.name);
@@ -1927,8 +2096,10 @@ export const acquireProjectLock = async (
       realpath: true,
       lockfilePath: lockPath,
       retries: 0,
-      stale: 120000,
-      update: 30000,
+      // A blocked event loop can delay heartbeat updates; this bounded
+      // window still trades rare false stale-lock detection for safety.
+      stale: 60000,
+      update: 15000,
     });
   } catch (error) {
     throw new AgentDocxError("PROJECT_LOCKED", "Project is locked", {
@@ -1946,14 +2117,31 @@ export const withLockedStore = async <Value>(
 ): Promise<Value> => {
   const absoluteManifestPath = resolve(manifestPath);
   const projectDirectory = dirname(absoluteManifestPath);
-  await assertDirectory(projectDirectory, "Project directory");
+  await assertDirectory(
+    projectDirectory,
+    "Project directory",
+    projectDirectory,
+  );
   const release = await acquireProjectLock(projectDirectory);
+  let opening = true;
   try {
     await recoverInitialization(projectDirectory, absoluteManifestPath);
     await recoverExport(projectDirectory, absoluteManifestPath);
-    await assertRegularFile(absoluteManifestPath, "Project manifest");
+    await sweepOwnedStages(projectDirectory, absoluteManifestPath);
+    await assertRegularFile(
+      absoluteManifestPath,
+      "Project manifest",
+      projectDirectory,
+    );
     const manifest = validateManifest(
-      await readJsonFile<unknown>(absoluteManifestPath),
+      strictJson<unknown>(
+        await readProjectFile(
+          absoluteManifestPath,
+          "Project manifest",
+          projectDirectory,
+        ),
+        absoluteManifestPath,
+      ),
     );
     await validateManifestPaths(projectDirectory, manifest);
     const opened = {
@@ -1962,14 +2150,23 @@ export const withLockedStore = async <Value>(
       storePath: resolve(projectDirectory, STORE_DIR),
       manifest,
     };
-    await assertDirectory(opened.storePath, "Project store");
+    await assertDirectory(
+      opened.storePath,
+      "Project store",
+      opened.projectDirectory,
+    );
     await validateBinding(opened);
+    opening = false;
     return await operation(opened);
   } catch (error) {
-    if ((error as AgentDocxError).code === "INPUT_NOT_FOUND")
+    const code =
+      error instanceof AgentDocxError
+        ? error.code
+        : (error as NodeJS.ErrnoException).code;
+    if (opening && (code === "INPUT_NOT_FOUND" || code === "ENOENT"))
       throw new AgentDocxError(
         "PROJECT_NOT_FOUND",
-        `Project not found: ${absoluteManifestPath}`,
+        `Project not found: ${publicPath(projectDirectory, absoluteManifestPath)}`,
       );
     throw error;
   } finally {
@@ -1985,7 +2182,11 @@ export const initializeStore = async (
   const projectDirectory = dirname(absoluteManifestPath);
   validateManifest(manifest);
   await validateManifestPaths(projectDirectory, manifest);
-  await assertDirectory(projectDirectory, "Project directory");
+  await assertDirectory(
+    projectDirectory,
+    "Project directory",
+    projectDirectory,
+  );
   const manifestName = basename(absoluteManifestPath);
   if (
     manifestName === STORE_DIR ||
@@ -2001,6 +2202,7 @@ export const initializeStore = async (
   const release = await acquireProjectLock(projectDirectory);
   try {
     await recoverInitialization(projectDirectory, absoluteManifestPath);
+    await sweepOwnedStages(projectDirectory, absoluteManifestPath);
     const storePath = resolve(projectDirectory, STORE_DIR);
     try {
       await lstat(absoluteManifestPath);
@@ -2028,9 +2230,9 @@ export const initializeStore = async (
       manifestPath: absoluteManifestPath,
       storePath,
     };
-    await writeExclusiveFile(intentPath, canonicalJson(intent));
+    await writeAtomicFile(intentPath, canonicalJson(intent));
     await mkdir(storePath, { recursive: false, mode: 0o700 });
-    await writeExclusiveFile(
+    await writeAtomicFile(
       bindingPath(storePath),
       canonicalJson({
         schemaVersion: 1,
@@ -2038,7 +2240,7 @@ export const initializeStore = async (
         manifestBasename: manifestName,
       } satisfies ProjectBinding),
     );
-    await writeExclusiveFile(absoluteManifestPath, canonicalJson(manifest));
+    await writeAtomicFile(absoluteManifestPath, canonicalJson(manifest));
     await rm(intentPath, { force: true });
     return {
       manifestPath: absoluteManifestPath,
@@ -2104,7 +2306,7 @@ export const documentConfigFromInput = async (
     );
   const normalize = async (path: string, name: string): Promise<string> => {
     const absolutePath = assertWithin(projectDirectory, path, name);
-    await assertRegularFile(absolutePath, name);
+    await assertRegularFile(absolutePath, name, projectDirectory);
     return assertRelativeManifestPath(
       relativePath(projectDirectory, absolutePath),
       name,
@@ -2126,7 +2328,7 @@ export const documentConfigFromInput = async (
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   } else {
-    await assertRegularFile(sourcePath, "Document source");
+    await assertRegularFile(sourcePath, "Document source", projectDirectory);
   }
   const source = assertRelativeManifestPath(
     relativePath(projectDirectory, sourcePath),
@@ -2172,7 +2374,7 @@ export const documentConfigFromInput = async (
       input.assetsDir,
       "Assets directory",
     );
-    await assertDirectory(absoluteAssets, "Assets directory");
+    await assertDirectory(absoluteAssets, "Assets directory", projectDirectory);
     assetsDir = assertRelativeManifestPath(
       relativePath(projectDirectory, absoluteAssets),
       "Assets directory",
@@ -2237,7 +2439,7 @@ export const replaceOwnedFile = async (
     }
   } else {
     await assertRegularFile(path, "Owned file");
-    if (objectId(await readFile(path)) !== expectedOld)
+    if (objectId(await readProjectFile(path, "Owned file")) !== expectedOld)
       throw new AgentDocxError(
         "WORKING_COPY_CONFLICT",
         `Owned file changed: ${path}`,
@@ -2259,9 +2461,13 @@ export const replaceOwnedFile = async (
             "PROJECT_INVALID",
             `Cannot roll back changed owned file: ${path}`,
           );
-        currentId = objectId(await readFile(path));
+        currentId = objectId(await readProjectFile(path, "Owned file"));
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        const code =
+          error instanceof AgentDocxError
+            ? error.code
+            : (error as NodeJS.ErrnoException).code;
+        if (code === "INPUT_NOT_FOUND" || code === "ENOENT") return;
         throw error;
       }
       if (currentId !== nextId)
@@ -2281,9 +2487,13 @@ export const replaceOwnedFile = async (
           "PROJECT_INVALID",
           `Cannot roll back changed owned file: ${path}`,
         );
-      currentId = objectId(await readFile(path));
+      currentId = objectId(await readProjectFile(path, "Owned file"));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const code =
+        error instanceof AgentDocxError
+          ? error.code
+          : (error as NodeJS.ErrnoException).code;
+      if (code !== "INPUT_NOT_FOUND" && code !== "ENOENT") throw error;
     }
     if (currentId !== null && currentId !== nextId)
       throw new AgentDocxError(
@@ -2294,7 +2504,7 @@ export const replaceOwnedFile = async (
     await rename(backup, path);
     backupCreated = false;
     await assertRegularFile(path, "Owned rollback");
-    if (objectId(await readFile(path)) !== expectedOld)
+    if (objectId(await readProjectFile(path, "Owned rollback")) !== expectedOld)
       throw new AgentDocxError(
         "PROJECT_INVALID",
         `Owned rollback mismatch: ${path}`,
@@ -2308,7 +2518,9 @@ export const replaceOwnedFile = async (
       await rename(path, backup);
       backupCreated = true;
       await assertRegularFile(backup, "Owned backup");
-      if (objectId(await readFile(backup)) !== expectedOld)
+      if (
+        objectId(await readProjectFile(backup, "Owned backup")) !== expectedOld
+      )
         throw new AgentDocxError(
           "PROJECT_INVALID",
           `Owned backup mismatch: ${path}`,
@@ -2317,7 +2529,7 @@ export const replaceOwnedFile = async (
       replacementLinked = true;
     }
     await assertRegularFile(path, "Owned replacement");
-    if (objectId(await readFile(path)) !== nextId)
+    if (objectId(await readProjectFile(path, "Owned replacement")) !== nextId)
       throw new AgentDocxError(
         "PROJECT_INVALID",
         `Owned replacement mismatch: ${path}`,
@@ -2340,7 +2552,7 @@ export const removeOwnedFile = async (
   expected: RevisionId,
 ): Promise<void> => {
   await assertRegularFile(path, "Owned file");
-  if (objectId(await readFile(path)) !== expected)
+  if (objectId(await readProjectFile(path, "Owned file")) !== expected)
     throw new AgentDocxError(
       "WORKING_COPY_CONFLICT",
       `Owned file changed: ${path}`,
@@ -2349,7 +2561,7 @@ export const removeOwnedFile = async (
   await rename(path, backup);
   try {
     await assertRegularFile(backup, "Owned backup");
-    if (objectId(await readFile(backup)) !== expected)
+    if (objectId(await readProjectFile(backup, "Owned backup")) !== expected)
       throw new AgentDocxError(
         "PROJECT_INVALID",
         `Owned backup mismatch: ${path}`,
@@ -2369,7 +2581,7 @@ export const removeOwnedFile = async (
     try {
       await rename(backup, path);
       await assertRegularFile(path, "Owned rollback");
-      if (objectId(await readFile(path)) !== expected)
+      if (objectId(await readProjectFile(path, "Owned rollback")) !== expected)
         throw new AgentDocxError(
           "PROJECT_INVALID",
           `Owned rollback mismatch: ${path}`,
