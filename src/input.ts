@@ -43,7 +43,9 @@ export const readInputFile = async (
       if (bytesRead === 0) break;
       total += bytesRead;
       if (total > maxBytes) throw inputTooLarge(label, maxBytes);
-      chunks.push(bytesRead === CHUNK_BYTES ? buffer.slice() : buffer.slice(0, bytesRead));
+      chunks.push(
+        bytesRead === CHUNK_BYTES ? buffer.slice() : buffer.slice(0, bytesRead),
+      );
     }
     if (chunks.length === 1) return chunks[0]!;
     const output = new Uint8Array(total);
