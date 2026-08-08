@@ -12,6 +12,7 @@ import {
   relationshipPartFor,
   type Relationship,
 } from "./opc.js";
+import { codePointCompare } from "./helpers.js";
 import { builtInProfiles } from "../profiles.js";
 import { AgentDocxError } from "../types.js";
 import type { Diagnostic } from "../types.js";
@@ -55,8 +56,7 @@ const readParts = async (bytes: Uint8Array): Promise<LoadedParts> => {
 const relationships = (
   xml: string | undefined,
   sourcePart: string,
-): readonly Relationship[] =>
-  xml ? parseRelationships(xml, sourcePart) : [];
+): readonly Relationship[] => (xml ? parseRelationships(xml, sourcePart) : []);
 
 const sourcePartForRels = (partPath: string): string => {
   if (partPath === "_rels/.rels") return "";
@@ -210,7 +210,8 @@ const parseStyles = (
       }
       if (!current) return;
       if (tag.local === "name") current.name = attr(tag, "val") ?? null;
-      else if (tag.local === "basedOn") current.basedOn = attr(tag, "val") ?? null;
+      else if (tag.local === "basedOn")
+        current.basedOn = attr(tag, "val") ?? null;
       else if (tag.local === "rFonts") {
         const direct =
           attr(tag, "ascii") ??
@@ -312,11 +313,13 @@ const inspectStyles = (
     fallbackFamily: string,
     fallbackId: string,
   ): DocxTemplateInspection["styles"]["body"] => {
-    if (!id) return fallbackStyle(fallbackStyleValue, fallbackFamily, fallbackId);
+    if (!id)
+      return fallbackStyle(fallbackStyleValue, fallbackFamily, fallbackId);
     const cached = resolved.get(id);
     if (cached) return cached;
     const style = styles.get(id);
-    if (!style) return fallbackStyle(fallbackStyleValue, fallbackFamily, fallbackId);
+    if (!style)
+      return fallbackStyle(fallbackStyleValue, fallbackFamily, fallbackId);
     if (resolving.has(id)) {
       if (!cycles.has(id)) {
         cycles.add(id);
@@ -410,9 +413,17 @@ const inspectStyles = (
       "FootnoteText",
     ),
     footnoteReference: (() => {
-      const id = styleIdFor(styles, ["FootnoteReference", "Footnote Reference"]);
+      const id = styleIdFor(styles, [
+        "FootnoteReference",
+        "Footnote Reference",
+      ]);
       return id
-        ? resolve(id, fallback.footnote, body.requestedFontFamily, "FootnoteReference")
+        ? resolve(
+            id,
+            fallback.footnote,
+            body.requestedFontFamily,
+            "FootnoteReference",
+          )
         : null;
     })(),
   };
@@ -422,7 +433,8 @@ const normalizedInstruction = (value: string): string =>
   value.replace(/\s+/g, " ").trim();
 
 const fieldKind = (instruction: string): string =>
-  normalizedInstruction(instruction).split(/\s+/, 1)[0]?.toUpperCase() ?? "UNKNOWN";
+  normalizedInstruction(instruction).split(/\s+/, 1)[0]?.toUpperCase() ??
+  "UNKNOWN";
 
 const fieldsForPart = (
   xml: string,
@@ -434,7 +446,11 @@ const fieldsForPart = (
   const add = (instruction: string | undefined): void => {
     const normalized = normalizedInstruction(instruction ?? "");
     if (!normalized) return;
-    fields.push({ partPath, instruction: normalized, kind: fieldKind(normalized) });
+    fields.push({
+      partPath,
+      instruction: normalized,
+      kind: fieldKind(normalized),
+    });
   };
   parse(
     xml,
@@ -486,9 +502,12 @@ const captionsForPart = (
   xml: string,
 ): readonly DocxTemplateInspection["captions"][number][] => {
   const captions: DocxTemplateInspection["captions"][number][] = [];
-  let paragraph:
-    | { index: number; styleId: string | null; text: string; instruction: string }
-    | null = null;
+  let paragraph: {
+    index: number;
+    styleId: string | null;
+    text: string;
+    instruction: string;
+  } | null = null;
   let paragraphIndex = 0;
   let inText = false;
   let inInstruction = false;
@@ -496,7 +515,12 @@ const captionsForPart = (
     xml,
     (tag) => {
       if (tag.local === "p") {
-        paragraph = { index: paragraphIndex++, styleId: null, text: "", instruction: "" };
+        paragraph = {
+          index: paragraphIndex++,
+          styleId: null,
+          text: "",
+          instruction: "",
+        };
         return;
       }
       if (!paragraph) return;
@@ -544,12 +568,20 @@ const numberingForPart = (
     (tag) => {
       if (tag.local === "abstractNum") {
         const id = attr(tag, "abstractNumId");
-        if (!id) throw new AgentDocxError("DOCX_INVALID", "Numbering abstract ID is missing");
+        if (!id)
+          throw new AgentDocxError(
+            "DOCX_INVALID",
+            "Numbering abstract ID is missing",
+          );
         abstract = { id, levels: 0 };
       } else if (tag.local === "lvl" && abstract) abstract.levels++;
       else if (tag.local === "num") {
         const id = attr(tag, "numId");
-        if (!id) throw new AgentDocxError("DOCX_INVALID", "Numbering instance ID is missing");
+        if (!id)
+          throw new AgentDocxError(
+            "DOCX_INVALID",
+            "Numbering instance ID is missing",
+          );
         instance = { id, abstractNumberId: null };
       } else if (tag.local === "abstractNumId" && instance)
         instance.abstractNumberId = attr(tag, "val") ?? null;
@@ -566,13 +598,18 @@ const numberingForPart = (
   );
   return {
     partPath: "word/numbering.xml",
-    abstractNumbers: abstractNumbers.sort((left, right) => left.id.localeCompare(right.id)),
-    instances: instances.sort((left, right) => left.id.localeCompare(right.id)),
+    abstractNumbers: abstractNumbers.sort((left, right) =>
+      codePointCompare(left.id, right.id),
+    ),
+    instances: instances.sort((left, right) =>
+      codePointCompare(left.id, right.id),
+    ),
   };
 };
 
 const unsupportedPartReason = (name: string): string | null => {
-  if (/vbaProject|macro/i.test(name)) return "Macros are not imported from templates.";
+  if (/vbaProject|macro/i.test(name))
+    return "Macros are not imported from templates.";
   if (/\/(?:embeddings|activeX)\//i.test(name))
     return "Embedded executable content is not imported from templates.";
   if (/oleObject|altChunk/i.test(name))
@@ -650,38 +687,40 @@ export async function inspectDocxTemplate(
     mainRelationships.map((relationship) => [relationship.id, relationship]),
   );
   const sections = sectionDefinitions.map((section, index) => {
-    const headerFooterReferences = section.headerFooterReferences.map((reference) => {
-      const relationship = relationshipById.get(reference.relationshipId);
-      if (!relationship) {
-        warnings.push({
-          code: "DOCX_UNSUPPORTED_FEATURE",
-          severity: "warning",
-          message: `Section ${index} references missing ${reference.kind} relationship ${reference.relationshipId}.`,
-        });
-        return { ...reference, partPath: null };
-      }
-      if (
-        relationship.external ||
-        !new RegExp(`/${reference.kind}$`).test(relationship.type)
-      ) {
-        warnings.push({
-          code: "DOCX_UNSUPPORTED_FEATURE",
-          severity: "warning",
-          message: `Section ${index} ${reference.kind} relationship ${reference.relationshipId} is not a supported internal ${reference.kind} part.`,
-        });
-        return { ...reference, partPath: null };
-      }
-      const partPath = resolveOpcTarget(mainPart, relationship.target);
-      if (!parts[partPath]) {
-        warnings.push({
-          code: "DOCX_UNSUPPORTED_FEATURE",
-          severity: "warning",
-          message: `Section ${index} ${reference.kind} part is missing: ${partPath}.`,
-        });
-        return { ...reference, partPath: null };
-      }
-      return { ...reference, partPath };
-    });
+    const headerFooterReferences = section.headerFooterReferences.map(
+      (reference) => {
+        const relationship = relationshipById.get(reference.relationshipId);
+        if (!relationship) {
+          warnings.push({
+            code: "DOCX_UNSUPPORTED_FEATURE",
+            severity: "warning",
+            message: `Section ${index} references missing ${reference.kind} relationship ${reference.relationshipId}.`,
+          });
+          return { ...reference, partPath: null };
+        }
+        if (
+          relationship.external ||
+          !new RegExp(`/${reference.kind}$`).test(relationship.type)
+        ) {
+          warnings.push({
+            code: "DOCX_UNSUPPORTED_FEATURE",
+            severity: "warning",
+            message: `Section ${index} ${reference.kind} relationship ${reference.relationshipId} is not a supported internal ${reference.kind} part.`,
+          });
+          return { ...reference, partPath: null };
+        }
+        const partPath = resolveOpcTarget(mainPart, relationship.target);
+        if (!parts[partPath]) {
+          warnings.push({
+            code: "DOCX_UNSUPPORTED_FEATURE",
+            severity: "warning",
+            message: `Section ${index} ${reference.kind} part is missing: ${partPath}.`,
+          });
+          return { ...reference, partPath: null };
+        }
+        return { ...reference, partPath };
+      },
+    );
     return {
       index,
       page: section.page,
@@ -699,9 +738,10 @@ export async function inspectDocxTemplate(
         sectionIndex: section.index,
         ...reference,
         text: xml ? textForPart(xml) : "",
-        fields: xml && reference.partPath
-          ? fieldsForPart(xml, reference.partPath)
-          : [],
+        fields:
+          xml && reference.partPath
+            ? fieldsForPart(xml, reference.partPath)
+            : [],
       };
     }),
   );
@@ -754,7 +794,7 @@ export async function inspectDocxTemplate(
             reason: `External ${relationship.type} relationship is not copied from templates.`,
           })),
       ),
-  ].sort((left, right) => left.partPath.localeCompare(right.partPath));
+  ].sort((left, right) => codePointCompare(left.partPath, right.partPath));
   if (macroEnabled || unsupportedParts.length > 0)
     warnings.push({
       code: "DOCX_IGNORED_UNSAFE_PART",
@@ -803,7 +843,7 @@ export async function inspectDocxTemplate(
     fonts: {
       theme,
       families: [...families.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => codePointCompare(left, right))
         .map(([family, sourcePart]) => ({ family, sourcePart })),
     },
     unsupportedParts,

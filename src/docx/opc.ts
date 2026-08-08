@@ -1,10 +1,7 @@
 import type { SaxesTagNS } from "saxes";
 import { AgentDocxError } from "../types.js";
-import {
-  docxXmlAttribute,
-  parseDocxXml,
-  resolveOpcTarget,
-} from "./package.js";
+import { docxXmlAttribute, parseDocxXml, resolveOpcTarget } from "./package.js";
+import { isSafeRelativePath } from "../path-util.js";
 
 export type Relationship = {
   id: string;
@@ -79,8 +76,6 @@ export const parseRelationships = (
   });
   return found;
 };
-
-/** Returns the `.rels` part path for a source part ("" for the package root). */
 export const relationshipPartFor = (sourcePart: string): string => {
   if (sourcePart === "") return "_rels/.rels";
   const components = sourcePart.split("/");
@@ -90,18 +85,25 @@ export const relationshipPartFor = (sourcePart: string): string => {
   return [...components, "_rels", `${name}.rels`].join("/");
 };
 
+export const sourcePartForRelationshipPart = (part: string): string => {
+  if (part === "_rels/.rels") return "";
+  const components = part.split("/");
+  const relationshipName = components.pop();
+  const relationshipDirectory = components.pop();
+  const name =
+    relationshipName?.endsWith(".rels") === true
+      ? relationshipName.slice(0, -".rels".length)
+      : "";
+  if (relationshipDirectory !== "_rels" || name.length === 0)
+    throw new AgentDocxError(
+      "DOCX_INVALID",
+      `Malformed OPC relationship part: ${part}`,
+    );
+  return [...components, name].join("/");
+};
+
 /** The strict OPC part-path policy: no empty, ".", or ".." components. */
 export const assertSafePartPath = (name: string): void => {
-  if (
-    name.length === 0 ||
-    name.includes("\\") ||
-    name.startsWith("/") ||
-    name
-      .split("/")
-      .some(
-        (component) =>
-          component === "" || component === "." || component === "..",
-      )
-  )
+  if (!isSafeRelativePath(name))
     throw new AgentDocxError("DOCX_UNSAFE", `Unsafe package path: ${name}`);
 };

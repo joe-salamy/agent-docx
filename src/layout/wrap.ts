@@ -7,14 +7,8 @@ import type {
 } from "../markdown.js";
 import type { LoadedFonts } from "../resolve.js";
 import type { Diagnostic, SourcePosition } from "../types.js";
-import type {
-  LayoutProfile,
-  TextStyle,
-} from "./profile.js";
-import type {
-  ParagraphDiagnostic,
-  SectionDiagnostic,
-} from "../measurement.js";
+import type { LayoutProfile, TextStyle } from "./profile.js";
+import type { ParagraphDiagnostic, SectionDiagnostic } from "../measurement.js";
 
 export type WrappedLine = {
   used: number;
@@ -482,8 +476,15 @@ export function applyWidowOrphan(
     return page;
   }
 
-  const { record, page, lineIndex, beforeLine, profile, restore, commitRestored } =
-    args;
+  const {
+    record,
+    page,
+    lineIndex,
+    beforeLine,
+    profile,
+    restore,
+    commitRestored,
+  } = args;
   const remaining = record.lines.length - lineIndex;
   const placedOnPage = page.bodyLines.filter(
     (line) => line.block === record.block,

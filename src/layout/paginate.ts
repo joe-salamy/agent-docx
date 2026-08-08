@@ -8,12 +8,7 @@ import type {
 } from "../markdown.js";
 import type { LoadedFonts } from "../resolve.js";
 import { flowStyleFor } from "./style.js";
-import {
-  candidateWidth,
-  role,
-  round,
-  tableColumnWidths,
-} from "./table.js";
+import { candidateWidth, role, round, tableColumnWidths } from "./table.js";
 import {
   applyWidowOrphan,
   buildDiagnostics,
@@ -30,10 +25,7 @@ import {
 } from "./wrap.js";
 import type { Diagnostic, SourcePosition } from "../types.js";
 import type { LayoutProfile, TextStyle } from "./profile.js";
-import type {
-  ParagraphDiagnostic,
-  SectionDiagnostic,
-} from "../measurement.js";
+import type { ParagraphDiagnostic, SectionDiagnostic } from "../measurement.js";
 
 export type PaginationOutput = {
   pageCount: number;
@@ -52,7 +44,6 @@ export type PaginationOutput = {
   warnings: Diagnostic[];
   sections?: SectionDiagnostic[];
 };
-
 
 function naturalHeight(
   fonts: LoadedFonts,
@@ -97,6 +88,7 @@ function warnMissingGlyphs(
   for (const run of block.runs) {
     const font = fonts[role(run, style)].font;
     for (const character of run.text) {
+      if (character === "\t") continue;
       const codePoint = character.codePointAt(0)!;
       if (!font.hasGlyphForCodePoint(codePoint)) {
         warnings.push({
@@ -324,7 +316,7 @@ function wrapTable(
         normalizedText: cell.normalizedText,
         sourceSegments: cell.sourceSegments,
         position: cell.position,
-        footnoteRefs: [],
+        footnoteRefs: cell.footnoteRefs,
       };
       const available =
         gridWidths[columnIndex]! -
@@ -364,6 +356,13 @@ function wrapTable(
         0,
         ...cells.map((cellLines) => cellLines[bandIndex]?.height ?? 0),
       );
+      const bandFootnoteRefs = [
+        ...new Set(
+          cells.flatMap(
+            (cellLines) => cellLines[bandIndex]?.footnoteRefs ?? [],
+          ),
+        ),
+      ];
       rowLines.push({
         used: usableWidth,
         available: usableWidth,
@@ -378,7 +377,7 @@ function wrapTable(
         contentEnd: 0,
         startCause: "start",
         overflowed: false,
-        footnoteRefs: [],
+        footnoteRefs: bandFootnoteRefs,
         rowStart: bandIndex === 0,
         rowEnd: bandIndex === bandCount - 1,
       });

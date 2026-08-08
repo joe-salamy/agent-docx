@@ -1,6 +1,6 @@
 import canonicalize from "canonicalize";
-import { lowerLegalDocument } from "../legal/lower.js";
 import type {
+  AddressableBlock,
   LegalBlock,
   LegalDocument,
   LegalDocumentSpecification,
@@ -13,15 +13,17 @@ import {
   type ValidationResult,
 } from "../legal/rules.js";
 import { measureNormalizedDocument } from "../renderers/index.js";
+import { loadFonts } from "../resolve.js";
 import { AgentDocxError } from "../types.js";
-import type { MeasurementResult } from "../measurement.js";
-import { sha256Hex } from "./package.js";
+import { serializableMeasurement } from "../measurement.js";
 import {
   generateDocx,
   type GeneratedDocx,
   type GenerateDocxOptions,
 } from "./generate.js";
 import { inspectDocxTemplate } from "./inspect.js";
+import { sha256Hex } from "./package.js";
+import { lowerLegalDocument } from "../legal/lower.js";
 import type {
   ArtifactResult,
   AttachmentManifest,
@@ -32,7 +34,8 @@ import type {
 import type { CompileOptions } from "../project/contracts.js";
 import type { Change, ChangeSet } from "../revisions/types.js";
 import { definedProps } from "../json-contract.js";
-import { visibleTextForBlock } from "../revisions/diff.js";
+import { visibleTextForBlock } from "../legal/visible-text.js";
+import { codePointCompare } from "./helpers.js";
 export type CompileMarkdownOptions = CompileOptions & {
   generation?: Pick<
     GenerateDocxOptions,
@@ -106,13 +109,6 @@ const bodyManifest = (
   });
 };
 
-const serializableMeasurement = (
-  measurement: MeasurementResult,
-): Omit<MeasurementResult, "generatedDocx"> => {
-  const { generatedDocx: _generatedDocx, ...serializable } = measurement;
-  return serializable;
-};
-
 const exhibitSources = (blocks: readonly LegalBlock[]): readonly string[] => {
   const sources = new Set<string>();
   const visit = (items: readonly LegalBlock[]): void => {
@@ -128,7 +124,7 @@ const exhibitSources = (blocks: readonly LegalBlock[]): readonly string[] => {
     }
   };
   visit(blocks);
-  return [...sources].sort((left, right) => left.localeCompare(right));
+  return [...sources].sort((left, right) => codePointCompare(left, right));
 };
 
 const attachmentBundle = (
@@ -164,9 +160,64 @@ const attachmentBundle = (
   };
 };
 
+const blockChildrenForParent = (
+  document: LegalDocument,
+  collection: "body" | "footnotes",
+  parentId: string | null,
+): readonly LegalBlock[] => {
+  const root: readonly AddressableBlock[] =
+    collection === "body" ? document.blocks : document.footnotes;
+  if (parentId === null) return root as readonly LegalBlock[];
+  const visit = (
+    items: readonly AddressableBlock[],
+  ): readonly LegalBlock[] | null => {
+    for (const block of items) {
+      if (block.id === parentId) {
+        if (block.kind === "exhibit" || block.kind === "length-exclusion")
+          return block.blocks;
+        if (block.kind === "list")
+          return block.items.flatMap((item) => item.children);
+        return [];
+      }
+      const nested =
+        block.kind === "exhibit" || block.kind === "length-exclusion"
+          ? block.blocks
+          : block.kind === "list"
+            ? block.items.flatMap((item) => item.children)
+            : [];
+      const found = visit(nested);
+      if (found !== null) return found;
+    }
+    return null;
+  };
+  return visit(root) ?? [];
+};
+
+const deletedSourceAnchor = (
+  document: LegalDocument,
+  change: Extract<Change, { kind: "delete-block" }>,
+): number => {
+  const siblings = blockChildrenForParent(
+    document,
+    change.from.collection,
+    change.from.parentId,
+  );
+  const next = siblings[change.from.index];
+  if (next) return next.position.start.offset;
+  const previous = siblings[siblings.length - 1];
+  return previous?.position.end.offset ?? change.oldSource.start;
+};
+
 const revisionMapText = (
   change: Change,
-): { blockId: string | null; baseText: string; headText: string } => {
+  document: LegalDocument,
+): {
+  blockId: string | null;
+  baseText: string;
+  headText: string;
+  sourceStart?: number;
+  sourceEnd?: number;
+} => {
   switch (change.kind) {
     case "insert-text":
       return {
@@ -197,6 +248,8 @@ const revisionMapText = (
         blockId: change.blockId,
         baseText: visibleTextForBlock(change.oldBlock),
         headText: "",
+        sourceStart: deletedSourceAnchor(document, change),
+        sourceEnd: deletedSourceAnchor(document, change),
       };
     case "replace-block":
       return {
@@ -279,7 +332,7 @@ export const createSemanticManifest = (input: {
   validation: input.validation,
   dependencies: input.dependencies
     ? [...input.dependencies]
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => codePointCompare(left, right))
         .map(([key, dependency]) => ({
           key,
           sha256: dependency.sha256,
@@ -289,9 +342,9 @@ export const createSemanticManifest = (input: {
     : [],
   revisionMap: input.changeSet
     ? [...input.changeSet.changes]
-        .sort((left, right) => left.id.localeCompare(right.id))
+        .sort((left, right) => codePointCompare(left.id, right.id))
         .map((change) => {
-          const text = revisionMapText(change);
+          const text = revisionMapText(change, input.document);
           return {
             changeId: change.id,
             attribution: {
@@ -307,7 +360,7 @@ export const createSemanticManifest = (input: {
     : [],
   commentMap: [...(input.annotations ?? [])]
     .filter((annotation) => annotation.status === "open")
-    .sort((left, right) => left.id.localeCompare(right.id))
+    .sort((left, right) => codePointCompare(left.id, right.id))
     .map((annotation) => ({
       annotationId: annotation.id,
       blockWide: annotation.range === undefined,
@@ -352,6 +405,10 @@ export const compileMarkdown = async (
       ...(template ? { template } : {}),
     },
   );
+  const fonts = await loadFonts(
+    specification.fontSet,
+    measurement.deterministic.profile.requestedFontFamily,
+  );
   const validation = validateLegalDocument(document, {
     ...(generation?.revision ? { revision: generation.revision.id } : {}),
     ...(specification.rulePack !== undefined
@@ -377,9 +434,7 @@ export const compileMarkdown = async (
       ? { dependencies: generation.dependencies }
       : {}),
     ...(generation?.changeSet ? { changeSet: generation.changeSet } : {}),
-    ...(generation?.annotations
-      ? { annotations: generation.annotations }
-      : {}),
+    ...(generation?.annotations ? { annotations: generation.annotations } : {}),
   });
   const generated = await generateDocx(
     document,
@@ -388,7 +443,7 @@ export const compileMarkdown = async (
       ...(specification.assets !== undefined
         ? { assets: specification.assets }
         : {}),
-      ...(document.chrome !== undefined ? { chrome: document.chrome } : {}),
+      fonts,
       pageCount: Math.max(1, measurement.deterministic.pageCount),
       metadata: document.metadata,
       ...(generation ? definedProps(generation) : {}),
@@ -404,7 +459,7 @@ export const compileMarkdown = async (
     rulePack: specification.rulePack ?? null,
     docxSha256: sha256Hex(generated.bytes),
     dependencies: Object.entries(document.assets)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => codePointCompare(left, right))
       .map(([name, asset]) => ({ name, sha256: asset.sha256 })),
     attachmentManifestSha256: attachments?.manifestSha256 ?? null,
   };

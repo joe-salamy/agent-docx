@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { AgentDocxError } from "../types.js";
 import { parseLegalMarkdown } from "../legal/parse.js";
 import {
   blockBookmark,
@@ -11,10 +10,7 @@ import {
 } from "../legal/model.js";
 import { visibleTextForBlock } from "../legal/visible-text.js";
 import { isCodePointBoundary } from "./text.js";
-import type {
-  SemanticManifest,
-  SemanticRevisionMapEntry,
-} from "./manifest.js";
+import type { SemanticManifest, SemanticRevisionMapEntry } from "./manifest.js";
 import type {
   Paragraph,
   TrackedMaterial,
@@ -22,14 +18,7 @@ import type {
 } from "./tracked.js";
 import type { ImportedAsset } from "./attachments.js";
 import { docxXmlAttribute, parseDocxXml } from "./package.js";
-const unsupported = (message: string): never => {
-  throw new AgentDocxError("DOCX_IMPORT_UNSUPPORTED", message);
-};
-const asObject = (value: unknown, label: string): Record<string, unknown> => {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    unsupported(`${label} must be an object`);
-  return value as Record<string, unknown>;
-};
+import { asObject, unsupported } from "./helpers.js";
 
 export type NativeComment = {
   id: string;
@@ -70,17 +59,37 @@ export const reconstructTrackedMaterial = (
     if (!bookmark)
       unsupported("Tracked revision has no agent-docx block bookmark");
     const block = byBookmark.get(blockBookmark(bookmark as BlockId));
-    if (!block)
-      unsupported(
-        "Tracked revision bookmark is not declared by the semantic source",
+    if (!block) {
+      const declaredDeletion = semantic.revisionMap.some(
+        (entry) =>
+          extendedRevisionEntry(entry) &&
+          entry.blockId === (bookmark as BlockId) &&
+          entry.headText === "",
       );
+      if (!declaredDeletion)
+        unsupported(
+          "Tracked revision bookmark is not declared by the semantic source",
+        );
+      continue;
+    }
     const resolvedBlock = block as
       | LegalDocument["blocks"][number]
       | LegalDocument["footnotes"][number];
-    if (visibleTextForBlock(resolvedBlock) !== paragraph.headText)
+    if (
+      paragraph.headText !== "" &&
+      visibleTextForBlock(resolvedBlock) !== paragraph.headText
+    )
       unsupported("Tracked revision head text does not match semantic source");
     if (paragraph.baseText === paragraph.headText)
       unsupported("Tracked revision has no visible base-to-head change");
+    if (paragraph.headText === "") {
+      replacements.push({
+        start: resolvedBlock.position.start.offset,
+        end: resolvedBlock.position.end.offset,
+        source: paragraph.baseText,
+      });
+      continue;
+    }
     const occurrences =
       resolvedBlock.sourceText.split(paragraph.headText).length - 1;
     if (occurrences !== 1)
@@ -97,7 +106,11 @@ export const reconstructTrackedMaterial = (
     });
   }
   if (replacements.length === 0) {
-    if (semantic.revisionMap.length > 0)
+    if (
+      semantic.revisionMap.some(
+        (entry) => !extendedRevisionEntry(entry) || entry.headText !== "",
+      )
+    )
       unsupported(
         "Redline semantic manifest declares unrepresented tracked revisions",
       );
@@ -359,6 +372,25 @@ export const semanticBlocks = (
   for (const footnote of document.footnotes) blocks.set(footnote.id, footnote);
   return blocks;
 };
+export const semanticDeletedSourceRanges = (
+  semantic: SemanticManifest,
+): ReadonlyMap<BlockId, { start: number; end: number }> => {
+  const ranges = new Map<BlockId, { start: number; end: number }>();
+  for (const entry of semantic.revisionMap) {
+    if (
+      extendedRevisionEntry(entry) &&
+      entry.blockId !== null &&
+      entry.headText === "" &&
+      entry.sourceStart !== undefined &&
+      entry.sourceEnd !== undefined
+    )
+      ranges.set(entry.blockId, {
+        start: entry.sourceStart,
+        end: entry.sourceEnd,
+      });
+  }
+  return ranges;
+};
 
 const replaceVisibleBlockText = (
   block: LegalDocument["blocks"][number] | LegalDocument["footnotes"][number],
@@ -366,8 +398,14 @@ const replaceVisibleBlockText = (
 ): { start: number; end: number; replacement: string } | null => {
   const current = visibleTextForBlock(block);
   if (current === visibleText) return null;
+  if (current.length === 0)
+    return {
+      start: block.position.start.offset,
+      end: block.position.end.offset,
+      replacement: visibleText,
+    };
   const occurrences = block.sourceText.split(current).length - 1;
-  if (current.length === 0 || occurrences !== 1)
+  if (occurrences !== 1)
     unsupported(
       "Resolved redline paragraph cannot be mapped unambiguously to its Markdown source range",
     );
@@ -385,12 +423,31 @@ export const sourceWithVisibleBlocks = (
     LegalDocument["blocks"][number] | LegalDocument["footnotes"][number]
   >,
   visibleByBlock: ReadonlyMap<BlockId, string>,
+  deletedRanges: ReadonlyMap<
+    BlockId,
+    { start: number; end: number }
+  > = new Map(),
 ): string => {
   const replacements = [...visibleByBlock.entries()].flatMap(
     ([blockId, text]) => {
       const block = blocks.get(blockId);
-      if (!block)
-        unsupported("Resolved redline paragraph references an unknown block");
+      if (!block) {
+        const range = deletedRanges.get(blockId);
+        if (!range) return [];
+        if (
+          range.start < 0 ||
+          range.start > range.end ||
+          range.end > source.length
+        )
+          unsupported("Resolved deleted redline source range is invalid");
+        return [
+          {
+            start: range.start,
+            end: range.end,
+            replacement: text,
+          },
+        ];
+      }
       const replacement = replaceVisibleBlockText(
         block as
           | LegalDocument["blocks"][number]
@@ -422,6 +479,14 @@ const applyRevisionGroup = (
   })[],
   mask: number,
 ): string | null => {
+  const emptyEntries = entries.filter(
+    (entry, index) =>
+      (mask & (1 << index)) !== 0 && entry.headText.length === 0,
+  );
+  if (emptyEntries.length > 0) {
+    if (entries.length !== 1 || headText.length !== 0) return null;
+    return emptyEntries[0]!.baseText;
+  }
   const replacements: Array<{
     start: number;
     end: number;
@@ -429,7 +494,6 @@ const applyRevisionGroup = (
   }> = [];
   for (const [index, entry] of entries.entries()) {
     if ((mask & (1 << index)) === 0) continue;
-    if (entry.headText.length === 0) return null;
     const positions: number[] = [];
     let cursor = 0;
     while (true) {
@@ -525,7 +589,8 @@ export const resolveRevisionGroups = (
         "Resolved redline change cannot be attributed to an agent-docx block",
       );
     const blockId = entry.blockId as BlockId;
-    if (!blocks.has(blockId) || !byBookmark.has(blockId))
+    const deletedBaseBlock = !blocks.has(blockId) && entry.headText === "";
+    if (!byBookmark.has(blockId) || (!blocks.has(blockId) && !deletedBaseBlock))
       unsupported("Resolved redline change references an unknown block");
     const entries = groups.get(blockId) ?? [];
     entries.push({
@@ -541,14 +606,14 @@ export const resolveRevisionGroups = (
     visibleByBlock.set(blockId, paragraph.visibleText);
   for (const [blockId, paragraph] of byBookmark) {
     const block = blocks.get(blockId);
-    if (!block)
-      unsupported("Resolved redline paragraph references an unknown block");
-    const expectedHead = visibleTextForBlock(
-      block as
-        | LegalDocument["blocks"][number]
-        | LegalDocument["footnotes"][number],
-    );
     const entries = groups.get(blockId) ?? [];
+    const expectedHead = block
+      ? visibleTextForBlock(
+          block as
+            | LegalDocument["blocks"][number]
+            | LegalDocument["footnotes"][number],
+        )
+      : "";
     if (entries.length === 0 && paragraph.visibleText !== expectedHead)
       unsupported(
         "Resolved redline contains a foreign edit outside declared changes",
@@ -594,9 +659,26 @@ export const resolveRevisionGroups = (
         (mask & (1 << index)) === 0 ? "accept" : "reject",
       );
   }
+  for (const [blockId, entries] of groups) {
+    if (byBookmark.has(blockId)) continue;
+    if (
+      entries.length === 1 &&
+      entries[0]!.headText === "" &&
+      entries[0]!.baseText !== ""
+    )
+      decisionsSet.set(entries[0]!.changeId, "accept");
+  }
   const baseByBlock = new Map<BlockId, string>();
   for (const [blockId, entries] of groups) {
-    const block = blocks.get(blockId)!;
+    const block = blocks.get(blockId);
+    if (!block) {
+      const candidate =
+        allExtended && entries.length <= 20
+          ? applyRevisionGroup("", entries, (1 << entries.length) - 1)
+          : null;
+      if (candidate !== null) baseByBlock.set(blockId, candidate);
+      continue;
+    }
     const head = visibleTextForBlock(
       block as
         | LegalDocument["blocks"][number]
@@ -676,8 +758,10 @@ export const cleanAnnotations = (
         ...(blockWide
           ? {}
           : {
-              start: safeCandidate.anchor.start,
-              end: safeCandidate.anchor.end,
+              range: {
+                start: safeCandidate.anchor.start,
+                end: safeCandidate.anchor.end,
+              },
             }),
         author: native.author === "" ? null : { name: native.author },
         createdAt: native.date,

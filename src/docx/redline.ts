@@ -35,6 +35,8 @@ import {
   numbering,
   paragraphOptions,
 } from "./generate.js";
+import { codePointCompare } from "./helpers.js";
+import { sanitizeXmlText } from "./xml-text.js";
 
 export type GeneratedRedlineDocx = {
   bytes: Uint8Array;
@@ -105,7 +107,10 @@ const flowView = (block: TextBlock): TextFlowBlock => ({
   footnoteRefs: [],
   ...(block.kind === "heading" ? { level: block.level } : {}),
   ...(block.kind === "numbered-paragraph"
-    ? { legalKind: "numbered-paragraph" as const, numberedLevel: block.level - 1 }
+    ? {
+        legalKind: "numbered-paragraph" as const,
+        numberedLevel: block.level - 1,
+      }
     : {}),
 });
 
@@ -142,7 +147,7 @@ const textRun = (
   profile: LayoutProfile,
 ): TextRun =>
   new TextRun({
-    text,
+    text: sanitizeXmlText(text),
     font: profile.requestedFontFamily,
     size: style.fontSizeTwips / 10,
     bold: style.bold,
@@ -158,7 +163,7 @@ const insertedRun = (
 ): InsertedTextRun =>
   new InsertedTextRun({
     ...revision(change, id),
-    text,
+    text: sanitizeXmlText(text),
     font: profile.requestedFontFamily,
     size: style.fontSizeTwips / 10,
     bold: style.bold,
@@ -174,7 +179,7 @@ const deletedRun = (
 ): DeletedTextRun =>
   new DeletedTextRun({
     ...revision(change, id),
-    text,
+    text: sanitizeXmlText(text),
     font: profile.requestedFontFamily,
     size: style.fontSizeTwips / 10,
     bold: style.bold,
@@ -327,7 +332,7 @@ const redlineTextChildren = (
     (left, right) =>
       left.oldStart - right.oldStart ||
       left.newStart - right.newStart ||
-      left.change.id.localeCompare(right.change.id),
+      codePointCompare(left.change.id, right.change.id),
   );
   const children: ParagraphChild[] = [];
   let oldCursor = 0;
@@ -396,7 +401,7 @@ const commentsFor = (
       (annotation) =>
         annotation.status === "open" && blockIds.has(annotation.blockId),
     )
-    .sort((left, right) => left.id.localeCompare(right.id))
+    .sort((left, right) => codePointCompare(left.id, right.id))
     .map((annotation, id) => ({ id, annotation }));
 };
 
@@ -531,6 +536,11 @@ export const generateRedlineDocx = async (
     commentsByBlock.set(comment.annotation.blockId, entries);
   }
   let revisionId = 1;
+  const emittedBlocks: Array<{
+    bookmark: string;
+    index: number;
+    deleted?: boolean;
+  }> = [];
   const bodyParagraphs: Array<GeneratedRedlineDocx["bodyParagraphs"][number]> =
     [];
   const children: Paragraph[] = [];
@@ -542,6 +552,11 @@ export const generateRedlineDocx = async (
           entry.kind === "delete-block",
       );
     if (!change) return;
+    emittedBlocks.push({
+      bookmark: blockBookmark(block.id),
+      index: emittedBlocks.length,
+      deleted: true,
+    });
     const style = styleFor(block, profile);
     children.push(
       new Paragraph({
@@ -607,7 +622,13 @@ export const generateRedlineDocx = async (
           `Missing base block for container shell replacement: ${block.id}`,
         );
       childrenForBlock = [
-        deletedRun(visibleTextForBlock(previous), style, profile, change, revisionId++),
+        deletedRun(
+          visibleTextForBlock(previous),
+          style,
+          profile,
+          change,
+          revisionId++,
+        ),
         insertedRun(currentText, style, profile, change, revisionId++),
       ];
     } else if (textChanges.length > 0 && baseById.get(block.id)) {
@@ -629,6 +650,10 @@ export const generateRedlineDocx = async (
         insertedRun(currentText, style, profile, textChanges[0]!, revisionId++),
       ];
     } else childrenForBlock = [textRun(currentText, style, profile)];
+    emittedBlocks.push({
+      bookmark: blockBookmark(block.id),
+      index: emittedBlocks.length,
+    });
     bodyParagraphs.push({
       id: blockBookmark(block.id),
       index: bodyParagraphs.length,
@@ -698,7 +723,9 @@ export const generateRedlineDocx = async (
       ...(date === undefined ? {} : { date }),
       resolved: false,
       children: [
-        new Paragraph({ children: [new TextRun(annotation.message)] }),
+        new Paragraph({
+          children: [new TextRun(sanitizeXmlText(annotation.message))],
+        }),
       ],
     };
   });
@@ -736,10 +763,7 @@ export const generateRedlineDocx = async (
         packed,
         {
           ...options.semanticManifest,
-          emittedBlocks: bodyParagraphs.map(({ id, index }) => ({
-            bookmark: id,
-            index,
-          })),
+          emittedBlocks,
         },
         options.createdAt,
       )

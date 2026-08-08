@@ -1,10 +1,6 @@
 import type { Font } from "fontkit";
 import LineBreaker from "linebreak";
-import type {
-  InlineRun,
-  TableFlowBlock,
-  TextFlowBlock,
-} from "../markdown.js";
+import type { InlineRun, TableFlowBlock, TextFlowBlock } from "../markdown.js";
 import type { LoadedFonts } from "../resolve.js";
 import { AgentDocxError } from "../types.js";
 import type { LayoutProfile, TextStyle } from "./profile.js";
@@ -24,13 +20,40 @@ export const role = (run: InlineRun, style: TextStyle) =>
     "regular" | "bold" | "italic" | "boldItalic"
   >;
 
-function width(font: Font, text: string, size: number) {
-  const layout = font.layout(text);
-  return round(
-    (layout.positions.reduce((sum, position) => sum + position.xAdvance, 0) *
-      size) /
-      font.unitsPerEm,
-  );
+const TAB_STOP_TWIPS = 720;
+
+function width(font: Font, text: string, size: number, start = 0) {
+  if (!text.includes("\t"))
+    return round(
+      (font
+        .layout(text)
+        .positions.reduce((sum, position) => sum + position.xAdvance, 0) *
+        size) /
+        font.unitsPerEm,
+    );
+  let total = 0;
+  let segment = "";
+  const appendSegment = () => {
+    if (segment.length === 0) return;
+    total +=
+      (font
+        .layout(segment)
+        .positions.reduce((sum, position) => sum + position.xAdvance, 0) *
+        size) /
+      font.unitsPerEm;
+    segment = "";
+  };
+  for (const character of text) {
+    if (character !== "\t") {
+      segment += character;
+      continue;
+    }
+    appendSegment();
+    const remainder = (start + total) % TAB_STOP_TWIPS;
+    total += remainder === 0 ? TAB_STOP_TWIPS : TAB_STOP_TWIPS - remainder;
+  }
+  appendSegment();
+  return round(total);
 }
 
 export function candidateWidth(
@@ -51,6 +74,7 @@ export function candidateWidth(
         fonts[role(run, style)].font,
         run.text.slice(from - cursor, to - cursor),
         style.fontSizeTwips,
+        total,
       );
     }
     cursor = next;

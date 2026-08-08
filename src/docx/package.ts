@@ -5,6 +5,7 @@ import { SaxesParser, type SaxesTagNS } from "saxes";
 import { createHash } from "node:crypto";
 import { AgentDocxError } from "../types.js";
 import { assertSafePartPath } from "./opc.js";
+import { codePointCompare } from "./helpers.js";
 
 export const DOCX_LIMITS = Object.freeze({
   maxCompressedInput: 25 * 1024 * 1024,
@@ -37,7 +38,29 @@ const zipOpen = (bytes: Uint8Array): Promise<ZipFile> => {
 };
 
 const isXmlPart = (name: string): boolean =>
-  name.endsWith(".xml") || name.endsWith(".rels") || name === "[Content_Types].xml";
+  name.endsWith(".xml") ||
+  name.endsWith(".rels") ||
+  name === "[Content_Types].xml";
+
+const crc32Table = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < table.length; index++) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit++)
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+const crc32Update = (value: number, bytes: Uint8Array): number => {
+  for (const byte of bytes)
+    value = crc32Table[(value ^ byte) & 0xff]! ^ (value >>> 8);
+  return value >>> 0;
+};
+
+const crc32 = (bytes: Uint8Array): number =>
+  (crc32Update(0xffffffff, bytes) ^ 0xffffffff) >>> 0;
 
 const streamEntry = (
   zip: ZipFile,
@@ -52,6 +75,7 @@ const streamEntry = (
     }
     const chunks: Buffer[] = [];
     let size = 0;
+    let checksum = 0xffffffff;
     stream.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > maximum)
@@ -61,10 +85,25 @@ const streamEntry = (
             `Consumed package part exceeds ${maximum} bytes`,
           ),
         );
-      else chunks.push(chunk);
+      else {
+        checksum = crc32Update(checksum, chunk);
+        chunks.push(chunk);
+      }
     });
     stream.on("error", reject);
-    stream.on("end", () => resolve(Buffer.concat(chunks)));
+    stream.on("end", () => {
+      const actual = (checksum ^ 0xffffffff) >>> 0;
+      if (actual !== entry.crc32) {
+        reject(
+          new AgentDocxError(
+            "DOCX_INVALID",
+            `ZIP CRC-32 mismatch for package part: ${entry.fileName}`,
+          ),
+        );
+        return;
+      }
+      resolve(Buffer.concat(chunks));
+    });
   });
   return promise;
 };
@@ -140,13 +179,16 @@ export const readDocxParts = async (
                 `Consumed XML exceeds ${DOCX_LIMITS.maxXmlTotal / (1024 * 1024)} MiB`,
               );
           }
+          // Excluded entries are intentionally not consumed or CRC-verified.
           if (include(name))
             parts.set(
               name,
               await streamEntry(
                 zip,
                 entry,
-                isXmlPart(name) ? DOCX_LIMITS.maxXmlPart : DOCX_LIMITS.maxUncompressedTotal,
+                isXmlPart(name)
+                  ? DOCX_LIMITS.maxXmlPart
+                  : DOCX_LIMITS.maxUncompressedTotal,
               ),
             );
           zip.readEntry();
@@ -190,7 +232,9 @@ export const decodeDocxXml = (bytes: Uint8Array): string => {
     return new TextDecoder("utf-16le", { fatal: true }).decode(swapped);
   }
   try {
-    return new TextDecoder(encoding, { fatal: true }).decode(bytes.subarray(offset));
+    return new TextDecoder(encoding, { fatal: true }).decode(
+      bytes.subarray(offset),
+    );
   } catch {
     throw new AgentDocxError("DOCX_INVALID", "XML is not valid UTF-8/UTF-16");
   }
@@ -219,7 +263,10 @@ export const parseDocxXml = (
       elements > DOCX_LIMITS.maxElements ||
       Object.keys(tag.attributes).length > DOCX_LIMITS.maxAttributes
     )
-      throw new AgentDocxError("DOCX_XML_LIMIT", "XML structural limit exceeded");
+      throw new AgentDocxError(
+        "DOCX_XML_LIMIT",
+        "XML structural limit exceeded",
+      );
     onOpen(tag);
   });
   parser.on("closetag", (tag) => {
@@ -244,10 +291,17 @@ export const parseDocxXml = (
   }
 };
 
-export const docxXmlAttribute = (tag: SaxesTagNS, name: string): string | undefined =>
-  Object.values(tag.attributes).find((attribute) => attribute.local === name)?.value;
+export const docxXmlAttribute = (
+  tag: SaxesTagNS,
+  name: string,
+): string | undefined =>
+  Object.values(tag.attributes).find((attribute) => attribute.local === name)
+    ?.value;
 
-export const resolveOpcTarget = (sourcePart: string, target: string): string => {
+export const resolveOpcTarget = (
+  sourcePart: string,
+  target: string,
+): string => {
   if (target.startsWith("/") || target.includes("\\"))
     throw new AgentDocxError("DOCX_UNSAFE", "Unsafe relationship target");
   const source = sourcePart.split("/").slice(0, -1);
@@ -257,31 +311,16 @@ export const resolveOpcTarget = (sourcePart: string, target: string): string => 
     if (component === "" || component === ".") continue;
     if (component === "..") {
       if (resolved.length === 0)
-        throw new AgentDocxError("DOCX_UNSAFE", "Relationship escapes package root");
+        throw new AgentDocxError(
+          "DOCX_UNSAFE",
+          "Relationship escapes package root",
+        );
       resolved.pop();
     } else resolved.push(component);
   }
   if (resolved.length === 0)
     throw new AgentDocxError("DOCX_UNSAFE", "Empty relationship target");
   return resolved.join("/");
-};
-
-const crc32Table = (() => {
-  const table = new Uint32Array(256);
-  for (let index = 0; index < table.length; index++) {
-    let value = index;
-    for (let bit = 0; bit < 8; bit++)
-      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
-    table[index] = value >>> 0;
-  }
-  return table;
-})();
-
-const crc32 = (bytes: Uint8Array): number => {
-  let value = 0xffffffff;
-  for (const byte of bytes)
-    value = crc32Table[(value ^ byte) & 0xff]! ^ (value >>> 8);
-  return (value ^ 0xffffffff) >>> 0;
 };
 
 const u16 = (value: number): Buffer => {
@@ -305,7 +344,7 @@ export const repackDocxParts = (
   source: ReadonlyMap<string, Uint8Array>,
 ): Uint8Array => {
   const files = [...source.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => codePointCompare(left, right))
     .map(([name, bytes]) => {
       assertSafePartPath(name);
       const encodedName = Buffer.from(name, "utf8");
@@ -315,7 +354,10 @@ export const repackDocxParts = (
         bytes.byteLength > 0xffffffff ||
         compressed.byteLength > 0xffffffff
       )
-        throw new AgentDocxError("DOCX_TOO_LARGE", "DOCX part cannot be represented in ZIP32");
+        throw new AgentDocxError(
+          "DOCX_TOO_LARGE",
+          "DOCX part cannot be represented in ZIP32",
+        );
       return {
         name: encodedName,
         bytes,
@@ -368,8 +410,15 @@ export const repackDocxParts = (
     offset += local.byteLength;
   }
   const centralBytes = Buffer.concat(central);
-  if (files.length > 0xffff || offset > 0xffffffff || centralBytes.byteLength > 0xffffffff)
-    throw new AgentDocxError("DOCX_TOO_LARGE", "DOCX cannot be represented in ZIP32");
+  if (
+    files.length > 0xffff ||
+    offset > 0xffffffff ||
+    centralBytes.byteLength > 0xffffffff
+  )
+    throw new AgentDocxError(
+      "DOCX_TOO_LARGE",
+      "DOCX cannot be represented in ZIP32",
+    );
   return Buffer.concat([
     ...records,
     centralBytes,

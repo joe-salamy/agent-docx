@@ -11,7 +11,10 @@ export const flowStyleFor = (
   profile: LayoutProfile,
 ): { style: TextStyle; styleId: string } => {
   if (block.legalKind === "caption")
-    return { styleId: "AgentDocxCaption", style: { ...profile.body, bold: true } };
+    return {
+      styleId: "AgentDocxCaption",
+      style: { ...profile.body, bold: true },
+    };
   if (block.legalKind === "signature")
     return { styleId: "AgentDocxSignature", style: profile.body };
   if (block.legalKind === "certificate")

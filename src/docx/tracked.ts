@@ -1,23 +1,10 @@
 import type { SaxesTagNS } from "saxes";
-import { AgentDocxError } from "../types.js";
-import {
-  isBlockId,
-  type BlockId,
-} from "../legal/model.js";
+import { isBlockId, type BlockId } from "../legal/model.js";
 import type { DocxFidelityItem } from "./contracts.js";
-import {
-  docxXmlAttribute,
-  parseDocxXml,
-} from "./package.js";
+import { docxXmlAttribute, parseDocxXml } from "./package.js";
 import { isWordprocessingElement } from "./opc.js";
-const unsupported = (message: string): never => {
-  throw new AgentDocxError("DOCX_IMPORT_UNSUPPORTED", message);
-};
-
- 
-
- 
-
+import { unsupported } from "./helpers.js";
+import { AgentDocxError } from "../types.js";
 
 export type Paragraph = {
   bookmark: BlockId | null;
@@ -35,7 +22,6 @@ export type NativeRevision = {
   date: string | null;
   text: string;
 };
-
 
 export type TrackedCommentAnchor = {
   id: string;
@@ -99,12 +85,7 @@ export const parseTrackedParagraphs = (
     (tag) => {
       if (!isWordprocessingElement(tag)) return;
       if (
-        reportUnsupportedConstruct(
-          tag,
-          "tracked",
-          sourcePart,
-          unsupportedItems,
-        )
+        reportUnsupportedConstruct(tag, "tracked", sourcePart, unsupportedItems)
       )
         return;
       if (tag.local === "p") {
@@ -296,7 +277,9 @@ export const parseParagraphs = (
     xml,
     (tag: SaxesTagNS) => {
       if (!isWordprocessingElement(tag)) return;
-      if (reportUnsupportedConstruct(tag, "clean", sourcePart, unsupportedItems))
+      if (
+        reportUnsupportedConstruct(tag, "clean", sourcePart, unsupportedItems)
+      )
         unsupportedDepth++;
       if (tag.local === "p")
         current = {
@@ -355,12 +338,7 @@ export const parseParagraphs = (
         current = null;
       }
       if (
-        reportUnsupportedConstruct(
-          tag,
-          "clean",
-          sourcePart,
-          unsupportedItems,
-        )
+        reportUnsupportedConstruct(tag, "clean", sourcePart, unsupportedItems)
       )
         unsupportedDepth--;
     },

@@ -1,39 +1,16 @@
-import { lstat, readdir } from "node:fs/promises";
-import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { constants as fsConstants } from "node:fs";
+import { lstat, open, readdir, type FileHandle } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isSafeRelativePath } from "../path-util.js";
 import { AgentDocxError } from "../types.js";
 import type { SemanticManifest } from "./manifest.js";
 import type {
   AttachmentManifest,
   ImportAttachmentBundle,
 } from "./contracts.js";
-import {
-  decodeDocxXml,
-  sha256Hex,
-} from "./package.js";
-import { readInputFile } from "../input.js";
-const unsupported = (message: string): never => {
-  throw new AgentDocxError("DOCX_IMPORT_UNSUPPORTED", message);
-};
-
-const asObject = (value: unknown, label: string): Record<string, unknown> => {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    unsupported(`${label} must be an object`);
-  return value as Record<string, unknown>;
-};
-
-const exactKeys = (
-  value: Record<string, unknown>,
-  keys: readonly string[],
-  label: string,
-): void => {
-  if (
-    Object.keys(value).length !== keys.length ||
-    Object.keys(value).some((key) => !keys.includes(key))
-  )
-    unsupported(`${label} has an unsupported property`);
-};
-
-
+import { decodeDocxXml, sha256Hex } from "./package.js";
+import { asObject, codePointCompare, unsupported } from "./helpers.js";
+import { hasExactKeys } from "../json-contract.js";
 
 export const attachmentInventory = (
   parts: ReadonlyMap<string, Uint8Array>,
@@ -47,7 +24,7 @@ export const attachmentInventory = (
   > = {};
   for (const [path, bytes] of parts) {
     if (!path.startsWith("word/media/")) continue;
-    const name = basename(path);
+    const name = path;
     const mediaType = path.endsWith(".png")
       ? "image/png"
       : /\.jpe?g$/i.test(path)
@@ -90,6 +67,8 @@ const sameAttachmentEntries = (
   );
 
 const pathInside = (root: string, path: string, label: string): string => {
+  if (!isSafeRelativePath(path))
+    unsupported(`${label} is not a safe relative path`);
   const target = resolve(root, path);
   const contained = relative(root, target);
   if (
@@ -112,13 +91,38 @@ const regularAttachmentFile = async (
   const entry = await lstat(path).catch(() => null);
   if (!entry || !entry.isFile() || entry.isSymbolicLink())
     unsupported(`${label} is not a regular nonsymlink file`);
-  const stats = entry as NonNullable<typeof entry>;
-  if (stats.size > ATTACHMENT_MAX_FILE_BYTES)
+  const expected = entry as NonNullable<typeof entry>;
+  if (expected.size > ATTACHMENT_MAX_FILE_BYTES)
     throw new AgentDocxError(
       "DOCX_TOO_LARGE",
       `${label} exceeds ${ATTACHMENT_MAX_FILE_BYTES / (1024 * 1024)} MiB`,
     );
-  return readInputFile(path, label);
+  const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, flags);
+    const stats = await handle.stat();
+    if (
+      !stats.isFile() ||
+      stats.dev !== expected.dev ||
+      stats.ino !== expected.ino
+    )
+      unsupported(`${label} changed while opening`);
+    if (stats.size > ATTACHMENT_MAX_FILE_BYTES)
+      throw new AgentDocxError(
+        "DOCX_TOO_LARGE",
+        `${label} exceeds ${ATTACHMENT_MAX_FILE_BYTES / (1024 * 1024)} MiB`,
+      );
+    return await handle.readFile();
+  } catch (error) {
+    if (error instanceof AgentDocxError) throw error;
+    throw new AgentDocxError(
+      "DOCX_IMPORT_UNSUPPORTED",
+      `${label} could not be read: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 };
 
 const bundleFiles = async (directory: string): Promise<readonly string[]> => {
@@ -204,10 +208,7 @@ export const resolveAttachmentBundle = async (
     if (!validAttachmentManifest(parsed))
       unsupported("Attachment manifest does not have the version-1 shape");
     supplied = parsed as AttachmentManifest;
-    const suppliedEntries = attachmentEntries(
-      supplied,
-      "Attachment manifest",
-    );
+    const suppliedEntries = attachmentEntries(supplied, "Attachment manifest");
     if (!sameAttachmentEntries(expectedEntries, suppliedEntries))
       unsupported(
         "Attachment bundle manifest does not exactly match the DOCX inventory",
@@ -233,10 +234,7 @@ export const resolveAttachmentBundle = async (
     sourceFiles = files;
   } else {
     supplied = bundle.manifest;
-    const suppliedEntries = attachmentEntries(
-      supplied,
-      "Attachment manifest",
-    );
+    const suppliedEntries = attachmentEntries(supplied, "Attachment manifest");
     if (!sameAttachmentEntries(expectedEntries, suppliedEntries))
       unsupported(
         "Attachment bundle manifest does not exactly match the DOCX inventory",
@@ -302,11 +300,10 @@ export const sourceAssetsForSemanticDocument = (
   const unresolved: string[] = [];
   for (const [name, raw] of Object.entries(documentAssets)) {
     const asset = asObject(raw, `Semantic manifest asset ${name}`);
-    exactKeys(
-      asset,
-      ["sha256", "mediaType", "bytes"],
-      `Semantic manifest asset ${name}`,
-    );
+    if (!hasExactKeys(asset, ["sha256", "mediaType", "bytes"]))
+      unsupported(
+        `Semantic manifest asset ${name} has an unsupported property`,
+      );
     if (
       typeof asset.sha256 !== "string" ||
       !/^sha256:[a-f0-9]{64}$/.test(asset.sha256) ||
@@ -342,10 +339,7 @@ export const validAttachmentManifest = (
   if (
     manifest.schemaVersion !== 1 ||
     !Array.isArray(manifest.entries) ||
-    Object.keys(manifest).length !== 2 ||
-    Object.keys(manifest).some(
-      (key) => !["schemaVersion", "entries"].includes(key),
-    )
+    !hasExactKeys(manifest, ["schemaVersion", "entries"])
   )
     return false;
   const names = new Set<string>();
@@ -355,10 +349,13 @@ export const validAttachmentManifest = (
       return false;
     const record = entry as Record<string, unknown>;
     if (
-      Object.keys(record).length !== 5 ||
-      !["name", "mediaType", "byteLength", "sha256", "payloadPath"].every(
-        (key) => key in record,
-      ) ||
+      !hasExactKeys(record, [
+        "name",
+        "mediaType",
+        "byteLength",
+        "sha256",
+        "payloadPath",
+      ]) ||
       typeof record.name !== "string" ||
       typeof record.mediaType !== "string" ||
       !Number.isSafeInteger(record.byteLength) ||
@@ -371,18 +368,9 @@ export const validAttachmentManifest = (
     const name = record.name as string;
     const payloadPath = record.payloadPath as string;
     if (
-      name.length === 0 ||
-      name.startsWith("/") ||
-      name.includes("\\") ||
-      name.split("/").some((part) => part === "" || part === "." || part === "..") ||
+      !isSafeRelativePath(name) ||
       !payloadPath.startsWith("files/") ||
-      payloadPath.includes("\\") ||
-      payloadPath
-        .split("/")
-        .some(
-          (part, index) =>
-            index !== 0 && (part === "" || part === "." || part === ".."),
-        ) ||
+      !isSafeRelativePath(payloadPath.slice("files/".length)) ||
       names.has(name) ||
       paths.has(payloadPath)
     )
@@ -403,7 +391,7 @@ export const attachmentEntries = (
     );
   return [...manifest.entries].sort(
     (left, right) =>
-      left.name.localeCompare(right.name) ||
-      left.payloadPath.localeCompare(right.payloadPath),
+      codePointCompare(left.name, right.name) ||
+      codePointCompare(left.payloadPath, right.payloadPath),
   );
 };

@@ -13,15 +13,15 @@ import {
   LevelFormat,
   LineNumberRestartFormat,
   NumberFormat,
-  PageBreak,
-  PageNumber,
   Packer,
+  PageNumber,
   Paragraph,
   SectionType,
   Table,
   TableCell,
   TableLayoutType,
   TableRow,
+  Tab,
   TextRun,
   WidthType,
   type ISpacingProperties,
@@ -56,6 +56,8 @@ import {
   repackDocxParts,
   sha256Hex,
 } from "./package.js";
+import { sanitizeXmlText } from "./xml-text.js";
+import { sourcePartForRelationshipPart } from "./opc.js";
 
 type TextContent = Pick<TextFlowBlock, "runs" | "image">;
 type RichInlineRun = InlineRun & {
@@ -193,7 +195,12 @@ const paragraphStyle = (
 
 export const nativeStyles = (profile: LayoutProfile) => {
   const font = profile.requestedFontFamily;
-  const body = paragraphStyle("AgentDocxBody", "AgentDocxBody", profile.body, font);
+  const body = paragraphStyle(
+    "AgentDocxBody",
+    "AgentDocxBody",
+    profile.body,
+    font,
+  );
   const headings = ([1, 2, 3, 4, 5, 6] as const).map((level) =>
     paragraphStyle(
       `AgentDocxHeading${level}`,
@@ -207,7 +214,11 @@ export const nativeStyles = (profile: LayoutProfile) => {
     id: string,
     style: TextStyle,
     options: Parameters<typeof paragraphStyle>[4] = {},
-  ) => paragraphStyle(id, id, style, font, { basedOn: "AgentDocxBody", ...options });
+  ) =>
+    paragraphStyle(id, id, style, font, {
+      basedOn: "AgentDocxBody",
+      ...options,
+    });
   const single = (style: TextStyle): TextStyle => ({
     ...style,
     beforeTwips: 0,
@@ -223,7 +234,11 @@ export const nativeStyles = (profile: LayoutProfile) => {
       derivative(`AgentDocxNumbered${level}`, profile.list),
     ),
     derivative("AgentDocxFootnote", profile.footnote),
-    derivative("AgentDocxCaption", { ...profile.body, bold: true }, { alignment: AlignmentType.CENTER }),
+    derivative(
+      "AgentDocxCaption",
+      { ...profile.body, bold: true },
+      { alignment: AlignmentType.CENTER },
+    ),
     derivative("AgentDocxTOCHeading", profile.headings["1"]),
     derivative("AgentDocxTOCEntry", single(profile.body)),
     derivative("AgentDocxTOAHeading", profile.headings["1"]),
@@ -252,9 +267,19 @@ const runChildren = (
   if (run.footnoteId !== undefined)
     return new FootnoteReferenceRun(footnoteIds.get(run.footnoteId)!);
   const trailingBreak = run.text.endsWith("\n");
-  const text = trailingBreak ? run.text.slice(0, -1) : run.text;
+  const sanitized = sanitizeXmlText(
+    trailingBreak ? run.text.slice(0, -1) : run.text,
+  );
+  const children = sanitized.includes("\t")
+    ? sanitized
+        .split("\t")
+        .flatMap((part, index) => [
+          ...(index > 0 ? [new Tab()] : []),
+          ...(part.length > 0 ? [part] : []),
+        ])
+    : undefined;
   const textRun = new TextRun({
-    text,
+    ...(children === undefined ? { text: sanitized } : { children }),
     font: run.literal ? "Courier New" : fontFamily,
     size: style.fontSizeTwips / 10,
     bold: style.bold || run.bold,
@@ -264,11 +289,16 @@ const runChildren = (
   });
   if (run.referenceTarget)
     return new InternalHyperlink({
-      anchor: blockBookmark(run.referenceTarget as Parameters<typeof blockBookmark>[0]),
+      anchor: blockBookmark(
+        run.referenceTarget as Parameters<typeof blockBookmark>[0],
+      ),
       children: [textRun],
     });
   if (run.link)
-    return new ExternalHyperlink({ link: run.link.target, children: [textRun] });
+    return new ExternalHyperlink({
+      link: run.link.target,
+      children: [textRun],
+    });
   return textRun;
 };
 
@@ -313,9 +343,9 @@ const imageChildren = (
         height: Math.max(1, Math.round(block.image.heightTwips / 15)),
       },
       altText: {
-        name: block.image.source,
-        description: block.image.alt,
-        title: block.image.alt,
+        name: sanitizeXmlText(block.image.source),
+        description: sanitizeXmlText(block.image.alt),
+        title: sanitizeXmlText(block.image.alt),
       },
     }),
   ];
@@ -327,9 +357,13 @@ const tableGridWidths = (
   usableWidth: number,
   fonts?: LoadedFonts,
 ): number[] => {
-  if (fonts)
-    return tableColumnWidths(block, profile, fonts, usableWidth);
+  if (fonts) return tableColumnWidths(block, profile, fonts, usableWidth);
   const columns = block.rows[0]?.length ?? 0;
+  if (columns === 0)
+    throw new AgentDocxError(
+      "INVALID_LAYOUT",
+      "A table must contain at least one column.",
+    );
   const fixed =
     profile.table.cellPaddingTwips.left +
     profile.table.cellPaddingTwips.right +
@@ -343,7 +377,8 @@ const tableGridWidths = (
     Math.max(styleFloor(profile.table.header), styleFloor(profile.table.body)) +
     1;
   const widths = Array<number>(columns).fill(floor);
-  let remaining = usableWidth - widths.reduce((total, value) => total + value, 0);
+  let remaining =
+    usableWidth - widths.reduce((total, value) => total + value, 0);
   for (let index = 0; remaining > 0; index = (index + 1) % columns) {
     widths[index]!++;
     remaining--;
@@ -366,18 +401,21 @@ const templateTokens = (
   style: TextStyle,
   fontFamily: string,
 ): ParagraphChild[] => {
+  const safeValue = sanitizeXmlText(value);
   const values: Record<string, string> = {
-    caseName: metadata?.caseName ?? "",
-    docketNumber: metadata?.docketNumber ?? "",
-    documentTitle: metadata?.documentTitle ?? "",
+    caseName: sanitizeXmlText(metadata?.caseName ?? ""),
+    docketNumber: sanitizeXmlText(metadata?.docketNumber ?? ""),
+    documentTitle: sanitizeXmlText(metadata?.documentTitle ?? ""),
   };
   const children: ParagraphChild[] = [];
   let index = 0;
-  for (const match of value.matchAll(/\{\{(caseName|docketNumber|documentTitle|page|pages)\}\}/g)) {
+  for (const match of safeValue.matchAll(
+    /\{\{(caseName|docketNumber|documentTitle|page|pages)\}\}/g,
+  )) {
     if (match.index! > index)
       children.push(
         new TextRun({
-          text: value.slice(index, match.index),
+          text: safeValue.slice(index, match.index),
           font: fontFamily,
           size: style.fontSizeTwips / 10,
         }),
@@ -397,10 +435,10 @@ const templateTokens = (
       );
     index = match.index! + match[0].length;
   }
-  if (index < value.length || children.length === 0)
+  if (index < safeValue.length || children.length === 0)
     children.push(
       new TextRun({
-        text: value.slice(index),
+        text: safeValue.slice(index),
         font: fontFamily,
         size: style.fontSizeTwips / 10,
       }),
@@ -554,9 +592,9 @@ const toTable = (
     rows: block.rows.map((row, rowIndex) => {
       const style = rowIndex === 0 ? profile.table.header : profile.table.body;
       return new TableRow({
-        cantSplit: true,
+        cantSplit: false,
         tableHeader: rowIndex === 0 && profile.table.repeatHeader,
-        children: row.map(
+        children: row.slice(0, gridWidths.length).map(
           (cell, columnIndex) =>
             new TableCell({
               width: { size: gridWidths[columnIndex]!, type: WidthType.DXA },
@@ -576,7 +614,10 @@ const toTable = (
               children: [
                 new Paragraph({
                   style: "AgentDocxBody",
-                  ...paragraphOptions(style, profile.pagination.widowOrphanControl),
+                  ...paragraphOptions(
+                    style,
+                    profile.pagination.widowOrphanControl,
+                  ),
                   alignment: alignmentFor(cell.alignment),
                   children: textChildren(
                     cell,
@@ -629,7 +670,10 @@ const toBorderlessLegalTable = (
             children: [
               new Paragraph({
                 style: styleId,
-                ...paragraphOptions(style, profile.pagination.widowOrphanControl),
+                ...paragraphOptions(
+                  style,
+                  profile.pagination.widowOrphanControl,
+                ),
                 alignment,
                 children,
               }),
@@ -642,7 +686,7 @@ const toBorderlessLegalTable = (
 };
 
 const escapeXmlText = (value: string): string =>
-  value
+  sanitizeXmlText(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
@@ -683,11 +727,42 @@ const normalizeCoreProperties = (xml: string, timestamp: string): string =>
       `$1${timestamp}$2`,
     );
 
+const normalizeRelationshipIds = (parts: Map<string, Uint8Array>): void => {
+  const relationshipParts = [...parts.keys()]
+    .filter((path) => path.endsWith(".rels"))
+    .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+  for (const relationshipPart of relationshipParts) {
+    const sourcePart = sourcePartForRelationshipPart(relationshipPart);
+    const original = decodeDocxXml(parts.get(relationshipPart)!);
+    const ids = new Map<string, string>();
+    let nextId = 1;
+    const rewritten = original.replace(
+      /(<Relationship\b[^>]*\bId=")([^"]+)(")/g,
+      (_match, prefix: string, id: string, suffix: string) => {
+        const replacement = `rId${nextId++}`;
+        ids.set(id, replacement);
+        return `${prefix}${replacement}${suffix}`;
+      },
+    );
+    parts.set(relationshipPart, new TextEncoder().encode(rewritten));
+    if (sourcePart.length === 0 || ids.size === 0) continue;
+    const source = parts.get(sourcePart);
+    if (!source) continue;
+    const sourceXml = decodeDocxXml(source).replace(
+      /((?:r:(?:id|embed|link))=")([^"]+)(")/g,
+      (_match, prefix: string, id: string, suffix: string) =>
+        ids.has(id) ? `${prefix}${ids.get(id)!}${suffix}` : _match,
+    );
+    parts.set(sourcePart, new TextEncoder().encode(sourceXml));
+  }
+};
+
 export const normalizeGeneratedPackage = async (
   bytes: Uint8Array,
   createdAt: string | undefined,
 ): Promise<Uint8Array> => {
   const parts = new Map(await readDocxParts(bytes));
+  normalizeRelationshipIds(parts);
   const core = parts.get("docProps/core.xml");
   if (core)
     parts.set(
@@ -708,6 +783,7 @@ export const addSemanticManifest = async (
   createdAt: string | undefined,
 ): Promise<Uint8Array> => {
   const parts = new Map(await readDocxParts(bytes));
+  normalizeRelationshipIds(parts);
   const relationshipPart = "word/_rels/document.xml.rels";
   const rels = parts.get(relationshipPart);
   const contentTypes = parts.get("[Content_Types].xml");
@@ -846,7 +922,8 @@ export const createNativeDocumentChrome = (
     evenAndOddHeaderAndFooters:
       headerTemplates.even !== undefined || footerTemplates.even !== undefined,
     titlePage:
-      headerTemplates.first !== undefined || footerTemplates.first !== undefined,
+      headerTemplates.first !== undefined ||
+      footerTemplates.first !== undefined,
   };
 };
 
@@ -858,6 +935,7 @@ export const nativeSectionProperties = (
     NonNullable<DocumentChrome["pageNumber"]>,
     "format" | "start"
   >,
+  includeGlobalPageNumber = true,
 ) => ({
   page: {
     size: {
@@ -867,13 +945,14 @@ export const nativeSectionProperties = (
     margin: {
       top: nativeChrome.bodyBounds.bodyTopTwips,
       right: profile.page.marginsTwips.right,
-      bottom: profile.page.heightTwips - nativeChrome.bodyBounds.bodyBottomTwips,
+      bottom:
+        profile.page.heightTwips - nativeChrome.bodyBounds.bodyBottomTwips,
       left: profile.page.marginsTwips.left,
       header: profile.page.headerTwips,
       footer: profile.page.footerTwips,
       gutter: profile.page.gutterTwips,
     },
-    ...(pageNumber || chrome.pageNumber
+    ...(pageNumber || (includeGlobalPageNumber ? chrome.pageNumber : undefined)
       ? {
           pageNumbers: {
             start: (pageNumber ?? chrome.pageNumber)!.start,
@@ -911,7 +990,7 @@ export async function generateDocx(
   options = {
     ...options,
     assets: { ...assets, ...options.assets },
-    ...(options.createdAt ?? options.revision?.createdAt
+    ...((options.createdAt ?? options.revision?.createdAt)
       ? { createdAt: options.createdAt ?? options.revision!.createdAt }
       : {}),
   };
@@ -960,7 +1039,10 @@ export async function generateDocx(
   type SectionContent = {
     children: Array<Paragraph | Table>;
     type?: (typeof SectionType)[keyof typeof SectionType];
-    pageNumber?: { format: "decimal" | "lower-roman" | "upper-roman"; start: number };
+    pageNumber?: {
+      format: "decimal" | "lower-roman" | "upper-roman";
+      start: number;
+    };
   };
   const sections: SectionContent[] = [];
   let current: SectionContent = { children: [] };
@@ -970,6 +1052,7 @@ export async function generateDocx(
     sections.push(current);
     current = { children: [] };
   };
+  let pendingPageBreak = false;
 
   for (const rawBlock of flow.blocks) {
     const sectionBreak =
@@ -985,7 +1068,7 @@ export async function generateDocx(
       continue;
     }
     if (rawBlock.kind === "pagebreak") {
-      current.children.push(new Paragraph({ children: [new PageBreak()] }));
+      pendingPageBreak = true;
       continue;
     }
     if (rawBlock.kind === "thematic-break") {
@@ -993,7 +1076,7 @@ export async function generateDocx(
         new Paragraph({
           keepNext: profile.thematicBreak.keepWithNext,
           keepLines: true,
-          widowControl: profile.pagination.widowOrphanControl,
+          ...(pendingPageBreak ? { pageBreakBefore: true } : {}),
           spacing: {
             before: profile.thematicBreak.beforeTwips,
             after: profile.thematicBreak.afterTwips,
@@ -1007,19 +1090,27 @@ export async function generateDocx(
               color: "000000",
               size: Math.max(
                 1,
-                Math.floor((profile.thematicBreak.thicknessTwips * 2) / 5 + 0.5),
+                Math.floor(
+                  (profile.thematicBreak.thicknessTwips * 2) / 5 + 0.5,
+                ),
               ),
             },
           },
           children: [],
         }),
       );
+      pendingPageBreak = false;
       continue;
     }
     if (rawBlock.kind === "table") {
+      if (pendingPageBreak)
+        current.children.push(
+          new Paragraph({ pageBreakBefore: true, children: [] }),
+        );
       current.children.push(
         toTable(rawBlock, profile, usableWidth, footnoteIds, options.fonts),
       );
+      pendingPageBreak = false;
       continue;
     }
     const block = rawBlock;
@@ -1037,7 +1128,12 @@ export async function generateDocx(
     bodyParagraphs.push(manifest);
     const blockChildren =
       imageChildren(block, options.assets) ??
-      textChildren(block, resolved.style, profile.requestedFontFamily, footnoteIds);
+      textChildren(
+        block,
+        resolved.style,
+        profile.requestedFontFamily,
+        footnoteIds,
+      );
     const bookmark = new Bookmark({ id, children: blockChildren });
     const numberingOptions =
       block.kind === "list"
@@ -1059,7 +1155,11 @@ export async function generateDocx(
       block.legalKind === "caption" ||
       block.legalKind === "signature" ||
       block.legalKind === "certificate";
-    if (legalTable)
+    if (legalTable) {
+      if (pendingPageBreak)
+        current.children.push(
+          new Paragraph({ pageBreakBefore: true, children: [] }),
+        );
       current.children.push(
         toBorderlessLegalTable(
           resolved.id,
@@ -1072,11 +1172,15 @@ export async function generateDocx(
           [bookmark],
         ),
       );
-    else
+    } else
       current.children.push(
         new Paragraph({
           style: resolved.id,
-          ...paragraphOptions(resolved.style, profile.pagination.widowOrphanControl),
+          ...paragraphOptions(
+            resolved.style,
+            profile.pagination.widowOrphanControl,
+          ),
+          ...(pendingPageBreak ? { pageBreakBefore: true } : {}),
           ...(block.legalKind === "caption"
             ? { alignment: AlignmentType.CENTER }
             : {}),
@@ -1084,6 +1188,7 @@ export async function generateDocx(
           children: [bookmark],
         }),
       );
+    pendingPageBreak = false;
   }
   finishSection();
 
@@ -1112,9 +1217,8 @@ export async function generateDocx(
     styles: { paragraphStyles: nativeStyles(profile) },
     numbering: numbering(profile, orderedListStarts),
     features: { updateFields: true },
-    evenAndOddHeaderAndFooters:
-      nativeChrome.evenAndOddHeaderAndFooters,
-    sections: sections.map((section) => ({
+    evenAndOddHeaderAndFooters: nativeChrome.evenAndOddHeaderAndFooters,
+    sections: sections.map((section, sectionIndex) => ({
       properties: {
         ...(section.type ? { type: section.type } : {}),
         ...nativeSectionProperties(
@@ -1122,6 +1226,7 @@ export async function generateDocx(
           chrome,
           nativeChrome,
           section.pageNumber,
+          sectionIndex === 0,
         ),
       },
       ...(Object.keys(nativeChrome.headers).length > 0
@@ -1134,15 +1239,20 @@ export async function generateDocx(
     })),
   });
   const packed = await Packer.toBuffer(document);
+  const emittedBlocks =
+    options.semanticManifest &&
+    Array.isArray(options.semanticManifest.emittedBlocks)
+      ? options.semanticManifest.emittedBlocks
+      : bodyParagraphs.map(({ id, index }) => ({
+          bookmark: id,
+          index,
+        }));
   const bytes = options.semanticManifest
     ? await addSemanticManifest(
         packed,
         {
           ...options.semanticManifest,
-          emittedBlocks: bodyParagraphs.map(({ id, index }) => ({
-            bookmark: id,
-            index,
-          })),
+          emittedBlocks,
         },
         options.createdAt,
       )

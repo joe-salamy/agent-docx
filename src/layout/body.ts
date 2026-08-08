@@ -13,10 +13,7 @@ export type BodyBounds = {
   usableHeightTwips: number;
 };
 
-const textForMeasurement = (
-  template: string,
-  fieldDigits: number,
-): string =>
+const textForMeasurement = (template: string, fieldDigits: number): string =>
   template.replace(
     /\{\{(?:caseName|docketNumber|documentTitle|page|pages)\}\}/g,
     (token) =>
@@ -46,12 +43,18 @@ const renderedHeight = (
     profile.page.marginsTwips.left -
     profile.page.marginsTwips.right -
     profile.page.gutterTwips;
-  const averageGlyphWidth = Math.max(1, Math.round(profile.body.fontSizeTwips * 0.5));
-  const lineCapacity = Math.max(1, Math.floor(width / averageGlyphWidth));
-  const lines = text.split(/\r?\n/).reduce(
-    (total, line) => total + Math.max(1, Math.ceil(line.length / lineCapacity)),
-    0,
+  const averageGlyphWidth = Math.max(
+    1,
+    Math.round(profile.body.fontSizeTwips * 0.5),
   );
+  const lineCapacity = Math.max(1, Math.floor(width / averageGlyphWidth));
+  const lines = text
+    .split(/\r?\n/)
+    .reduce(
+      (total, line) =>
+        total + Math.max(1, Math.ceil(line.length / lineCapacity)),
+      0,
+    );
   return lines * linePitch(profile.body);
 };
 
@@ -80,17 +83,20 @@ const bodyBoundsFor = (
   const footerHeightTwips =
     renderedHeight(footerTemplate, profile, fieldDigits) +
     (footerNumber ? linePitch(profile.body) : 0);
-  const bodyTopTwips = headerTemplate || headerNumber
-    ? Math.max(
-        profile.page.marginsTwips.top,
-        profile.page.headerTwips + headerHeightTwips,
-      )
-    : profile.page.marginsTwips.top;
+  const bodyTopTwips =
+    headerTemplate || headerNumber
+      ? Math.max(
+          profile.page.marginsTwips.top,
+          profile.page.headerTwips + headerHeightTwips,
+        )
+      : profile.page.marginsTwips.top;
   const bodyBottomTwips =
     footerTemplate || footerNumber
       ? Math.min(
           profile.page.heightTwips - profile.page.marginsTwips.bottom,
-          profile.page.heightTwips - profile.page.footerTwips - footerHeightTwips,
+          profile.page.heightTwips -
+            profile.page.footerTwips -
+            footerHeightTwips,
         )
       : profile.page.heightTwips - profile.page.marginsTwips.bottom;
   const usableHeightTwips = bodyBottomTwips - bodyTopTwips;
@@ -128,5 +134,5 @@ export const conservativeBodyBounds = (
     .sort(
       (left, right) =>
         left.usableHeightTwips - right.usableHeightTwips ||
-        left.kind.localeCompare(right.kind),
+        (left.kind < right.kind ? -1 : left.kind > right.kind ? 1 : 0),
     )[0]!;

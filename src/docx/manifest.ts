@@ -1,17 +1,18 @@
-import { AgentDocxError } from "../types.js";
-import {
-  blockBookmark,
-  isBlockId,
-  type BlockId,
-} from "../legal/model.js";
+import { blockBookmark, isBlockId, type BlockId } from "../legal/model.js";
 import type { AttachmentManifest } from "./contracts.js";
-import {
-  decodeDocxXml,
-  parseDocxXml,
-  sha256Hex,
-} from "./package.js";
+import { decodeDocxXml, parseDocxXml, sha256Hex } from "./package.js";
 import { validAttachmentManifest } from "./attachments.js";
 import { emittedBookmarkName, fromBookmarkName } from "./tracked.js";
+import { hasExactKeys } from "../json-contract.js";
+import { asObject, unsupported } from "./helpers.js";
+const requireExactKeys = (
+  value: Record<string, unknown>,
+  keys: readonly string[],
+  label: string,
+): void => {
+  if (!hasExactKeys(value, keys))
+    unsupported(`${label} has an unsupported property`);
+};
 
 export type SemanticRevisionMapEntry = {
   changeId: string;
@@ -23,6 +24,8 @@ export type SemanticRevisionMapEntry = {
   blockId?: BlockId | null;
   baseText?: string;
   headText?: string;
+  sourceStart?: number;
+  sourceEnd?: number;
 };
 
 export type SemanticManifest = {
@@ -48,7 +51,11 @@ export type SemanticManifest = {
       short: string;
     }[];
   }[];
-  emittedBlocks: readonly { bookmark: string; index: number }[];
+  emittedBlocks: readonly {
+    bookmark: string;
+    index: number;
+    deleted?: boolean;
+  }[];
   attachments: AttachmentManifest | null;
   revision: `sha256:${string}` | null;
   baseRevision: `sha256:${string}` | null;
@@ -67,27 +74,6 @@ export type SemanticManifest = {
   }[];
 };
 
-const unsupported = (message: string): never => {
-  throw new AgentDocxError("DOCX_IMPORT_UNSUPPORTED", message);
-};
-
-const asObject = (value: unknown, label: string): Record<string, unknown> => {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    unsupported(`${label} must be an object`);
-  return value as Record<string, unknown>;
-};
-
-const exactKeys = (
-  value: Record<string, unknown>,
-  keys: readonly string[],
-  label: string,
-): void => {
-  if (
-    Object.keys(value).length !== keys.length ||
-    Object.keys(value).some((key) => !keys.includes(key))
-  )
-    unsupported(`${label} has an unsupported property`);
-};
 const readManifestPayload = (bytes: Uint8Array): Record<string, unknown> => {
   let root = false;
   let payload = false;
@@ -115,7 +101,7 @@ const readManifestPayload = (bytes: Uint8Array): Record<string, unknown> => {
     unsupported("Semantic manifest payload is not JSON");
   }
   const manifest = asObject(parsed, "Semantic manifest");
-  exactKeys(
+  requireExactKeys(
     manifest,
     [
       "schemaVersion",
@@ -218,7 +204,7 @@ export const parseSemanticManifest = (bytes: Uint8Array): SemanticManifest => {
     commentMap,
   };
 };
- 
+
 const validateBlockGraph = (
   blocks: readonly SemanticManifest["blocks"][number][],
 ): void => {
@@ -275,7 +261,7 @@ const validateBlockGraph = (
   if (expectedBookmarks.size !== blocks.length)
     unsupported("Semantic manifest block bookmarks are not unique");
 };
- 
+
 const validateEmittedBlockGraph = (
   emittedBlocks: readonly SemanticManifest["emittedBlocks"][number][],
   blocks: readonly SemanticManifest["blocks"][number][],
@@ -288,7 +274,8 @@ const validateEmittedBlockGraph = (
     if (
       bookmarks.has(emitted.bookmark) ||
       indexes.has(emitted.index) ||
-      (blockId !== null && !blockIds.has(blockId))
+      (!emitted.deleted && blockId !== null && !blockIds.has(blockId)) ||
+      (emitted.deleted !== undefined && emitted.deleted !== true)
     )
       unsupported("Semantic manifest has invalid emitted block identities");
     bookmarks.add(emitted.bookmark);
@@ -301,14 +288,14 @@ const validateEmittedBlockGraph = (
   )
     unsupported("Semantic manifest emitted block indexes are not contiguous");
 };
- 
+
 const parseDependencyRecords = (
   raw: unknown,
 ): SemanticManifest["dependencies"] => {
   const dependencyKeys = new Set<string>();
   return (raw as unknown[]).map((entry) => {
     const dependency = asObject(entry, "Semantic manifest dependency");
-    exactKeys(
+    requireExactKeys(
       dependency,
       ["key", "sha256", "mediaType", "byteLength"],
       "Semantic manifest dependency",
@@ -342,7 +329,7 @@ const parseDependencyRecords = (
     };
   });
 };
- 
+
 const parseRevisionRecords = (
   raw: unknown,
 ): SemanticManifest["revisionMap"] => {
@@ -352,17 +339,25 @@ const parseRevisionRecords = (
     const hasBlockId = "blockId" in revision;
     const hasBaseText = "baseText" in revision;
     const hasHeadText = "headText" in revision;
+    const hasSourceStart = "sourceStart" in revision;
+    const hasSourceEnd = "sourceEnd" in revision;
+    const hasSourceRange = hasSourceStart && hasSourceEnd;
     const hasExtendedText = hasBlockId && hasBaseText && hasHeadText;
     if ((hasBlockId || hasBaseText || hasHeadText) !== hasExtendedText)
       unsupported(
         "Semantic manifest revision map entry must include blockId, baseText, and headText together",
       );
-    exactKeys(
+    if (hasSourceStart !== hasSourceEnd)
+      unsupported(
+        "Semantic manifest revision map source range must include sourceStart and sourceEnd together",
+      );
+    requireExactKeys(
       revision,
       [
         "changeId",
         "attribution",
         ...(hasExtendedText ? ["blockId", "baseText", "headText"] : []),
+        ...(hasSourceRange ? ["sourceStart", "sourceEnd"] : []),
       ],
       "Semantic manifest revision map entry",
     );
@@ -371,7 +366,7 @@ const parseRevisionRecords = (
       revision.attribution,
       "Semantic manifest revision attribution",
     );
-    exactKeys(
+    requireExactKeys(
       attribution,
       [
         "author",
@@ -389,6 +384,8 @@ const parseRevisionRecords = (
     const blockId = revision.blockId;
     const baseText = revision.baseText;
     const headText = revision.headText;
+    const sourceStart = revision.sourceStart as number | undefined;
+    const sourceEnd = revision.sourceEnd as number | undefined;
     if (
       (hasExtendedText &&
         ((blockId !== null &&
@@ -398,7 +395,15 @@ const parseRevisionRecords = (
       (!hasExtendedText &&
         (blockId !== undefined ||
           baseText !== undefined ||
-          headText !== undefined))
+          headText !== undefined)) ||
+      (hasSourceRange &&
+        (!hasExtendedText ||
+          blockId === null ||
+          headText !== "" ||
+          !Number.isSafeInteger(sourceStart) ||
+          !Number.isSafeInteger(sourceEnd) ||
+          (sourceStart as number) < 0 ||
+          (sourceEnd as number) < (sourceStart as number)))
     )
       unsupported("Semantic manifest revision map text fields are invalid");
     if (
@@ -416,7 +421,7 @@ const parseRevisionRecords = (
     )
       unsupported("Semantic manifest revision map entry is invalid");
     if (author !== null)
-      exactKeys(
+      requireExactKeys(
         author,
         ["name", ...(author.email === undefined ? [] : ["email"])],
         "Semantic manifest revision author",
@@ -447,17 +452,21 @@ const parseRevisionRecords = (
             headText: headText as string,
           }
         : {}),
+      ...(hasSourceRange
+        ? {
+            sourceStart: sourceStart as number,
+            sourceEnd: sourceEnd as number,
+          }
+        : {}),
     };
   });
 };
- 
-const parseCommentRecords = (
-  raw: unknown,
-): SemanticManifest["commentMap"] => {
+
+const parseCommentRecords = (raw: unknown): SemanticManifest["commentMap"] => {
   const annotationIds = new Set<string>();
   return (raw as unknown[]).map((entry) => {
     const comment = asObject(entry, "Semantic manifest comment map entry");
-    exactKeys(
+    requireExactKeys(
       comment,
       ["annotationId", "blockWide", "authorEmail"],
       "Semantic manifest comment map entry",
@@ -480,7 +489,7 @@ const parseCommentRecords = (
     };
   });
 };
- 
+
 const parseBlockRecord = (
   entry: unknown,
 ): SemanticManifest["blocks"][number] => {
@@ -532,7 +541,7 @@ const parseBlockRecord = (
           authority,
           `Semantic manifest block authorities[${authorityIndex}]`,
         );
-        exactKeys(
+        requireExactKeys(
           record,
           ["run", "id", "category", "short"],
           "Semantic manifest block authority",
@@ -574,24 +583,34 @@ const parseBlockRecord = (
     ...(authorities ? { authorities } : {}),
   };
 };
- 
+
 const parseEmittedBlockRecord = (
   entry: unknown,
 ): SemanticManifest["emittedBlocks"][number] => {
   const emitted = asObject(entry, "Semantic manifest emitted block");
-  exactKeys(
+  requireExactKeys(
     emitted,
-    ["bookmark", "index"],
+    [
+      "bookmark",
+      "index",
+      ...(emitted.deleted === undefined ? [] : ["deleted"]),
+    ],
     "Semantic manifest emitted block",
   );
   const bookmark = emitted.bookmark;
   const index = emitted.index;
+  const deleted = emitted.deleted as boolean | undefined;
   if (
     typeof bookmark !== "string" ||
     emittedBookmarkName(bookmark) === null ||
     !Number.isSafeInteger(index) ||
-    (index as number) < 0
+    (index as number) < 0 ||
+    (deleted !== undefined && typeof deleted !== "boolean")
   )
     unsupported("Semantic manifest emitted block is invalid");
-  return { bookmark: bookmark as string, index: index as number };
+  return {
+    bookmark: bookmark as string,
+    index: index as number,
+    ...(deleted === undefined ? {} : { deleted }),
+  };
 };

@@ -1,4 +1,5 @@
-import { lstat } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { lstat, open, type FileHandle } from "node:fs/promises";
 import { AgentDocxError } from "../types.js";
 import {
   blockBookmark,
@@ -11,7 +12,6 @@ import {
 } from "../legal/model.js";
 import { parseLegalMarkdown } from "../legal/parse.js";
 import { visibleTextForBlock } from "../legal/visible-text.js";
-import { readInputFile } from "../input.js";
 import type {
   DocxFidelityItem,
   DocxImportResult,
@@ -26,16 +26,15 @@ import {
 import {
   parseRelationships,
   relationshipPartFor,
+  sourcePartForRelationshipPart,
 } from "./opc.js";
+import { asObject, codePointCompare, unsupported } from "./helpers.js";
 import {
   parseSemanticManifest,
   type SemanticManifest,
   type SemanticRevisionMapEntry,
 } from "./manifest.js";
-import type {
-  ImportedAsset,
-  AttachmentResolution,
-} from "./attachments.js";
+import type { ImportedAsset, AttachmentResolution } from "./attachments.js";
 import {
   attachmentInventory,
   resolveAttachmentBundle,
@@ -54,10 +53,11 @@ import {
   cleanAnnotations,
   extendedRevisionEntry,
   parseNativeComments,
-  redlineAnnotations,
   reconstructTrackedMaterial,
+  redlineAnnotations,
   resolveRevisionGroups,
   semanticBlocks,
+  semanticDeletedSourceRanges,
   sourceWithVisibleBlocks,
   trackedAnnotations,
   type RedlineDecisionMap,
@@ -68,39 +68,11 @@ export type { SemanticManifest, SemanticRevisionMapEntry };
 export type { TrackedParagraph, TrackedMaterial };
 export type { ImportedAsset, AttachmentResolution };
 
-const unsupported = (message: string): never => {
-  throw new AgentDocxError("DOCX_IMPORT_UNSUPPORTED", message);
-};
-
-const asObject = (value: unknown, label: string): Record<string, unknown> => {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    unsupported(`${label} must be an object`);
-  return value as Record<string, unknown>;
-};
-
-
-
-
-
-const sourcePartForRelationshipPart = (part: string): string => {
-  if (part === "_rels/.rels") return "";
-  const components = part.split("/");
-  const relationshipName = components.pop();
-  const relationshipDirectory = components.pop();
-  const name =
-    relationshipName?.endsWith(".rels") === true
-      ? relationshipName.slice(0, -".rels".length)
-      : "";
-  if (relationshipDirectory !== "_rels" || name.length === 0)
-    unsupported(`Malformed OPC relationship part: ${part}`);
-  return [...components, name].join("/");
-};
-
 const validatePackageRelationships = (
   parts: ReadonlyMap<string, Uint8Array>,
 ): void => {
   for (const [part, bytes] of [...parts.entries()].sort(([left], [right]) =>
-    left.localeCompare(right),
+    codePointCompare(left, right),
   )) {
     if (!part.endsWith(".rels")) continue;
     const sourcePart = sourcePartForRelationshipPart(part);
@@ -117,7 +89,6 @@ const validatePackageRelationships = (
     }
   }
 };
-
 
 const sourceTextByBlockId = (
   document: LegalDocument,
@@ -276,7 +247,6 @@ const requirePackage = (
   };
 };
 
-
 const loadInput = async (input: string | Uint8Array): Promise<Uint8Array> => {
   if (typeof input !== "string") return input;
   const entry = await lstat(input).catch(() => null);
@@ -285,7 +255,36 @@ const loadInput = async (input: string | Uint8Array): Promise<Uint8Array> => {
       "INPUT_NOT_FOUND",
       `DOCX input is not a regular file: ${input}`,
     );
-  return readInputFile(input, "DOCX input");
+  const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(input, flags);
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.dev !== entry.dev || stats.ino !== entry.ino)
+      throw new AgentDocxError(
+        "INPUT_NOT_FOUND",
+        `DOCX input changed while opening: ${input}`,
+      );
+    return await handle.readFile();
+  } catch (error) {
+    if (error instanceof AgentDocxError) throw error;
+    const cause = error as NodeJS.ErrnoException;
+    if (
+      cause.code === "ENOENT" ||
+      cause.code === "ENOTDIR" ||
+      cause.code === "ELOOP"
+    )
+      throw new AgentDocxError(
+        "INPUT_NOT_FOUND",
+        `DOCX input not found: ${input}`,
+      );
+    throw new AgentDocxError(
+      "INTERNAL_ERROR",
+      error instanceof Error ? error.message : String(error),
+    );
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 };
 const loadSemanticPackage = async (
   input: string | Uint8Array,
@@ -298,7 +297,9 @@ const loadSemanticPackage = async (
   if (requiredMode !== undefined) {
     const semantic = packageInfo.semantic;
     if (!semantic)
-      unsupported("Redline resolution requires an agent-docx semantic manifest");
+      unsupported(
+        "Redline resolution requires an agent-docx semantic manifest",
+      );
     if ((semantic as SemanticManifest).mode !== requiredMode)
       unsupported("Redline resolution requires a redline semantic manifest");
   }
@@ -319,7 +320,6 @@ const loadSemanticPackage = async (
   };
 };
 
-
 export type InspectedDocxMaterial = {
   source: string;
   semantic: SemanticManifest | null;
@@ -333,19 +333,10 @@ export const inspectDocxMaterial = async (
   input: string | Uint8Array,
   _options: { attachments?: ImportAttachmentBundle } = {},
 ): Promise<InspectedDocxMaterial> => {
-  const {
-    parts,
-    packageInfo,
-    attachments,
-    sourceAssets,
-  } = await loadSemanticPackage(input, _options.attachments);
-  const {
-    mainPart,
-    mainXml,
-    commentsPart,
-    semanticRelationshipId,
-    semantic,
-  } = packageInfo;
+  const { parts, packageInfo, attachments, sourceAssets } =
+    await loadSemanticPackage(input, _options.attachments);
+  const { mainPart, mainXml, commentsPart, semanticRelationshipId, semantic } =
+    packageInfo;
   const trackedParsed =
     semantic?.mode === "redline"
       ? parseTrackedParagraphs(mainXml, mainPart)
@@ -665,11 +656,17 @@ export const inspectRedlineResolution = async (
     semantic.source,
     blocks,
     resolved.visibleByBlock,
+    semanticDeletedSourceRanges(semantic),
   );
   const baseSource =
     resolved.baseByBlock.size === 0
       ? semantic.source
-      : sourceWithVisibleBlocks(semantic.source, blocks, resolved.baseByBlock);
+      : sourceWithVisibleBlocks(
+          semantic.source,
+          blocks,
+          resolved.baseByBlock,
+          semanticDeletedSourceRanges(semantic),
+        );
   return {
     semantic,
     tracked: {
