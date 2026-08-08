@@ -238,7 +238,7 @@ test("happy-path records validate against their published schemas", async () => 
       edits: [
         {
           start: patchStart,
-          end: patchStart + "New statement.".length,
+          deleteCount: "New statement.".length,
           expectedText: "New statement.",
           replacement: "Revised statement.",
         },
@@ -738,18 +738,28 @@ test("schema contracts cover empty results, custom packs, and rejected malformed
   );
 
   const revision = `sha256:${"c".repeat(64)}`;
-  // Cross-field ordering (end >= start) is not expressible in plain
-  // draft-2020-12 JSON Schema, so the published schema accepts the shape and
-  // runtime validation (PATCH_INVALID) rejects reversed ranges.
+  // The patch contract expresses deletion length as a nonnegative
+  // deleteCount, so an inverted range is structurally inexpressible; the
+  // schema itself rejects negative counts.
   assert.equal(
     validateSourcePatch({
       schemaVersion: 1,
       documentId: "motion",
       baseRevision: revision,
-      edits: [{ start: 4, end: 3, expectedText: "", replacement: "" }],
+      edits: [{ start: 4, deleteCount: -1, expectedText: "", replacement: "" }],
+    }),
+    false,
+    "negative deleteCount must be rejected by the schema",
+  );
+  assert.equal(
+    validateSourcePatch({
+      schemaVersion: 1,
+      documentId: "motion",
+      baseRevision: revision,
+      edits: [{ start: 4, deleteCount: 3, expectedText: "", replacement: "" }],
     }),
     true,
-    "schema must remain portable draft-2020-12 (ordering is runtime-enforced)",
+    "nonnegative deleteCount must be accepted by the schema",
   );
 
   const agentProjectParams = {

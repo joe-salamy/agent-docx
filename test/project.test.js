@@ -49,7 +49,7 @@ test("project checkpoints source-mapped legal documents and review revisions", a
     const review = await project.addReview("motion", {
       revision: "HEAD",
       blockId: historical.document.blocks[1].id,
-      range: { start: 0, end: 4 },
+      range: { start: 0, length: 4 },
       author: { name: "Reviewer" },
       message: "Check the title",
     });
@@ -967,7 +967,7 @@ test("project evaluates and applies canonical, Unicode-safe source patches", asy
       edits: [
         {
           start: bodyStart,
-          end: bodyStart + "body".length,
+          deleteCount: "body".length,
           expectedText: "body",
           replacement: "submission",
         },
@@ -994,7 +994,7 @@ test("project evaluates and applies canonical, Unicode-safe source patches", asy
       edits: [
         {
           start: emoji + 1,
-          end: emoji + 1,
+          deleteCount: 0,
           expectedText: "",
           replacement: "x",
         },

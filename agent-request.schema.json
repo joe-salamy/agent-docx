@@ -737,10 +737,11 @@
     "reviewRange": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["start", "end"],
+      "required": ["start", "length"],
+      "$comment": "The anchor length is a nonnegative length so an inverted range is structurally inexpressible; the runtime derives end = start + length.",
       "properties": {
         "start": { "type": "integer", "minimum": 0 },
-        "end": { "type": "integer", "minimum": 0 }
+        "length": { "type": "integer", "minimum": 0 }
       }
     },
     "reviewAdd": {

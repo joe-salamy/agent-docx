@@ -115,13 +115,13 @@ const main = async () => {
       edits: [
         {
           start: replacementStart,
-          end: replacementStart + replacementTarget.length,
+          deleteCount: replacementTarget.length,
           expectedText: replacementTarget,
           replacement,
         },
         {
           start: base.source.length,
-          end: base.source.length,
+          deleteCount: 0,
           expectedText: "",
           replacement: insert,
         },
@@ -163,7 +163,7 @@ const main = async () => {
     const reviewed = await project.addReview("motion", {
       revision: applied.revision.id,
       blockId: reviewBlock.id,
-      range: { start: 0, end: reviewEnd },
+      range: { start: 0, length: reviewEnd },
       author: { name: "Reviewer" },
       message: "Review unchanged heading",
     });

@@ -51,7 +51,7 @@ export type AgentFontSet = AgentParams & {
   italicPath?: string;
   boldItalicPath?: string;
 };
-export type AgentRange = AgentParams & { start: number; end: number };
+export type AgentRange = AgentParams & { start: number; length: number };
 export type AgentConfigUpdate = AgentParams & DocumentConfigUpdate;
 export type AgentRendererOptions = AgentParams & {
   renderer?: "deterministic" | "word" | "libreoffice" | "compare";
@@ -1114,15 +1114,15 @@ export const assertSourcePatch = (value: unknown): void => {
     const record = assertRecord(edit, "patch edit");
     assertKeys(
       record,
-      ["start", "end", "expectedText", "replacement"],
+      ["start", "deleteCount", "expectedText", "replacement"],
       "patch edit",
     );
     requiredInteger(record, "start");
-    requiredInteger(record, "end");
-    if ((record.end as number) < (record.start as number))
+    requiredInteger(record, "deleteCount");
+    if ((record.deleteCount as number) < 0)
       throw new AgentDocxError(
         "PATCH_INVALID",
-        "patch edit end must not precede start",
+        "patch edit deleteCount must not be negative",
       );
     requiredText(record, "expectedText", "patch edit");
     requiredText(record, "replacement", "patch edit");
@@ -1507,14 +1507,15 @@ export const assertResolutionDecisions = (value: unknown): void => {
 
 export const assertReviewRange = (value: unknown): void => {
   const range = assertRecord(value, "range");
-  assertKeys(range, ["start", "end"], "range");
+  assertKeys(range, ["start", "length"], "range");
   const start = requiredInteger(range, "start");
-  const end = requiredInteger(range, "end");
-  if (end < start)
+  const length = requiredInteger(range, "length");
+  if (length < 0)
     throw new AgentDocxError(
       "INVALID_ARGUMENT",
-      "Review range end must not precede start",
+      "Review range length must not be negative",
     );
+  void start;
 };
 
 export const assertFilingSetId = (value: Record<string, unknown>): void => {

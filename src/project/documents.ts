@@ -1107,26 +1107,28 @@ export const evaluatePatch = async (
     let candidate = material.source;
     let previousEnd = -1;
     for (const edit of patch.edits) {
+      const end = edit.start + edit.deleteCount;
       if (
         !Number.isInteger(edit.start) ||
-        !Number.isInteger(edit.end) ||
+        !Number.isInteger(edit.deleteCount) ||
         edit.start < 0 ||
-        edit.end < edit.start ||
+        edit.deleteCount < 0 ||
+        !Number.isSafeInteger(end) ||
         edit.start < previousEnd ||
         !isUtf16Boundary(material.source, edit.start) ||
-        !isUtf16Boundary(material.source, edit.end) ||
-        material.source.slice(edit.start, edit.end) !== edit.expectedText
+        !isUtf16Boundary(material.source, end) ||
+        material.source.slice(edit.start, end) !== edit.expectedText
       )
         throw new AgentDocxError(
           "PATCH_INVALID",
           "Patch edits must be sorted, non-overlapping, code-point-safe, and current",
         );
-      previousEnd = edit.end;
+      previousEnd = edit.start + edit.deleteCount;
     }
     for (const edit of [...patch.edits].sort(
       (left, right) => right.start - left.start,
     ))
-      candidate = `${candidate.slice(0, edit.start)}${edit.replacement}${candidate.slice(edit.end)}`;
+      candidate = `${candidate.slice(0, edit.start)}${edit.replacement}${candidate.slice(edit.start + edit.deleteCount)}`;
     const sourceObject = objectId(candidate);
     const candidateSnapshot: ProjectSnapshot = {
       ...baseSnapshot,
@@ -1199,7 +1201,7 @@ export const evaluatePatch = async (
         patch.edits.some(
           (edit) =>
             edit.start <= block.position.end.offset &&
-            edit.end >= block.position.start.offset,
+            edit.start + edit.deleteCount >= block.position.start.offset,
         ),
       )
       .map((block) => {
@@ -1347,29 +1349,31 @@ export const applyPatch = async (
       throw new AgentDocxError("PATCH_INVALID", "Patch identity is invalid");
     let previousEnd = -1;
     for (const edit of patch.edits) {
+      const end = edit.start + edit.deleteCount;
       if (
         typeof edit.expectedText !== "string" ||
         typeof edit.replacement !== "string" ||
         !Number.isInteger(edit.start) ||
-        !Number.isInteger(edit.end) ||
+        !Number.isInteger(edit.deleteCount) ||
         edit.start < 0 ||
-        edit.end < edit.start ||
+        edit.deleteCount < 0 ||
+        !Number.isSafeInteger(end) ||
         edit.start < previousEnd ||
         !isUtf16Boundary(snapshot.source, edit.start) ||
-        !isUtf16Boundary(snapshot.source, edit.end) ||
-        snapshot.source.slice(edit.start, edit.end) !== edit.expectedText
+        !isUtf16Boundary(snapshot.source, end) ||
+        snapshot.source.slice(edit.start, end) !== edit.expectedText
       )
         throw new AgentDocxError(
           "PATCH_INVALID",
           "Patch edits are invalid, stale, or split a Unicode code point",
         );
-      previousEnd = edit.end;
+      previousEnd = edit.start + edit.deleteCount;
     }
     let source = snapshot.source;
     for (const edit of [...patch.edits].sort(
       (left, right) => right.start - left.start,
     ))
-      source = `${source.slice(0, edit.start)}${edit.replacement}${source.slice(edit.end)}`;
+      source = `${source.slice(0, edit.start)}${edit.replacement}${source.slice(edit.start + edit.deleteCount)}`;
     const sourceObject = objectId(source);
     const candidateSnapshot: ProjectSnapshot = {
       ...snapshot,

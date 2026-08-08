@@ -15,7 +15,7 @@ export type SourcePatch = {
   baseRevision: RevisionId;
   edits: readonly {
     start: number;
-    end: number;
+    deleteCount: number;
     expectedText: string;
     replacement: string;
   }[];

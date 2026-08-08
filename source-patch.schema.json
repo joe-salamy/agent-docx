@@ -19,10 +19,11 @@
     "edit": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["start", "end", "expectedText", "replacement"],
+      "required": ["start", "deleteCount", "expectedText", "replacement"],
+      "$comment": "The deletion length is expressed as a nonnegative deleteCount so an inverted range is structurally inexpressible; the runtime derives end = start + deleteCount.",
       "properties": {
         "start": { "type": "integer", "minimum": 0 },
-        "end": { "type": "integer", "minimum": 0 },
+        "deleteCount": { "type": "integer", "minimum": 0 },
         "expectedText": { "type": "string" },
         "replacement": { "type": "string" }
       }

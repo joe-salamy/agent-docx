@@ -325,6 +325,15 @@ class Project implements AgentDocxProject {
           "REVISION_CONFLICT",
           "Review must target the current head",
         );
+      // The public input contract is {start, length}; end is derived here so
+      // an inverted range is structurally inexpressible.
+      const range =
+        input.range === undefined
+          ? undefined
+          : {
+              start: input.range.start,
+              end: input.range.start + input.range.length,
+            };
       const material = await materialFor(opened, record);
       const block = [
         ...material.document.blocks,
@@ -336,29 +345,29 @@ class Project implements AgentDocxProject {
           `Block not found: ${input.blockId}`,
         );
       if (
-        input.range &&
-        (!isUtf16Boundary(visibleTextForBlock(block), input.range.start) ||
-          !isUtf16Boundary(visibleTextForBlock(block), input.range.end) ||
-          input.range.start > input.range.end)
+        range &&
+        (!isUtf16Boundary(visibleTextForBlock(block), range.start) ||
+          !isUtf16Boundary(visibleTextForBlock(block), range.end) ||
+          range.start > range.end)
       )
         throw new AgentDocxError(
           "ANNOTATION_CONFLICT",
           "Review range must be a code-point-safe range within its block",
         );
-      if (input.range && input.range.start >= input.range.end)
+      if (range && range.start >= range.end)
         throw new AgentDocxError(
           "ANNOTATION_CONFLICT",
           "Review text range must select at least one code point",
         );
       if (
-        input.range &&
+        range &&
         material.annotations.some(
           (annotation) =>
             annotation.status === "open" &&
             annotation.blockId === input.blockId &&
             annotation.range !== undefined &&
-            input.range!.start < annotation.range.end &&
-            annotation.range.start < input.range!.end,
+            range!.start < annotation.range.end &&
+            annotation.range.start < range!.end,
         )
       )
         throw new AgentDocxError(
@@ -366,7 +375,7 @@ class Project implements AgentDocxProject {
           "Open review text ranges must not overlap within a block",
         );
       if (
-        input.range &&
+        range &&
         !["paragraph", "blockquote", "heading", "numbered-paragraph"].includes(
           block.kind,
         ) &&
@@ -389,7 +398,7 @@ class Project implements AgentDocxProject {
       const annotation: ReviewAnnotation = {
         id: annotationId,
         blockId: input.blockId,
-        ...(input.range ? { range: input.range } : {}),
+        ...(range ? { range } : {}),
         author: input.author,
         createdAt: this.ctx.clock().toISOString(),
         message: input.message,

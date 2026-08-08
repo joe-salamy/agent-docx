@@ -63,6 +63,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["start", "end", "text"],
+      "$comment": "Change sets are produced by the runtime (and echoed back for revision.resolve); end >= start is runtime-enforced, not schema-expressible in plain draft-2020-12.",
       "properties": {
         "start": { "type": "integer", "minimum": 0 },
         "end": { "type": "integer", "minimum": 0 },

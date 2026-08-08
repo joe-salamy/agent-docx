@@ -190,7 +190,7 @@ export type ResolveChangesInput = {
 export type AddReviewInput = {
   revision: RevisionId | "HEAD";
   blockId: BlockId;
-  range?: { start: number; end: number };
+  range?: { start: number; length: number };
   author: Actor;
   message: string;
 };
