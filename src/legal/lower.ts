@@ -15,7 +15,6 @@ import type {
   LegalListBlock,
 } from "./model.js";
 
-
 const asTextFlowBlock = (
   kind: TextFlowBlock["kind"],
   paragraph:
@@ -28,11 +27,7 @@ const asTextFlowBlock = (
   semantic: Partial<
     Pick<
       TextFlowBlock,
-      | "legalKind"
-      | "listOrdered"
-      | "listLevel"
-      | "numberedLevel"
-      | "listStart"
+      "legalKind" | "listOrdered" | "listLevel" | "numberedLevel" | "listStart"
     >
   > = {},
 ): TextFlowBlock => {
@@ -95,6 +90,7 @@ const mergedCell = (paragraphs: readonly InlineParagraph[]): FlowTableCell => {
       ...(run.link ? { link: run.link } : {}),
       ...(run.referenceTarget ? { referenceTarget: run.referenceTarget } : {}),
       ...(run.strikethrough ? { strikethrough: true } : {}),
+      ...(run.authority ? { authority: run.authority } : {}),
     })),
     normalizedText: mergedRuns
       .map((run) => `${run.text}${run.hardBreakAfter ? "\n" : ""}`)
@@ -102,6 +98,7 @@ const mergedCell = (paragraphs: readonly InlineParagraph[]): FlowTableCell => {
     sourceSegments: segments,
     position,
     alignment: null,
+    footnoteRefs: paragraphs.flatMap((paragraph) => paragraph.footnoteRefs),
   };
 };
 
@@ -175,7 +172,9 @@ const appendBlock = (
       kind: "table",
       position: block.position,
       alignments: block.align,
-      rows: block.rows.map((row) => row.map((cell) => mergedCell(cell.paragraphs))),
+      rows: block.rows.map((row) =>
+        row.map((cell) => mergedCell(cell.paragraphs)),
+      ),
       legalBlockId: block.id,
       legalKind: "table",
     } as FlowBlock);
@@ -225,11 +224,13 @@ const appendBlock = (
     );
     blocks.push(cover);
     paragraphs.push(cover);
-    for (const child of block.blocks) appendBlock(child, document, blocks, paragraphs);
+    for (const child of block.blocks)
+      appendBlock(child, document, blocks, paragraphs);
     return;
   }
   if (block.kind === "length-exclusion") {
-    for (const child of block.blocks) appendBlock(child, document, blocks, paragraphs);
+    for (const child of block.blocks)
+      appendBlock(child, document, blocks, paragraphs);
     return;
   }
   if (block.kind === "caption") {
@@ -258,7 +259,9 @@ const appendBlock = (
     return;
   }
   if (block.kind === "signature") {
-    const counsel = document.metadata.counsel.find((entry) => entry.id === block.counselId);
+    const counsel = document.metadata.counsel.find(
+      (entry) => entry.id === block.counselId,
+    );
     const flow = asTextFlowBlock(
       "paragraph",
       {
@@ -355,7 +358,10 @@ const appendBlock = (
         segments: block.segments,
         runs: [
           {
-            text: block.kind === "toc" ? "Table of Contents" : "Table of Authorities",
+            text:
+              block.kind === "toc"
+                ? "Table of Contents"
+                : "Table of Authorities",
             bold: true,
             italic: false,
             strikethrough: false,
@@ -373,7 +379,9 @@ const appendBlock = (
   }
 };
 
-const lowerFootnote = (footnote: FootnoteDefinition): FlowFootnoteDefinition => {
+const lowerFootnote = (
+  footnote: FootnoteDefinition,
+): FlowFootnoteDefinition => {
   const lowered = footnote.paragraphs.map((paragraph) =>
     asTextFlowBlock("footnote", paragraph, undefined, footnote.id, {
       legalKind: "footnote",
@@ -387,14 +395,20 @@ const lowerFootnote = (footnote: FootnoteDefinition): FlowFootnoteDefinition => 
   };
 };
 
-export const lowerLegalDocument = (document: LegalDocument): NormalizedDocument => {
+export const lowerLegalDocument = (
+  document: LegalDocument,
+): NormalizedDocument => {
   const blocks: FlowBlock[] = [];
   const paragraphs: TextFlowBlock[] = [];
-  for (const block of document.blocks) appendBlock(block, document, blocks, paragraphs);
+  for (const block of document.blocks)
+    appendBlock(block, document, blocks, paragraphs);
   return {
     blocks,
     footnotes: new Map(
-      document.footnotes.map((footnote) => [footnote.label, lowerFootnote(footnote)]),
+      document.footnotes.map((footnote) => [
+        footnote.label,
+        lowerFootnote(footnote),
+      ]),
     ),
     paragraphs,
   };

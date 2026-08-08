@@ -1,12 +1,7 @@
 import { AgentDocxError } from "../types.js";
-import type {
-  JsonValue,
-  SourcePosition,
-} from "../types.js";
-import type {
-  DeterministicResult,
-  FilingKind,
-} from "../measurement.js";
+import type { JsonValue, SourcePosition } from "../types.js";
+import { hasOnlyKeys } from "../json-contract.js";
+import type { DeterministicResult, FilingKind } from "../measurement.js";
 import type {
   LegalBlock,
   LegalDocument,
@@ -168,7 +163,7 @@ export const builtInRulePacks: Readonly<Record<RulePackId, BuiltInRulePack>> = {
               monospacedLines: 1300,
               complianceCertificateRequired: true,
             },
-            },
+          },
         },
       },
       {
@@ -185,7 +180,7 @@ export const builtInRulePacks: Readonly<Record<RulePackId, BuiltInRulePack>> = {
               monospacedLines: 650,
               complianceCertificateRequired: true,
             },
-            },
+          },
         },
       },
       {
@@ -368,13 +363,12 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const userPackError = (label: string, message: string): never => {
   throw new AgentDocxError("RULE_PACK_INVALID", `${label}: ${message}`);
 };
-const exactKeys = (
+const assertOnlyKeys = (
   value: Record<string, unknown>,
   keys: readonly string[],
   label: string,
 ): void => {
-  const allowed = new Set(keys);
-  if (Object.keys(value).some((key) => !allowed.has(key)))
+  if (!hasOnlyKeys(value, keys))
     userPackError(label, "contains unknown properties");
 };
 const requiredKeys = (
@@ -415,7 +409,7 @@ const validateRuleCheckParams = (
   if (!isRecord(value)) return userPackError(label, "params must be an object");
   switch (kind) {
     case "length-alternative": {
-      exactKeys(value, ["byFilingKind"], label);
+      assertOnlyKeys(value, ["byFilingKind"], label);
       requiredKeys(value, ["byFilingKind"], label);
       if (!isRecord(value.byFilingKind))
         return userPackError(label, "byFilingKind must be an object");
@@ -434,7 +428,7 @@ const validateRuleCheckParams = (
           userPackError(label, `unknown filing kind: ${filingKind}`);
         if (!isRecord(raw))
           return userPackError(label, `${filingKind} must be an object`);
-        exactKeys(
+        assertOnlyKeys(
           raw,
           [
             "pages",
@@ -465,7 +459,7 @@ const validateRuleCheckParams = (
       return { byFilingKind: alternatives } as RuleCheckParams;
     }
     case "page-size":
-      exactKeys(value, ["widthTwips", "heightTwips"], label);
+      assertOnlyKeys(value, ["widthTwips", "heightTwips"], label);
       requiredKeys(value, ["widthTwips", "heightTwips"], label);
       if (
         !positiveInteger(value.widthTwips) ||
@@ -474,13 +468,17 @@ const validateRuleCheckParams = (
         userPackError(label, "page dimensions must be positive integers");
       return value as RuleCheckParams;
     case "margin-minimum":
-      exactKeys(value, ["minimumTwips"], label);
+      assertOnlyKeys(value, ["minimumTwips"], label);
       requiredKeys(value, ["minimumTwips"], label);
       if (!nonNegativeInteger(value.minimumTwips))
         userPackError(label, "minimumTwips must be a non-negative integer");
       return value as RuleCheckParams;
     case "typeface":
-      exactKeys(value, ["minimumTwips", "mode", "requireVerifiedPitch"], label);
+      assertOnlyKeys(
+        value,
+        ["minimumTwips", "mode", "requireVerifiedPitch"],
+        label,
+      );
       requiredKeys(value, ["minimumTwips", "mode"], label);
       if (!nonNegativeInteger(value.minimumTwips))
         userPackError(label, "minimumTwips must be a non-negative integer");
@@ -493,7 +491,7 @@ const validateRuleCheckParams = (
         userPackError(label, "requireVerifiedPitch must be boolean");
       return value as RuleCheckParams;
     case "line-spacing":
-      exactKeys(value, ["doubleSpacedOrdinary"], label);
+      assertOnlyKeys(value, ["doubleSpacedOrdinary"], label);
       if (
         value.doubleSpacedOrdinary !== undefined &&
         typeof value.doubleSpacedOrdinary !== "boolean"
@@ -501,13 +499,13 @@ const validateRuleCheckParams = (
         userPackError(label, "doubleSpacedOrdinary must be boolean");
       return value as RuleCheckParams;
     case "counted-lines-maximum":
-      exactKeys(value, ["perPageMaximum"], label);
+      assertOnlyKeys(value, ["perPageMaximum"], label);
       requiredKeys(value, ["perPageMaximum"], label);
       if (!positiveInteger(value.perPageMaximum))
         userPackError(label, "perPageMaximum must be a positive integer");
       return value as RuleCheckParams;
     case "required-metadata": {
-      exactKeys(
+      assertOnlyKeys(
         value,
         ["fields", "requireCounselComplete", "requireComplianceCertificate"],
         label,
@@ -526,7 +524,7 @@ const validateRuleCheckParams = (
       return { ...value, fields } as RuleCheckParams;
     }
     case "required-block": {
-      exactKeys(value, ["kinds"], label);
+      assertOnlyKeys(value, ["kinds"], label);
       requiredKeys(value, ["kinds"], label);
       const kinds = stringArray(value.kinds, `${label}.kinds`, false);
       for (const blockKind of kinds)
@@ -538,7 +536,7 @@ const validateRuleCheckParams = (
       return { kinds } as RuleCheckParams;
     }
     case "required-footer":
-      exactKeys(value, ["requiredTokens"], label);
+      assertOnlyKeys(value, ["requiredTokens"], label);
       requiredKeys(value, ["requiredTokens"], label);
       return {
         requiredTokens: stringArray(
@@ -548,8 +546,43 @@ const validateRuleCheckParams = (
         ),
       } as RuleCheckParams;
     case "reference-integrity":
-      exactKeys(value, [], label);
+      assertOnlyKeys(value, [], label);
       return {} as RuleCheckParams;
+  }
+};
+
+const validEffectiveDate = (value: unknown): value is string => {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value))
+    return false;
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
+  if (month < 1 || month > 12) return false;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [
+    31,
+    leap ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ][month - 1]!;
+  return day >= 1 && day <= daysInMonth;
+};
+
+const validSourceUrl = (value: unknown): value is string => {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname.length > 0;
+  } catch {
+    return false;
   }
 };
 
@@ -559,7 +592,7 @@ export const validateUserRulePack = (
 ): UserRulePack => {
   if (!isRecord(value)) return userPackError(label, "pack must be an object");
   const pack = value as Record<string, unknown>;
-  exactKeys(
+  assertOnlyKeys(
     pack,
     [
       "id",
@@ -577,12 +610,9 @@ export const validateUserRulePack = (
     !/^[a-z0-9][a-z0-9@.-]{0,127}$/.test(pack.id)
   )
     userPackError(label, "id is invalid");
-  if (typeof pack.sourceUrl !== "string" || !/^https:\/\//.test(pack.sourceUrl))
+  if (!validSourceUrl(pack.sourceUrl))
     userPackError(label, "sourceUrl is invalid");
-  if (
-    typeof pack.effectiveDate !== "string" ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(pack.effectiveDate)
-  )
+  if (!validEffectiveDate(pack.effectiveDate))
     userPackError(label, "effectiveDate is invalid");
   if (
     typeof pack.sourceSha256 !== "string" ||
@@ -605,7 +635,7 @@ export const validateUserRulePack = (
       if (!isRecord(raw))
         return userPackError(checkLabel, "check must be an object");
       const check = raw as Record<string, unknown>;
-      exactKeys(
+      assertOnlyKeys(
         check,
         ["id", "kind", "citation", "predicate", "params"],
         checkLabel,
@@ -684,16 +714,92 @@ type CountedEntry = {
   position: SourcePosition;
 };
 
-const textFor = (block: LegalBlock): string => visibleTextForBlock(block);
-
 const flattenBlocks = (blocks: readonly LegalBlock[]): LegalBlock[] => {
   const flattened: LegalBlock[] = [];
-  for (const block of blocks) {
+  const pending = [...blocks].reverse();
+  while (pending.length > 0) {
+    const block = pending.pop()!;
     flattened.push(block);
     if (block.kind === "exhibit" || block.kind === "length-exclusion")
-      flattened.push(...flattenBlocks(block.blocks));
+      for (let index = block.blocks.length - 1; index >= 0; index--)
+        pending.push(block.blocks[index]!);
   }
   return flattened;
+};
+const resolvedComplianceCertificate = (
+  document: LegalDocument,
+): {
+  certificate:
+    | Extract<
+        LegalDocument["metadata"]["certificates"][number],
+        { kind: "compliance" }
+      >
+    | undefined;
+  block: Extract<LegalBlock, { kind: "certificate" }> | undefined;
+} => {
+  const certificate = document.metadata.certificates.find(
+    (
+      entry,
+    ): entry is Extract<
+      LegalDocument["metadata"]["certificates"][number],
+      { kind: "compliance" }
+    > => entry.kind === "compliance",
+  );
+  const block = certificate
+    ? flattenBlocks(document.blocks).find(
+        (
+          candidate,
+        ): candidate is Extract<LegalBlock, { kind: "certificate" }> =>
+          candidate.kind === "certificate" &&
+          candidate.certificateId === certificate.id,
+      )
+    : undefined;
+  return { certificate, block };
+};
+
+const referencedFootnoteLabels = (
+  document: LegalDocument,
+): ReadonlySet<string> => {
+  const direct = new Set<string>();
+  const pending = [...document.blocks];
+  while (pending.length > 0) {
+    const block = pending.pop()!;
+    if ("runs" in block)
+      for (const run of block.runs)
+        if (run.footnoteId) direct.add(run.footnoteId);
+    if (block.kind === "list") {
+      for (const item of block.items) {
+        for (const paragraph of item.paragraphs)
+          for (const run of paragraph.runs)
+            if (run.footnoteId) direct.add(run.footnoteId);
+        pending.push(...item.children);
+      }
+    } else if (block.kind === "table") {
+      for (const row of block.rows)
+        for (const cell of row)
+          for (const paragraph of cell.paragraphs)
+            for (const run of paragraph.runs)
+              if (run.footnoteId) direct.add(run.footnoteId);
+    } else if (block.kind === "exhibit" || block.kind === "length-exclusion") {
+      pending.push(...block.blocks);
+    }
+  }
+  const definitions = new Map(
+    document.footnotes.map((footnote) => [footnote.label, footnote]),
+  );
+  const referenced = new Set<string>();
+  const queue = [...direct];
+  while (queue.length > 0) {
+    const label = queue.pop()!;
+    if (referenced.has(label)) continue;
+    referenced.add(label);
+    const definition = definitions.get(label);
+    if (!definition) continue;
+    for (const paragraph of definition.paragraphs)
+      for (const run of paragraph.runs)
+        if (run.footnoteId) queue.push(run.footnoteId);
+  }
+  return referenced;
 };
 
 const countedEntries = (document: LegalDocument): readonly CountedEntry[] => {
@@ -708,35 +814,42 @@ const countedEntries = (document: LegalDocument): readonly CountedEntry[] => {
     "sectionbreak",
     "thematic-break",
   ]);
-  const visit = (
-    blocks: readonly LegalBlock[],
-    inheritedExclusion = false,
-  ): void => {
-    for (const block of blocks) {
-      const excludedHere =
-        inheritedExclusion || block.kind === "length-exclusion";
-      if (!excludedHere && !excluded.has(block.kind))
-        entries.push({
-          id: block.id,
-          kind: block.kind,
-          text: textFor(block),
-          position: block.position,
+  const pending = document.blocks
+    .map((block) => ({
+      block,
+      inheritedExclusion: false,
+    }))
+    .reverse();
+  while (pending.length > 0) {
+    const { block, inheritedExclusion } = pending.pop()!;
+    const excludedHere =
+      inheritedExclusion || block.kind === "length-exclusion";
+    if (!excludedHere && block.kind !== "exhibit" && !excluded.has(block.kind))
+      entries.push({
+        id: block.id,
+        kind: block.kind,
+        text: visibleTextForBlock(block, document.metadata),
+        position: block.position,
+      });
+    if (block.kind === "exhibit")
+      for (let index = block.blocks.length - 1; index >= 0; index--)
+        pending.push({
+          block: block.blocks[index]!,
+          inheritedExclusion: excludedHere,
         });
-      if (block.kind === "exhibit") visit(block.blocks, excludedHere);
-      if (block.kind === "length-exclusion") visit(block.blocks, true);
-    }
-  };
-  visit(document.blocks);
+    if (block.kind === "length-exclusion")
+      for (let index = block.blocks.length - 1; index >= 0; index--)
+        pending.push({ block: block.blocks[index]!, inheritedExclusion: true });
+  }
+  const referenced = referencedFootnoteLabels(document);
   for (const footnote of document.footnotes)
-    entries.push({
-      id: footnote.id,
-      kind: "footnote",
-      text: footnote.paragraphs
-        .flatMap((paragraph) => paragraph.runs)
-        .map((run) => run.text)
-        .join(" "),
-      position: footnote.position,
-    });
+    if (referenced.has(footnote.label))
+      entries.push({
+        id: footnote.id,
+        kind: "footnote",
+        text: visibleTextForBlock(footnote, document.metadata),
+        position: footnote.position,
+      });
   return entries;
 };
 
@@ -1051,7 +1164,6 @@ const builtInCheck = (
   return check;
 };
 
-
 const applyFrapChecks = (
   document: LegalDocument,
   input: ValidationInput,
@@ -1069,12 +1181,10 @@ const applyFrapChecks = (
     pack,
     "length-alternative",
     (params) =>
-      "byFilingKind" in params &&
-      params.byFilingKind[filingKind] !== undefined,
+      "byFilingKind" in params && params.byFilingKind[filingKind] !== undefined,
   );
-  const configuredLimits = (
-    lengthCheck.params as UserRulePackLengthAlternative
-  ).byFilingKind[filingKind];
+  const configuredLimits = (lengthCheck.params as UserRulePackLengthAlternative)
+    .byFilingKind[filingKind];
   if (!configuredLimits)
     throw new AgentDocxError(
       "INTERNAL_ERROR",
@@ -1087,15 +1197,9 @@ const applyFrapChecks = (
   };
   const requiresComplianceCertificate =
     configuredLimits.complianceCertificateRequired === true;
-  const compliance = document.metadata.certificates.find(
-    (certificate) => certificate.kind === "compliance",
-  );
-  const complianceBlock = compliance
-    ? flattenBlocks(document.blocks).find(
-        (block) =>
-          block.kind === "certificate" && block.certificateId === compliance.id,
-      )
-    : undefined;
+  const complianceResolution = resolvedComplianceCertificate(document);
+  const compliance = complianceResolution.certificate;
+  const complianceBlock = complianceResolution.block;
   const alternatives = [
     {
       name: "pages",
@@ -1136,8 +1240,7 @@ const applyFrapChecks = (
     profile?.page.widthTwips === pageSize.widthTwips &&
     profile.page.heightTwips === pageSize.heightTwips;
   const marginCheck = builtInCheck(pack, "margin-minimum");
-  const minimumMargin =
-    marginCheck.params as UserRulePackMarginMinimum;
+  const minimumMargin = marginCheck.params as UserRulePackMarginMinimum;
   const margins = profile?.page.marginsTwips;
   const marginPasses = margins
     ? Object.values(margins).every(
@@ -1154,8 +1257,7 @@ const applyFrapChecks = (
       "mode" in params &&
       params.mode === (monospaced ? "monospaced" : "proportional"),
   );
-  const typefaceParameters =
-    typefaceCheck.params as UserRulePackTypeface;
+  const typefaceParameters = typefaceCheck.params as UserRulePackTypeface;
   const typeface = typefaceStatus(
     measurement,
     typefaceParameters.minimumTwips,
@@ -1251,17 +1353,15 @@ const applyCandChecks = (
       "byFilingKind" in params &&
       params.byFilingKind[selectedLengthKind] !== undefined,
   );
-  const lengthParameters = (
-    lengthCheck.params as UserRulePackLengthAlternative
-  ).byFilingKind[selectedLengthKind];
+  const lengthParameters = (lengthCheck.params as UserRulePackLengthAlternative)
+    .byFilingKind[selectedLengthKind];
   if (!lengthParameters?.pages)
     throw new AgentDocxError(
       "INTERNAL_ERROR",
       `Built-in rule pack ${pack.id} has no page limit for ${selectedLengthKind}`,
     );
   const typefaceCheck = builtInCheck(pack, "typeface");
-  const typefaceParameters =
-    typefaceCheck.params as UserRulePackTypeface;
+  const typefaceParameters = typefaceCheck.params as UserRulePackTypeface;
   const typeface = typefaceStatus(
     measurement,
     typefaceParameters.minimumTwips,
@@ -1274,22 +1374,18 @@ const applyCandChecks = (
   const visualLines = measurement?.deterministic.visualLinesByPage;
   const lines = countedLines ?? visualLines ?? null;
   const linesCheck = builtInCheck(pack, "counted-lines-maximum");
-  const linesParameters =
-    linesCheck.params as UserRulePackCountedLinesMaximum;
+  const linesParameters = linesCheck.params as UserRulePackCountedLinesMaximum;
   const linesStatus =
     lines === null
       ? "unknown"
-      : lines.every(
-            (lineCount) => lineCount <= linesParameters.perPageMaximum,
-          )
+      : lines.every((lineCount) => lineCount <= linesParameters.perPageMaximum)
         ? "pass"
         : "fail";
   const metadataCheck = builtInCheck(pack, "required-metadata");
   const metadataParameters =
     metadataCheck.params as UserRulePackRequiredMetadata;
   const missingMetadata = metadataParameters.fields.flatMap((field) => {
-    const value =
-      document.metadata[field as keyof typeof document.metadata];
+    const value = document.metadata[field as keyof typeof document.metadata];
     return typeof value === "string" && value.trim().length > 0 ? [] : [field];
   });
   const incompleteCounsel = document.metadata.counsel
@@ -1303,8 +1399,7 @@ const applyCandChecks = (
     )
     .map((counsel) => counsel.id);
   const footerCheck = builtInCheck(pack, "required-footer");
-  const footerParameters =
-    footerCheck.params as UserRulePackRequiredFooter;
+  const footerParameters = footerCheck.params as UserRulePackRequiredFooter;
   const footer = document.chrome.footers?.default ?? "";
   const missingFooterTokens = footerParameters.requiredTokens.filter(
     (token) => !footer.includes(token),
@@ -1402,9 +1497,8 @@ const applyDataDrivenChecks = (
   const profile = measurement?.deterministic.profile;
   const counted = countedEntries(document);
   const words = wordsIn(counted);
-  const compliance = document.metadata.certificates.some(
-    (certificate) => certificate.kind === "compliance",
-  );
+  const compliance =
+    resolvedComplianceCertificate(document).block !== undefined;
   return pack.checks.map((check) => {
     switch (check.kind) {
       case "length-alternative": {
@@ -1726,6 +1820,25 @@ export const validateLegalDocument = (
   const customPacks = (input.customPacks ?? []).map((candidate, index) =>
     validateUserRulePack(candidate, `customPacks[${index}]`),
   );
+  const packs = pack ? [pack, ...customPacks] : [...customPacks];
+  const packIds = new Set<string>();
+  const checkIds = new Set<string>();
+  for (const candidate of packs) {
+    if (packIds.has(candidate.id))
+      throw new AgentDocxError(
+        "RULE_PACK_INVALID",
+        `Duplicate rule pack id: ${candidate.id}`,
+      );
+    packIds.add(candidate.id);
+    for (const check of candidate.checks) {
+      if (checkIds.has(check.id))
+        throw new AgentDocxError(
+          "RULE_PACK_INVALID",
+          `Duplicate rule check id across packs: ${check.id}`,
+        );
+      checkIds.add(check.id);
+    }
+  }
   const findings = [
     metadataFinding(document),
     structureFinding(document),

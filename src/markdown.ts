@@ -8,10 +8,7 @@ import {
   type SectionHeading,
   type SourcePosition,
 } from "./types.js";
-import type {
-  AuthorityReference,
-  LegalBlock,
-} from "./legal/model.js";
+import type { AuthorityReference, LegalBlock } from "./legal/model.js";
 type Node = {
   type: string;
   value?: string;
@@ -26,6 +23,7 @@ type Node = {
   identifier?: string;
   label?: string;
   url?: string;
+  title?: string | null;
 };
 export type NormalizedSourceSegment = {
   normalizedStart: number;
@@ -40,6 +38,8 @@ export type InlineRun = {
   italic: boolean;
   footnoteId?: string;
   literal?: boolean;
+  strikethrough?: boolean;
+  link?: { target: string; title?: string };
   authority?: AuthorityReference;
 };
 export type TextBlockKind =
@@ -229,6 +229,63 @@ const lineStartsFor = (markdown: string): number[] => {
     if (markdown.charCodeAt(i) === 10) starts.push(i + 1);
   return starts;
 };
+const isXml10CodePoint = (value: number): boolean =>
+  value === 0x09 ||
+  value === 0x0a ||
+  value === 0x0d ||
+  (value >= 0x20 && value <= 0xd7ff) ||
+  (value >= 0xe000 && value <= 0xfffd) ||
+  (value >= 0x10000 && value <= 0x10ffff);
+const xml10CodePointLabel = (value: number): string =>
+  `U+${value.toString(16).toUpperCase().padStart(4, "0")}`;
+const assertXml10Legal = (markdown: string): void => {
+  const lineStarts = lineStartsFor(markdown);
+  for (let offset = 0; offset < markdown.length; ) {
+    const first = markdown.charCodeAt(offset);
+    let codePoint = first;
+    let width = 1;
+    if (first >= 0xd800 && first <= 0xdbff) {
+      const second = markdown.charCodeAt(offset + 1);
+      if (second >= 0xdc00 && second <= 0xdfff) {
+        codePoint = 0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00);
+        width = 2;
+      }
+    }
+    if (
+      first >= 0xd800 &&
+      first <= 0xdfff &&
+      !(width === 2 && codePoint > 0xffff)
+    ) {
+      const label = xml10CodePointLabel(codePoint);
+      throw new AgentDocxError(
+        "UNSUPPORTED_MARKDOWN",
+        `Markdown contains XML-1.0-illegal code point ${label}`,
+        {
+          position: {
+            start: sourcePoint(offset, lineStarts),
+            end: sourcePoint(offset + width, lineStarts),
+          } as unknown as Record<string, never>,
+          codePoint: label,
+        },
+      );
+    }
+    if (!isXml10CodePoint(codePoint)) {
+      const label = xml10CodePointLabel(codePoint);
+      throw new AgentDocxError(
+        "UNSUPPORTED_MARKDOWN",
+        `Markdown contains XML-1.0-illegal code point ${label}`,
+        {
+          position: {
+            start: sourcePoint(offset, lineStarts),
+            end: sourcePoint(offset + width, lineStarts),
+          } as unknown as Record<string, never>,
+          codePoint: label,
+        },
+      );
+    }
+    offset += width;
+  }
+};
 const sourcePoint = (
   offset: number,
   lineStarts: readonly number[],
@@ -254,6 +311,23 @@ const sourceRange = (
   start: sourcePoint(start, lineStarts),
   end: sourcePoint(end, lineStarts),
 });
+const normalizeFootnoteLabel = (value: string): string =>
+  value.normalize("NFC").toLowerCase();
+
+const permittedLink = (url: string): boolean => {
+  try {
+    const parsed = new URL(url);
+    return (
+      (parsed.protocol === "http:" ||
+        parsed.protocol === "https:" ||
+        parsed.protocol === "mailto:") &&
+      parsed.hash.length === 0
+    );
+  } catch {
+    return false;
+  }
+};
+const MAX_NESTING_DEPTH = 100;
 
 const unsupported = (node: Node): never => {
   throw new AgentDocxError(
@@ -266,6 +340,7 @@ type InlineNormalization = {
   runs: InlineRun[];
   normalizedText: string;
   sourceSegments: NormalizedSourceSegment[];
+  footnoteRefs: string[];
 };
 
 function inline(
@@ -275,6 +350,7 @@ function inline(
   bold = false,
   italic = false,
   refs: string[] = [],
+  strikethrough = false,
 ): InlineNormalization {
   const runs: InlineRun[] = [];
   const sourceSegments: NormalizedSourceSegment[] = [];
@@ -365,62 +441,142 @@ function inline(
       case "text": {
         const value = node.value ?? "";
         const nodeStart = node.position?.start.offset;
+        const nodeEnd = node.position?.end.offset;
         const exact =
           nodeStart !== undefined &&
-          node.position?.end.offset !== undefined &&
-          markdown.slice(nodeStart, node.position.end.offset) === value;
-        let cursor = 0;
-        for (const match of value.matchAll(/\[\^([^\]]+)\]/g)) {
-          const start = match.index ?? 0;
-          if (start > cursor)
-            append(
-              value.slice(cursor, start),
-              node,
-              { bold, italic },
-              exact ? nodeStart + cursor : undefined,
-            );
-          const id = match[1]!.trim().toLowerCase();
-          refs.push(id);
-          append("⁎", node, { bold, italic, footnoteId: id });
-          cursor = start + match[0].length;
-        }
-        if (cursor < value.length)
+          nodeEnd !== undefined &&
+          markdown.slice(nodeStart, nodeEnd) === value;
+        if (
+          value === "" ||
+          nodeStart === undefined ||
+          nodeEnd === undefined ||
+          !exact
+        ) {
           append(
-            value.slice(cursor),
+            value,
             node,
-            { bold, italic },
-            exact ? nodeStart + cursor : undefined,
+            { bold, italic, strikethrough },
+            exact ? nodeStart : undefined,
           );
+          break;
+        }
+        // remark only emits footnoteReference nodes when a matching
+        // definition exists; scan the escape-preserving source slice so
+        // escaped `\[^x]` stays literal while real references are collected.
+        const source = markdown.slice(nodeStart, nodeEnd);
+        const footnotePattern = /(?<!\\)\[\^([^\]]+)\]/g;
+        let match: RegExpExecArray | null;
+        let valueCursor = 0;
+        while ((match = footnotePattern.exec(source))) {
+          const remaining = value.slice(valueCursor);
+          const at = remaining.indexOf(match[0]);
+          if (at < 0) break;
+          append(
+            remaining.slice(0, at),
+            node,
+            { bold, italic, strikethrough },
+            nodeStart + valueCursor,
+          );
+          const label = normalizeFootnoteLabel(match[0].slice(2, -1));
+          refs.push(label);
+          append(
+            "⁎",
+            node,
+            { bold, italic, strikethrough, footnoteId: label },
+            nodeStart + valueCursor + at,
+          );
+          valueCursor += at + match[0].length;
+        }
+        append(
+          value.slice(valueCursor),
+          node,
+          { bold, italic, strikethrough },
+          nodeStart + valueCursor,
+        );
         break;
       }
       case "strong":
         appendNested(
-          inline(node.children ?? [], markdown, lineStarts, true, italic, refs),
+          inline(
+            node.children ?? [],
+            markdown,
+            lineStarts,
+            true,
+            italic,
+            refs,
+            strikethrough,
+          ),
         );
         break;
       case "emphasis":
         appendNested(
-          inline(node.children ?? [], markdown, lineStarts, bold, true, refs),
+          inline(
+            node.children ?? [],
+            markdown,
+            lineStarts,
+            bold,
+            true,
+            refs,
+            strikethrough,
+          ),
         );
         break;
-      case "link":
+      case "link": {
+        const url = node.url ?? "";
+        if (!permittedLink(url))
+          throw new AgentDocxError(
+            "REFERENCE_INVALID",
+            `Unsupported link target: ${url}`,
+            { position: pos(node) as unknown as Record<string, never> },
+          );
+        const nested = inline(
+          node.children ?? [],
+          markdown,
+          lineStarts,
+          bold,
+          italic,
+          refs,
+          strikethrough,
+        );
+        for (const run of nested.runs)
+          run.link = {
+            target: url,
+            ...(node.title ? { title: node.title } : {}),
+          };
+        appendNested(nested);
+        break;
+      }
       case "delete":
         appendNested(
-          inline(node.children ?? [], markdown, lineStarts, bold, italic, refs),
+          inline(
+            node.children ?? [],
+            markdown,
+            lineStarts,
+            bold,
+            italic,
+            refs,
+            true,
+          ),
         );
         break;
       case "break":
-        append("\n", node, { bold, italic });
+        append("\n", node, { bold, italic, strikethrough });
         break;
       case "footnoteReference": {
-        if (!node.identifier) unsupported(node);
-        const id = node.identifier!.toLowerCase();
+        const identifier = node.identifier;
+        if (!identifier) return unsupported(node);
+        const id = normalizeFootnoteLabel(identifier);
         refs.push(id);
-        append("⁎", node, { bold, italic, footnoteId: id });
+        append("⁎", node, { bold, italic, strikethrough, footnoteId: id });
         break;
       }
       case "inlineCode":
-        append(node.value ?? "", node, { bold, italic, literal: true });
+        append(node.value ?? "", node, {
+          bold,
+          italic,
+          strikethrough,
+          literal: true,
+        });
         break;
       case "image":
       case "html":
@@ -430,9 +586,10 @@ function inline(
         unsupported(node);
     }
   }
-  return { runs, normalizedText, sourceSegments };
+  return { runs, normalizedText, sourceSegments, footnoteRefs: [...refs] };
 }
 export function normalizeMarkdown(markdown: string): NormalizedDocument {
+  assertXml10Legal(markdown);
   const root = unified()
     .use(remarkParse)
     .use(remarkGfm)
@@ -474,14 +631,26 @@ export function normalizeMarkdown(markdown: string): NormalizedDocument {
     node: Node,
     predicate: (candidate: Node) => boolean,
   ): Node | undefined => {
-    if (predicate(node)) return node;
-    for (const child of node.children ?? []) {
-      const found = firstDescendant(child, predicate);
-      if (found) return found;
+    const pending = [node];
+    while (pending.length > 0) {
+      const candidate = pending.pop()!;
+      if (predicate(candidate)) return candidate;
+      for (
+        let index = (candidate.children?.length ?? 0) - 1;
+        index >= 0;
+        index--
+      )
+        pending.push(candidate.children![index]!);
     }
     return undefined;
   };
-  const visit = (node: Node, context?: "blockquote" | "list") => {
+  const visit = (node: Node, context?: "blockquote" | "list", depth = 0) => {
+    if (depth > MAX_NESTING_DEPTH)
+      throw new AgentDocxError(
+        "UNSUPPORTED_MARKDOWN",
+        `Markdown nesting exceeds ${MAX_NESTING_DEPTH} levels`,
+        { position: pos(node) as unknown as Record<string, never> },
+      );
     switch (node.type) {
       case "paragraph":
         emit(node, context ?? "paragraph");
@@ -490,17 +659,20 @@ export function normalizeMarkdown(markdown: string): NormalizedDocument {
         emit(node, "heading", node.depth);
         break;
       case "blockquote":
-        for (const child of node.children ?? []) visit(child, "blockquote");
+        for (const child of node.children ?? [])
+          visit(child, "blockquote", depth + 1);
         break;
       case "list":
-        for (const item of node.children ?? []) visit(item, "list");
+        for (const item of node.children ?? []) visit(item, "list", depth + 1);
         break;
       case "listItem":
         for (const child of node.children ?? [])
-          visit(child, context ?? "list");
+          visit(child, context ?? "list", depth + 1);
         break;
       case "footnoteDefinition": {
-        const id = node.identifier?.toLowerCase();
+        const id = node.identifier
+          ? normalizeFootnoteLabel(node.identifier)
+          : undefined;
         if (!id || footnotes.has(id))
           throw new AgentDocxError(
             "UNSUPPORTED_MARKDOWN",
@@ -522,15 +694,32 @@ export function normalizeMarkdown(markdown: string): NormalizedDocument {
         break;
       }
       case "table": {
-        const alignments = node.align ?? [];
-        const rows = (node.children ?? []).map((row) =>
-          (row.children ?? []).map((cell, columnIndex): TableCell => {
+        const sourceRows = node.children ?? [];
+        const width = sourceRows.reduce(
+          (maximum, row) => Math.max(maximum, row.children?.length ?? 0),
+          0,
+        );
+        const alignments = Array.from(
+          { length: width },
+          (_, columnIndex) => node.align?.[columnIndex] ?? null,
+        );
+        const rows = sourceRows.map((row) => {
+          if (row.type !== "tableRow") return unsupported(row);
+          return Array.from({ length: width }, (_, columnIndex): TableCell => {
+            const cell = row.children?.[columnIndex];
+            if (!cell)
+              return {
+                runs: [],
+                normalizedText: "",
+                sourceSegments: [],
+                footnoteRefs: [],
+                position: pos(row),
+                alignment: alignments[columnIndex] ?? null,
+              };
             const offendingReference = firstDescendant(
               cell,
               (candidate) =>
-                candidate.type === "footnoteReference" ||
-                candidate.type === "image" ||
-                candidate.type === "html",
+                candidate.type === "image" || candidate.type === "html",
             );
             if (offendingReference) unsupported(offendingReference);
             const refs: string[] = [];
@@ -542,14 +731,13 @@ export function normalizeMarkdown(markdown: string): NormalizedDocument {
               false,
               refs,
             );
-            if (refs.length) unsupported(cell);
             return {
               ...normalized,
               position: pos(cell),
               alignment: alignments[columnIndex] ?? null,
             };
-          }),
-        );
+          });
+        });
         blocks.push({
           kind: "table",
           position: pos(node),
@@ -579,26 +767,50 @@ export function normalizeMarkdown(markdown: string): NormalizedDocument {
   for (const child of root.children ?? []) visit(child);
   const visited = new Set<string>();
   const validateDefinition = (id: string, source: TextFlowBlock) => {
-    const definition = footnotes.get(id);
-    if (!definition)
-      throw new AgentDocxError(
-        "UNSUPPORTED_MARKDOWN",
-        `Missing footnote definition: ${id}`,
-        { position: source.position as unknown as Record<string, never> },
-      );
-    if (visited.has(id)) return;
-    visited.add(id);
-    for (const block of definition.blocks)
-      for (const nested of block.footnoteRefs)
-        validateDefinition(nested, block);
+    const pending: Array<{ id: string; source: TextFlowBlock }> = [
+      { id, source },
+    ];
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      const definition = footnotes.get(current.id);
+      if (!definition)
+        throw new AgentDocxError(
+          "UNSUPPORTED_MARKDOWN",
+          `Missing footnote definition: ${current.id}`,
+          {
+            position: current.source.position as unknown as Record<
+              string,
+              never
+            >,
+          },
+        );
+      if (visited.has(current.id)) continue;
+      visited.add(current.id);
+      for (const block of definition.blocks)
+        for (const nested of block.footnoteRefs)
+          pending.push({ id: nested, source: block });
+    }
   };
-  for (const block of blocks)
+  for (const block of blocks) {
     if (
       block.kind !== "table" &&
       block.kind !== "thematic-break" &&
       block.kind !== "pagebreak"
     )
       for (const id of block.footnoteRefs) validateDefinition(id, block);
+    if (block.kind === "table")
+      for (const row of block.rows)
+        for (const cell of row)
+          for (const id of cell.footnoteRefs)
+            validateDefinition(id, {
+              kind: "paragraph",
+              runs: cell.runs,
+              normalizedText: cell.normalizedText,
+              sourceSegments: cell.sourceSegments,
+              position: cell.position,
+              footnoteRefs: cell.footnoteRefs,
+            });
+  }
   for (const [id, definition] of footnotes)
     for (const block of definition.blocks) validateDefinition(id, block);
   return { blocks, footnotes, paragraphs };

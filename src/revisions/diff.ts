@@ -21,7 +21,6 @@ import type {
   ContainerShell,
   RevisionDeltaRecord,
 } from "./types.js";
-export { visibleTextForBlock } from "../legal/visible-text.js";
 export type JsonObject = { readonly [key: string]: JsonValue };
 const compareText = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
@@ -270,18 +269,39 @@ const codePointTokens = (text: string): readonly TextToken[] => {
   }
   return tokens;
 };
+const MAX_DIFF_TOKENS = 50_000;
+const MAX_DIFF_TRACE_CELLS = 4_000_000;
+
+const enforceTokenBudget = (
+  oldTokens: readonly TextToken[],
+  newTokens: readonly TextToken[],
+): void => {
+  if (oldTokens.length + newTokens.length > MAX_DIFF_TOKENS)
+    throw new AgentDocxError(
+      "DIFF_TOO_LARGE",
+      `Revision diff exceeds the ${MAX_DIFF_TOKENS}-token budget`,
+    );
+};
 
 const equalTokenPairs = (
   oldTokens: readonly TextToken[],
   newTokens: readonly TextToken[],
 ): ReadonlyMap<number, number> => {
+  enforceTokenBudget(oldTokens, newTokens);
   const n = oldTokens.length;
   const m = newTokens.length;
   const max = n + m;
   const trace: Map<number, number>[] = [];
+  let traceCells = 0;
   let frontier = new Map<number, number>([[1, 0]]);
   let finalDepth = 0;
   for (let depth = 0; depth <= max; depth++) {
+    traceCells += frontier.size;
+    if (traceCells > MAX_DIFF_TRACE_CELLS)
+      throw new AgentDocxError(
+        "DIFF_TOO_LARGE",
+        `Revision diff exceeds the ${MAX_DIFF_TRACE_CELLS}-cell trace budget`,
+      );
     trace.push(new Map(frontier));
     for (let diagonal = -depth; diagonal <= depth; diagonal += 2) {
       const down = frontier.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
@@ -564,7 +584,10 @@ const containerShellSignature = (
     sourceTexts: shell.sourceRanges.map((range) => range.text),
   });
   if (serialized === undefined)
-    throw new AgentDocxError("INTERNAL_ERROR", "Cannot canonicalize container shell");
+    throw new AgentDocxError(
+      "INTERNAL_ERROR",
+      "Cannot canonicalize container shell",
+    );
   return serialized;
 };
 
@@ -613,20 +636,20 @@ const exactTextMapping = (
   let normalizedEnd = 0;
   let sourceEnd: number | undefined;
   for (const segment of block.segments) {
-    if (
-      segment.precision !== "exact" ||
-      segment.normalizedStart !== normalizedEnd
-    )
-      return null;
+    if (segment.normalizedStart !== normalizedEnd) return null;
     const width = segment.normalizedEnd - segment.normalizedStart;
+    const sourceWidth =
+      segment.position.end.offset - segment.position.start.offset;
     if (
       width < 0 ||
-      segment.position.end.offset - segment.position.start.offset !== width ||
+      sourceWidth < 0 ||
+      segment.sourceStartOffset !== segment.position.start.offset ||
+      (segment.precision === "exact" && sourceWidth !== width) ||
       (sourceEnd !== undefined && segment.sourceStartOffset !== sourceEnd)
     )
       return null;
     normalizedEnd = segment.normalizedEnd;
-    sourceEnd = segment.sourceStartOffset + width;
+    sourceEnd = segment.position.end.offset;
   }
   if (normalizedEnd !== text.length) return null;
   const first = block.segments[0];
@@ -639,9 +662,12 @@ const exactTextMapping = (
       if (offset === text.length) return finalSourceEnd;
       const segment = block.segments.find(
         (entry) =>
-          entry.normalizedStart <= offset && offset <= entry.normalizedEnd,
+          entry.normalizedStart <= offset && offset < entry.normalizedEnd,
       );
-      if (!segment || offset < segment.normalizedStart) return null;
+      if (!segment) return null;
+      if (offset === segment.normalizedStart)
+        return segment.position.start.offset;
+      if (offset === segment.normalizedEnd) return segment.position.end.offset;
       return segment.sourceStartOffset + (offset - segment.normalizedStart);
     },
   };
@@ -935,7 +961,7 @@ export const createChangeSet = (
         hasAncestor(next, headById, changedContainerIds)
       )
         continue;
-      const text = visibleBlock(next.block);
+      const text = visibleBlock(next.block, head.metadata);
       changes.push(
         withChangeId({
           kind: "insert-block",
@@ -955,7 +981,7 @@ export const createChangeSet = (
         hasAncestor(previous, baseById, changedContainerIds)
       )
         continue;
-      const text = visibleBlock(previous.block);
+      const text = visibleBlock(previous.block, base.metadata);
       changes.push(
         withChangeId({
           kind: "delete-block",
@@ -974,8 +1000,8 @@ export const createChangeSet = (
       previous.location.collection !== next.location.collection ||
       previous.location.parentId !== next.location.parentId ||
       previous.location.index !== next.location.index;
-    const oldText = visibleBlock(previous.block);
-    const newText = visibleBlock(next.block);
+    const oldText = visibleBlock(previous.block, base.metadata);
+    const newText = visibleBlock(next.block, head.metadata);
     if (
       hasAncestor(next, headById, movedContainerIds) ||
       hasAncestor(next, headById, changedContainerIds)
@@ -1441,8 +1467,8 @@ const preserveDeltaAttribution = (
     const oldBlock = baseById.get(change.blockId);
     const newBlock = headById.get(change.blockId);
     if (!oldBlock || !newBlock) continue;
-    const oldText = visibleBlock(oldBlock);
-    const newText = visibleBlock(newBlock);
+    const oldText = visibleBlock(oldBlock, base.metadata);
+    const newText = visibleBlock(newBlock, head.metadata);
     const oldSpans =
       baseBlocks.get(change.blockId) ?? spansFor(oldText, attribution);
     projectedTextSpans.set(
@@ -1454,8 +1480,8 @@ const preserveDeltaAttribution = (
     if (!("blockId" in change)) return change;
     const oldBlock = baseById.get(change.blockId);
     const newBlock = headById.get(change.blockId);
-    const oldText = oldBlock ? visibleBlock(oldBlock) : "";
-    const newText = newBlock ? visibleBlock(newBlock) : "";
+    const oldText = oldBlock ? visibleBlock(oldBlock, base.metadata) : "";
+    const newText = newBlock ? visibleBlock(newBlock, head.metadata) : "";
     const oldSpans =
       baseBlocks.get(change.blockId) ?? spansFor(oldText, attribution);
     let operationOldSpans = oldSpans;
@@ -1557,9 +1583,7 @@ export const createRevisionDelta = (
       ...(parent.dependencyObjects !== undefined
         ? { baseDependencies: parent.dependencyObjects }
         : {}),
-      ...(headDependencies !== undefined
-        ? { headDependencies }
-        : {}),
+      ...(headDependencies !== undefined ? { headDependencies } : {}),
       ...(baseSource !== undefined ? { baseSource } : {}),
       ...(headSource !== undefined ? { headSource } : {}),
     },
@@ -1604,8 +1628,8 @@ export const rebaseOpenAnnotations = (
         `Annotation block was deleted: ${annotation.id}`,
       );
     if (!annotation.range) return annotation;
-    const oldText = visibleBlock(previous);
-    const newText = visibleBlock(next);
+    const oldText = visibleBlock(previous, base.metadata);
+    const newText = visibleBlock(next, head.metadata);
     const { start, end } = annotation.range;
     const boundary = (text: string, offset: number): boolean =>
       Number.isInteger(offset) &&

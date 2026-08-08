@@ -149,8 +149,16 @@ export type Change =
       oldValue: JsonValue;
       newValue: JsonValue;
     })
-  | (ChangeBase & { kind: "add-dependency"; key: string; newObject: RevisionId })
-  | (ChangeBase & { kind: "remove-dependency"; key: string; oldObject: RevisionId })
+  | (ChangeBase & {
+      kind: "add-dependency";
+      key: string;
+      newObject: RevisionId;
+    })
+  | (ChangeBase & {
+      kind: "remove-dependency";
+      key: string;
+      oldObject: RevisionId;
+    })
   | (ChangeBase & {
       kind: "replace-dependency";
       key: string;
@@ -197,4 +205,3 @@ export type RevisionMutationResult = {
   measurement: SerializableProjectMeasurementResult;
   validation: ValidationResult;
 };
-

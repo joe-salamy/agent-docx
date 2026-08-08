@@ -101,10 +101,12 @@ export type InlineParagraph = {
   sourceText: string;
   segments: readonly NormalizedSourceSegment[];
   runs: readonly InlineRun[];
+  footnoteRefs: readonly string[];
 };
 
 export type LegalTableCell = {
   paragraphs: readonly InlineParagraph[];
+  footnoteRefs: readonly string[];
   verticalAlign: "top" | "center" | "bottom";
 };
 
@@ -146,12 +148,14 @@ export type LegalBlock =
       kind: "heading";
       level: 1 | 2 | 3 | 4 | 5 | 6;
       runs: readonly InlineRun[];
+      footnoteRefs: readonly string[];
     })
   | (BlockBase & {
       kind: "numbered-paragraph";
       sequence: string;
       level: 1 | 2 | 3 | 4;
       runs: readonly InlineRun[];
+      footnoteRefs: readonly string[];
     })
   | LegalListBlock
   | (BlockBase & {

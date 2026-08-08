@@ -5,6 +5,7 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 import type { NormalizedSourceSegment } from "../markdown.js";
 import { AgentDocxError, type SourcePosition } from "../types.js";
+import { isSafeRelativePath } from "../path-util.js";
 import {
   type BlockId,
   type DocumentChrome,
@@ -13,13 +14,13 @@ import {
   type InlineRun,
   type LegalBlock,
   type LegalDocument,
-  type LegalDocumentSpecification,
   type LegalListBlock,
   type LegalListItem,
   type LegalTableCell,
   type LitigationMetadata,
   emptyLitigationMetadata,
   isBlockId,
+  isDocumentId,
 } from "./model.js";
 
 type MarkdownPoint = { line: number; column: number; offset?: number };
@@ -62,6 +63,10 @@ export type ParsedLegalMarkdown = {
 };
 
 type Marker = { offset: number; end: number; id: BlockId };
+type MarkerIndex = {
+  byOffset: ReadonlyMap<number, Marker>;
+  sorted: readonly Marker[];
+};
 type InlineResult = {
   runs: InlineRun[];
   text: string;
@@ -70,7 +75,7 @@ type InlineResult = {
 type ParseContext = {
   markdown: string;
   options: ParseLegalMarkdownOptions;
-  markers: ReadonlyMap<number, Marker>;
+  markers: MarkerIndex;
   usedMarkers: Set<number>;
   missingMarkers: Array<{ offset: number; id: BlockId }>;
   assets: Map<string, LegalAssetInput>;
@@ -97,6 +102,76 @@ const positionOf = (node: MarkdownNode): SourcePosition => {
       offset: node.position.end.offset ?? 0,
     },
   };
+};
+const isXml10CodePoint = (value: number): boolean =>
+  value === 0x09 ||
+  value === 0x0a ||
+  value === 0x0d ||
+  (value >= 0x20 && value <= 0xd7ff) ||
+  (value >= 0xe000 && value <= 0xfffd) ||
+  (value >= 0x10000 && value <= 0x10ffff);
+const xml10CodePointLabel = (value: number): string =>
+  `U+${value.toString(16).toUpperCase().padStart(4, "0")}`;
+const sourcePointAtOffset = (
+  markdown: string,
+  offset: number,
+): SourcePosition["start"] => {
+  let line = 1;
+  let column = 1;
+  for (let index = 0; index < offset; index++) {
+    if (markdown.charCodeAt(index) === 0x0a) {
+      line++;
+      column = 1;
+    } else column++;
+  }
+  return { line, column, offset };
+};
+const assertXml10Legal = (markdown: string): void => {
+  for (let offset = 0; offset < markdown.length; ) {
+    const first = markdown.charCodeAt(offset);
+    let codePoint = first;
+    let width = 1;
+    if (first >= 0xd800 && first <= 0xdbff) {
+      const second = markdown.charCodeAt(offset + 1);
+      if (second >= 0xdc00 && second <= 0xdfff) {
+        codePoint = 0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00);
+        width = 2;
+      }
+    }
+    if (
+      first >= 0xd800 &&
+      first <= 0xdfff &&
+      !(width === 2 && codePoint > 0xffff)
+    ) {
+      const label = xml10CodePointLabel(codePoint);
+      throw new AgentDocxError(
+        "UNSUPPORTED_MARKDOWN",
+        `Markdown contains XML-1.0-illegal code point ${label}`,
+        {
+          position: {
+            start: sourcePointAtOffset(markdown, offset),
+            end: sourcePointAtOffset(markdown, offset + width),
+          } as unknown as Record<string, never>,
+          codePoint: label,
+        },
+      );
+    }
+    if (!isXml10CodePoint(codePoint)) {
+      const label = xml10CodePointLabel(codePoint);
+      throw new AgentDocxError(
+        "UNSUPPORTED_MARKDOWN",
+        `Markdown contains XML-1.0-illegal code point ${label}`,
+        {
+          position: {
+            start: sourcePointAtOffset(markdown, offset),
+            end: sourcePointAtOffset(markdown, offset + width),
+          } as unknown as Record<string, never>,
+          codePoint: label,
+        },
+      );
+    }
+    offset += width;
+  }
 };
 
 const sourceTextOf = (node: MarkdownNode, markdown: string): string => {
@@ -141,12 +216,16 @@ const deterministicBlockId = (
 };
 
 const markerPattern =
-  /^[ \t]*<!--[ \t]*agent-docx:block[ \t]+id="(b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"[ \t]*-->\r?\n/gm;
+  /^[ \t]*<!--[ \t]*agent-docx:block[ \t]+id="(b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"[ \t]*-->(?:\r?\n|$)/gm;
 
 const markerHtmlPattern =
   /^[ \t]*<!--[ \t]*agent-docx:block[ \t]+id="(b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})"[ \t]*-->$/;
 
-const markerMap = (markdown: string): ReadonlyMap<number, Marker> => {
+const MAX_NESTING_DEPTH = 100;
+const normalizeFootnoteLabel = (value: string): string =>
+  value.normalize("NFC").toLowerCase();
+
+const markerMap = (markdown: string): MarkerIndex => {
   const found = new Map<number, Marker>();
   const ids = new Set<string>();
   for (const match of markdown.matchAll(markerPattern)) {
@@ -160,26 +239,40 @@ const markerMap = (markdown: string): ReadonlyMap<number, Marker> => {
     const offset = match.index ?? 0;
     found.set(offset, { offset, end: offset + match[0].length, id });
   }
-  return found;
+  return {
+    byOffset: found,
+    sorted: [...found.values()].sort(
+      (left, right) => left.offset - right.offset,
+    ),
+  };
 };
+
 const markdownForParser = (markdown: string): string =>
   markdown.replace(markerPattern, (match) => {
-    const newline = match.endsWith("\r\n") ? "\r\n" : "\n";
+    const newline = match.endsWith("\r\n")
+      ? "\r\n"
+      : match.endsWith("\n")
+        ? "\n"
+        : "";
     return `${" ".repeat(match.length - newline.length)}${newline}`;
   });
 
 const markerBefore = (
-  markers: ReadonlyMap<number, Marker>,
+  markers: MarkerIndex,
   markdown: string,
   offset: number,
 ): Marker | undefined => {
-  for (const marker of markers.values())
-    if (
-      marker.end <= offset &&
-      /^[ \t]*$/.test(markdown.slice(marker.end, offset))
-    )
-      return marker;
-  return undefined;
+  let low = 0;
+  let high = markers.sorted.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (markers.sorted[middle]!.end <= offset) low = middle + 1;
+    else high = middle;
+  }
+  const marker = markers.sorted[low - 1];
+  return marker && /^[ \t]*$/.test(markdown.slice(marker.end, offset))
+    ? marker
+    : undefined;
 };
 
 const appendInline = (
@@ -269,21 +362,6 @@ const requireAttributes = (
   return result;
 };
 
-const requiredAttribute = (
-  attributes: Record<string, string>,
-  key: string,
-  node: MarkdownNode,
-): string => {
-  const value = attributes[key];
-  if (!value)
-    return errorAt(
-      "UNSUPPORTED_MARKDOWN",
-      `Missing directive attribute: ${key}`,
-      node,
-    );
-  return value;
-};
-
 const inline = (
   nodes: readonly MarkdownNode[],
   markdown: string,
@@ -298,9 +376,42 @@ const inline = (
   inlineSources.set(result, markdown);
   for (const node of nodes) {
     switch (node.type) {
-      case "text":
-        appendInline(result, node.value ?? "", node, state);
+      case "text": {
+        const value = node.value ?? "";
+        const position = node.position;
+        const sourceStart = position?.start.offset;
+        const sourceEnd = position?.end.offset;
+        if (
+          value === "" ||
+          sourceStart === undefined ||
+          sourceEnd === undefined
+        ) {
+          appendInline(result, value, node, state);
+          break;
+        }
+        // remark only emits footnoteReference nodes for references with a
+        // matching definition, so missing-definition references arrive as
+        // plain text. Scan the SOURCE slice (which preserves backslash
+        // escapes) so escaped `\[^x]` stays literal while real references
+        // are recognized and validated against the definitions.
+        const source = markdown.slice(sourceStart, sourceEnd);
+        const footnotePattern = /(?<!\\)\[\^([^\]]+)\]/g;
+        let match: RegExpExecArray | null;
+        let valueCursor = 0;
+        while ((match = footnotePattern.exec(source))) {
+          const remaining = value.slice(valueCursor);
+          const at = remaining.indexOf(match[0]);
+          if (at < 0) break;
+          appendInline(result, remaining.slice(0, at), node, state);
+          const label = match[0].slice(2, -1);
+          appendInline(result, "⁎", node, state, {
+            footnoteId: normalizeFootnoteLabel(label),
+          });
+          valueCursor += at + match[0].length;
+        }
+        appendInline(result, value.slice(valueCursor), node, state);
         break;
+      }
       case "strong":
         mergeInline(
           result,
@@ -330,8 +441,19 @@ const inline = (
         break;
       case "break": {
         const last = result.runs.at(-1);
-        if (last) last.hardBreakAfter = true;
-        else appendInline(result, "\n", node, state);
+        if (last) {
+          last.hardBreakAfter = true;
+          const position = positionOf(node);
+          const normalizedStart = result.text.length;
+          result.text += "\n";
+          result.segments.push({
+            normalizedStart,
+            normalizedEnd: normalizedStart + 1,
+            sourceStartOffset: position.start.offset,
+            position,
+            precision: "node",
+          });
+        } else appendInline(result, "\n", node, state);
         break;
       }
       case "link": {
@@ -348,20 +470,18 @@ const inline = (
         break;
       }
       case "footnoteReference": {
-        const id = node.identifier?.toLowerCase();
+        const id = node.identifier
+          ? normalizeFootnoteLabel(node.identifier)
+          : undefined;
         if (!id)
           errorAt("REFERENCE_INVALID", "Missing footnote identifier", node);
-        appendInline(result, "⁎", node, state, { footnoteId: id as string });
+        appendInline(result, "⁎", node, state, { footnoteId: id! });
         break;
       }
       case "textDirective": {
         if (node.name === "ref") {
           const attributes = requireAttributes(node, ["target"]);
-          const target = requiredAttribute(
-            attributes,
-            "target",
-            node,
-          ) as BlockId;
+          const target = attributes.target as BlockId;
           if (!isBlockId(target))
             errorAt(
               "REFERENCE_INVALID",
@@ -379,7 +499,7 @@ const inline = (
             "category",
             "short",
           ]);
-          const category = requiredAttribute(attributes, "category", node);
+          const category = attributes.category!;
           if (
             !(
               ["cases", "statutes", "rules", "other"] as readonly string[]
@@ -393,11 +513,11 @@ const inline = (
           const nested = inline(node.children ?? [], markdown, state);
           for (const run of nested.runs)
             run.authority = {
-              id: requiredAttribute(attributes, "id", node),
+              id: attributes.id!,
               category: category as NonNullable<
                 InlineRun["authority"]
               >["category"],
-              short: requiredAttribute(attributes, "short", node),
+              short: attributes.short!,
             };
           mergeInline(result, nested);
           break;
@@ -435,14 +555,7 @@ const validateRelativeAssetPath = (
   source: string,
   node: MarkdownNode,
 ): string => {
-  if (
-    source.length === 0 ||
-    source.startsWith("/") ||
-    source.includes("\\") ||
-    source
-      .split("/")
-      .some((part) => part === "" || part === "." || part === "..")
-  )
+  if (!isSafeRelativePath(source))
     errorAt("REFERENCE_INVALID", `Invalid asset source: ${source}`, node);
   return source;
 };
@@ -572,6 +685,7 @@ const paragraphFor = (
     sourceText: sourceTextOf(node, context.markdown),
     segments: normalized.segments,
     runs: normalized.runs,
+    footnoteRefs: collectRefs(normalized.runs),
   };
 };
 
@@ -580,6 +694,12 @@ const listFor = (
   context: ParseContext,
   depth: number,
 ): LegalListBlock => {
+  if (depth > MAX_NESTING_DEPTH)
+    errorAt(
+      "UNSUPPORTED_MARKDOWN",
+      `Markdown nesting exceeds ${MAX_NESTING_DEPTH} levels`,
+      node,
+    );
   const base = baseFor(node, "list", context);
   const items: LegalListItem[] = [];
   for (const item of node.children ?? []) {
@@ -633,14 +753,35 @@ const tableFor = (
   context: ParseContext,
 ): Extract<LegalBlock, { kind: "table" }> => {
   const base = baseFor(node, "table", context);
-  const rows = (node.children ?? []).map((row) => {
+  const sourceRows = node.children ?? [];
+  const width = sourceRows.reduce(
+    (maximum, row) => Math.max(maximum, row.children?.length ?? 0),
+    0,
+  );
+  const emptyParagraph = (row: MarkdownNode): InlineParagraph => ({
+    position: positionOf(row),
+    sourceText: "",
+    segments: [],
+    runs: [],
+    footnoteRefs: [],
+  });
+  const rows = sourceRows.map((row) => {
     if (row.type !== "tableRow")
       errorAt("UNSUPPORTED_MARKDOWN", "Invalid table row", row);
-    return (row.children ?? []).map((cell): LegalTableCell => {
+    return Array.from({ length: width }, (_, columnIndex): LegalTableCell => {
+      const cell = row.children?.[columnIndex];
+      if (!cell)
+        return {
+          paragraphs: [emptyParagraph(row)],
+          footnoteRefs: [],
+          verticalAlign: "top",
+        };
       if (cell.type !== "tableCell")
         errorAt("UNSUPPORTED_MARKDOWN", "Invalid table cell", cell);
+      const paragraph = paragraphFor(cell, context);
       return {
-        paragraphs: [paragraphFor(cell, context)],
+        paragraphs: [paragraph],
+        footnoteRefs: paragraph.footnoteRefs,
         verticalAlign: "top",
       };
     });
@@ -649,7 +790,10 @@ const tableFor = (
     ...base,
     kind: "table",
     rows,
-    align: node.align ?? [],
+    align: Array.from(
+      { length: width },
+      (_, columnIndex) => node.align?.[columnIndex] ?? null,
+    ),
   };
 };
 
@@ -676,7 +820,7 @@ const leafDirectiveFor = (
     return {
       ...base,
       kind: "signature",
-      counselId: requiredAttribute(attributes, "counsel", node),
+      counselId: attributes.counsel!,
     };
   }
   if (name === "certificate") {
@@ -684,7 +828,7 @@ const leafDirectiveFor = (
     return {
       ...base,
       kind: "certificate",
-      certificateId: requiredAttribute(attributes, "id", node),
+      certificateId: attributes.id!,
     };
   }
   if (name === "sectionbreak") {
@@ -693,7 +837,7 @@ const leafDirectiveFor = (
       ["kind"],
       ["pageNumberFormat", "pageNumberStart"],
     );
-    const breakKind = requiredAttribute(attributes, "kind", node);
+    const breakKind = attributes.kind!;
     if (!["next-page", "continuous"].includes(breakKind))
       return errorAt(
         "REFERENCE_INVALID",
@@ -740,8 +884,8 @@ const leafDirectiveFor = (
       "widthTwips",
       "heightTwips",
     ]);
-    const width = Number(requiredAttribute(attributes, "widthTwips", node));
-    const height = Number(requiredAttribute(attributes, "heightTwips", node));
+    const width = Number(attributes.widthTwips);
+    const height = Number(attributes.heightTwips);
     if (
       !Number.isInteger(width) ||
       !Number.isInteger(height) ||
@@ -753,16 +897,13 @@ const leafDirectiveFor = (
         "Image dimensions must be positive twips",
         node,
       );
-    const source = validateRelativeAssetPath(
-      requiredAttribute(attributes, "source", node),
-      node,
-    );
+    const source = validateRelativeAssetPath(attributes.source!, node);
     assetFor(context, source, node, true);
     return {
       ...base,
       kind: "image",
       source,
-      alt: requiredAttribute(attributes, "alt", node),
+      alt: attributes.alt!,
       widthTwips: width,
       heightTwips: height,
     };
@@ -783,8 +924,8 @@ const containerDirectiveFor = (
   const base = baseFor(node, name ?? "directive", context);
   if (name === "numbered") {
     const attributes = requireAttributes(node, ["sequence", "level"]);
-    const sequence = requiredAttribute(attributes, "sequence", node);
-    const level = requiredAttribute(attributes, "level", node);
+    const sequence = attributes.sequence!;
+    const level = attributes.level!;
     if (!/^[1-4]$/.test(level))
       return errorAt(
         "REFERENCE_INVALID",
@@ -801,27 +942,26 @@ const containerDirectiveFor = (
       sequence,
       level: Number(level) as 1 | 2 | 3 | 4,
       runs: normalized.runs,
+      segments: normalized.segments,
+      footnoteRefs: collectRefs(normalized.runs),
     };
   }
   if (name === "exhibit") {
     const attributes = requireAttributes(node, ["id", "label", "source"]);
-    const source = validateRelativeAssetPath(
-      requiredAttribute(attributes, "source", node),
-      node,
-    );
+    const source = validateRelativeAssetPath(attributes.source!, node);
     assetFor(context, source, node, false);
     return {
       ...base,
       kind: "exhibit",
-      exhibitId: requiredAttribute(attributes, "id", node),
-      label: requiredAttribute(attributes, "label", node),
+      exhibitId: attributes.id!,
+      label: attributes.label!,
       source,
-      blocks: parseBlocks(node.children ?? [], context, depth),
+      blocks: parseBlocks(node.children ?? [], context, depth + 1),
     };
   }
   if (name === "length-exclusion") {
     const attributes = requireAttributes(node, ["kind"], ["citation"]);
-    const kind = requiredAttribute(attributes, "kind", node) as Extract<
+    const kind = attributes.kind as Extract<
       LegalBlock,
       { kind: "length-exclusion" }
     >["exclusionKind"];
@@ -850,7 +990,7 @@ const containerDirectiveFor = (
       kind: "length-exclusion",
       exclusionKind: kind,
       ...(attributes.citation ? { citation: attributes.citation } : {}),
-      blocks: parseBlocks(node.children ?? [], context, depth),
+      blocks: parseBlocks(node.children ?? [], context, depth + 1),
     };
   }
   return errorAt(
@@ -865,6 +1005,12 @@ const parseBlock = (
   context: ParseContext,
   depth: number,
 ): LegalBlock | null => {
+  if (depth > MAX_NESTING_DEPTH)
+    errorAt(
+      "UNSUPPORTED_MARKDOWN",
+      `Markdown nesting exceeds ${MAX_NESTING_DEPTH} levels`,
+      node,
+    );
   switch (node.type) {
     case "html": {
       const marker = markerHtmlPattern.exec(node.value ?? "");
@@ -882,6 +1028,7 @@ const parseBlock = (
         ...base,
         kind: "paragraph",
         runs: normalized.runs,
+        segments: normalized.segments,
         footnoteRefs: collectRefs(normalized.runs),
       };
     }
@@ -896,6 +1043,8 @@ const parseBlock = (
         kind: "heading",
         level: level as 1 | 2 | 3 | 4 | 5 | 6,
         runs: normalized.runs,
+        segments: normalized.segments,
+        footnoteRefs: collectRefs(normalized.runs),
       };
     }
     case "blockquote": {
@@ -913,6 +1062,7 @@ const parseBlock = (
         kind: "blockquote",
         depth,
         runs: normalized.runs,
+        segments: normalized.segments,
         footnoteRefs: collectRefs(normalized.runs),
       };
     }
@@ -951,6 +1101,19 @@ const parseBlocks = (
   context: ParseContext,
   depth: number,
 ): LegalBlock[] => {
+  if (depth > MAX_NESTING_DEPTH) {
+    const node = nodes[0];
+    if (node)
+      errorAt(
+        "UNSUPPORTED_MARKDOWN",
+        `Markdown nesting exceeds ${MAX_NESTING_DEPTH} levels`,
+        node,
+      );
+    throw new AgentDocxError(
+      "UNSUPPORTED_MARKDOWN",
+      `Markdown nesting exceeds ${MAX_NESTING_DEPTH} levels`,
+    );
+  }
   const blocks: LegalBlock[] = [];
   for (const node of nodes) {
     const block = parseBlock(node, context, depth);
@@ -967,13 +1130,16 @@ const parseFootnotes = (
   const labels = new Set<string>();
   for (const node of nodes) {
     if (node.type !== "footnoteDefinition") continue;
-    const label = node.identifier?.toLowerCase();
+    const label = node.identifier
+      ? normalizeFootnoteLabel(node.identifier)
+      : undefined;
     if (!label || labels.has(label))
       return errorAt(
         "REFERENCE_INVALID",
         `Missing or duplicate footnote: ${label ?? ""}`,
         node,
       );
+    labels.add(label);
     const base = baseFor(node, "footnote", context);
     const paragraphs = (node.children ?? []).map((child) => {
       if (child.type !== "paragraph")
@@ -986,24 +1152,81 @@ const parseFootnotes = (
     });
     if (paragraphs.length === 0)
       errorAt("UNSUPPORTED_MARKDOWN", "Footnote requires a paragraph", node);
-    footnotes.push({ ...base, kind: "footnote", label: label!, paragraphs });
+    footnotes.push({ ...base, kind: "footnote", label, paragraphs });
   }
   return footnotes;
 };
 
-const allBlocks = (blocks: readonly LegalBlock[]): LegalBlock[] =>
-  blocks.flatMap((block) => {
-    if (block.kind === "exhibit" || block.kind === "length-exclusion")
-      return [block, ...allBlocks(block.blocks)];
-    if (block.kind === "list")
-      return [
-        block,
-        ...block.items.flatMap((item) =>
-          item.children.flatMap((child) => allBlocks([child])),
-        ),
-      ];
-    return [block];
-  });
+const allBlocks = (blocks: readonly LegalBlock[]): LegalBlock[] => {
+  const result: LegalBlock[] = [];
+  const pending = blocks.map((block) => ({ block, depth: 0 })).reverse();
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.depth > MAX_NESTING_DEPTH)
+      throw new AgentDocxError(
+        "UNSUPPORTED_MARKDOWN",
+        `Markdown nesting exceeds ${MAX_NESTING_DEPTH} levels`,
+      );
+    result.push(current.block);
+    if (
+      current.block.kind === "exhibit" ||
+      current.block.kind === "length-exclusion"
+    )
+      for (let index = current.block.blocks.length - 1; index >= 0; index--)
+        pending.push({
+          block: current.block.blocks[index]!,
+          depth: current.depth + 1,
+        });
+    if (current.block.kind === "list")
+      for (
+        let itemIndex = current.block.items.length - 1;
+        itemIndex >= 0;
+        itemIndex--
+      )
+        for (
+          let childIndex = current.block.items[itemIndex]!.children.length - 1;
+          childIndex >= 0;
+          childIndex--
+        )
+          pending.push({
+            block: current.block.items[itemIndex]!.children[childIndex]!,
+            depth: current.depth + 1,
+          });
+  }
+  return result;
+};
+
+const footnoteRefsForBlock = (root: LegalBlock): readonly string[] => {
+  const refs: string[] = [];
+  const pending: Array<{ block: LegalBlock; depth: number }> = [
+    { block: root, depth: 0 },
+  ];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.depth > MAX_NESTING_DEPTH)
+      throw new AgentDocxError(
+        "UNSUPPORTED_MARKDOWN",
+        `Markdown nesting exceeds ${MAX_NESTING_DEPTH} levels`,
+      );
+    const block = current.block;
+    if ("runs" in block) refs.push(...collectRefs(block.runs));
+    if (block.kind === "list") {
+      for (const item of block.items) {
+        for (const paragraph of item.paragraphs)
+          refs.push(...paragraph.footnoteRefs);
+        for (const child of item.children)
+          pending.push({ block: child, depth: current.depth + 1 });
+      }
+    } else if (block.kind === "table") {
+      for (const row of block.rows)
+        for (const cell of row) refs.push(...cell.footnoteRefs);
+    } else if (block.kind === "exhibit" || block.kind === "length-exclusion") {
+      for (const child of block.blocks)
+        pending.push({ block: child, depth: current.depth + 1 });
+    }
+  }
+  return refs;
+};
 
 export function parseLegalMarkdown(
   markdown: string,
@@ -1011,8 +1234,9 @@ export function parseLegalMarkdown(
 ): ParsedLegalMarkdown {
   if (typeof markdown !== "string")
     throw new AgentDocxError("INVALID_ARGUMENT", "markdown must be a string");
-  if (!options.documentId)
-    throw new AgentDocxError("INVALID_ARGUMENT", "documentId is required");
+  if (!isDocumentId(options.documentId))
+    throw new AgentDocxError("INVALID_ARGUMENT", "documentId is invalid");
+  assertXml10Legal(markdown);
   const root = unified()
     .use(remarkParse)
     .use(remarkGfm)
@@ -1033,16 +1257,17 @@ export function parseLegalMarkdown(
     context,
     0,
   );
-  for (const marker of context.markers.values())
+  for (const marker of context.markers.byOffset.values())
     if (!context.usedMarkers.has(marker.offset))
       throw new AgentDocxError(
         "REFERENCE_INVALID",
         `Orphan block marker: ${marker.id}`,
       );
 
+  const flattenedBlocks = allBlocks(blocks);
   const labels = new Set(footnotes.map((footnote) => footnote.label));
   const ids = new Set<string>();
-  for (const block of [...allBlocks(blocks), ...footnotes]) {
+  for (const block of [...flattenedBlocks, ...footnotes]) {
     if (ids.has(block.id))
       throw new AgentDocxError(
         "REFERENCE_INVALID",
@@ -1050,29 +1275,23 @@ export function parseLegalMarkdown(
       );
     ids.add(block.id);
   }
-  for (const block of allBlocks(blocks)) {
-    const refs =
-      block.kind === "paragraph" || block.kind === "blockquote"
-        ? block.footnoteRefs
-        : [];
-    for (const footnote of refs)
+  for (const block of flattenedBlocks)
+    for (const footnote of footnoteRefsForBlock(block))
       if (!labels.has(footnote))
         throw new AgentDocxError(
           "REFERENCE_INVALID",
           `Missing footnote definition: ${footnote}`,
         );
-  }
   for (const footnote of footnotes)
     for (const paragraph of footnote.paragraphs)
-      for (const ref of collectRefs(paragraph.runs))
+      for (const ref of paragraph.footnoteRefs)
         if (!labels.has(ref))
           throw new AgentDocxError(
             "REFERENCE_INVALID",
             `Missing footnote definition: ${ref}`,
           );
-
   const referencedAssets = new Set<string>();
-  for (const block of allBlocks(blocks)) {
+  for (const block of flattenedBlocks) {
     if (block.kind === "image" || block.kind === "exhibit")
       referencedAssets.add(block.source);
   }
@@ -1133,24 +1352,4 @@ export function insertMissingBlockMarkers(
     result = `${result.slice(0, lineStart)}${indentation}<!-- agent-docx:block id="${marker.id}" -->\n${result.slice(lineStart)}`;
   }
   return result;
-}
-
-export function documentFromSpecification(
-  markdown: string,
-  specification: LegalDocumentSpecification,
-): ParsedLegalMarkdown {
-  return parseLegalMarkdown(markdown, {
-    ...(specification.projectId !== undefined
-      ? { projectId: specification.projectId }
-      : {}),
-    documentId: specification.documentId,
-    metadata: specification.metadata,
-    ...(specification.chrome !== undefined
-      ? { chrome: specification.chrome }
-      : {}),
-    ...(specification.assets !== undefined
-      ? { assets: specification.assets }
-      : {}),
-    exactAssets: true,
-  });
 }
