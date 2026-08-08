@@ -4,13 +4,29 @@
   "title": "agent-docx reviewer redline import result version 1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "documentId", "baseRevision", "headRevision", "changeSet", "decisions", "resolution", "annotations", "fidelity"],
+  "required": [
+    "schemaVersion",
+    "documentId",
+    "baseRevision",
+    "headRevision",
+    "changeSet",
+    "decisions",
+    "resolution",
+    "annotations",
+    "fidelity"
+  ],
   "properties": {
     "schemaVersion": { "const": 1 },
     "documentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
-    "baseRevision": { "$ref": "https://agent-docx.dev/schemas/change-set-v1.json#/$defs/revisionId" },
-    "headRevision": { "$ref": "https://agent-docx.dev/schemas/change-set-v1.json#/$defs/revisionId" },
-    "changeSet": { "$ref": "https://agent-docx.dev/schemas/change-set-v1.json" },
+    "baseRevision": {
+      "$ref": "https://agent-docx.dev/schemas/change-set-v1.json#/$defs/revisionId"
+    },
+    "headRevision": {
+      "$ref": "https://agent-docx.dev/schemas/change-set-v1.json#/$defs/revisionId"
+    },
+    "changeSet": {
+      "$ref": "https://agent-docx.dev/schemas/change-set-v1.json"
+    },
     "decisions": {
       "type": "object",
       "additionalProperties": false,
@@ -19,7 +35,10 @@
       }
     },
     "resolution": { "enum": ["none", "complete"] },
-    "annotations": { "type": "array", "items": { "$ref": "#/$defs/annotation" } },
+    "annotations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/annotation" }
+    },
     "fidelity": { "$ref": "#/$defs/fidelity" }
   },
   "$defs": {
@@ -38,7 +57,10 @@
       "required": ["id", "blockId", "author", "createdAt", "message", "status"],
       "properties": {
         "id": { "type": "string", "pattern": "^a_[0-9a-f-]{36}$" },
-        "blockId": { "type": "string", "pattern": "^b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+        "blockId": {
+          "type": "string",
+          "pattern": "^b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
         "range": {
           "type": "object",
           "additionalProperties": false,
@@ -48,8 +70,15 @@
             "end": { "type": "integer", "minimum": 0 }
           }
         },
-        "author": { "anyOf": [{ "$ref": "#/$defs/actor" }, { "type": "null" }] },
-        "createdAt": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }] },
+        "author": {
+          "anyOf": [{ "$ref": "#/$defs/actor" }, { "type": "null" }]
+        },
+        "createdAt": {
+          "anyOf": [
+            { "type": "string", "format": "date-time" },
+            { "type": "null" }
+          ]
+        },
         "message": { "type": "string" },
         "status": { "enum": ["open", "resolved"] }
       }
@@ -76,15 +105,37 @@
     "fidelityItem": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "partPath", "relationshipId", "ooxmlKind", "count", "blockIds", "sourcePositions", "explanation"],
+      "required": [
+        "status",
+        "partPath",
+        "relationshipId",
+        "ooxmlKind",
+        "count",
+        "blockIds",
+        "sourcePositions",
+        "explanation"
+      ],
       "properties": {
-        "status": { "enum": ["preserved", "normalized", "externalized", "unsupported"] },
+        "status": {
+          "enum": ["preserved", "normalized", "externalized", "unsupported"]
+        },
         "partPath": { "type": "string" },
-        "relationshipId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+        "relationshipId": {
+          "anyOf": [{ "type": "string" }, { "type": "null" }]
+        },
         "ooxmlKind": { "type": "string" },
         "count": { "type": "integer", "minimum": 0 },
-        "blockIds": { "type": "array", "items": { "type": "string", "pattern": "^b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" } },
-        "sourcePositions": { "type": "array", "items": { "$ref": "#/$defs/position" } },
+        "blockIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          }
+        },
+        "sourcePositions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/position" }
+        },
         "explanation": { "type": "string" }
       }
     },
@@ -94,7 +145,10 @@
       "required": ["overall", "items"],
       "properties": {
         "overall": { "enum": ["preserved", "normalized", "unsupported"] },
-        "items": { "type": "array", "items": { "$ref": "#/$defs/fidelityItem" } }
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fidelityItem" }
+        }
       }
     }
   }

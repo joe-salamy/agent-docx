@@ -4,17 +4,78 @@
   "title": "agent-docx serializable compiled DOCX version 1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "measurement", "validation", "blocks", "artifact"],
+  "required": [
+    "schemaVersion",
+    "measurement",
+    "validation",
+    "blocks",
+    "artifact"
+  ],
   "properties": {
     "schemaVersion": { "const": 1 },
     "measurement": { "type": "object" },
-    "validation": { "$ref": "https://agent-docx.dev/schemas/validation-result-v1.json" },
+    "validation": {
+      "$ref": "https://agent-docx.dev/schemas/validation-result-v1.json"
+    },
     "blocks": { "type": "array", "items": { "$ref": "#/$defs/block" } },
-    "artifact": { "$ref": "https://agent-docx.dev/schemas/artifact-result-v1.json" }
+    "artifact": {
+      "$ref": "https://agent-docx.dev/schemas/artifact-result-v1.json"
+    }
   },
   "$defs": {
-    "point": { "type": "object", "additionalProperties": false, "required": ["line", "column", "offset"], "properties": { "line": { "type": "integer", "minimum": 1 }, "column": { "type": "integer", "minimum": 1 }, "offset": { "type": "integer", "minimum": 0 } } },
-    "position": { "type": "object", "additionalProperties": false, "required": ["start", "end"], "properties": { "start": { "$ref": "#/$defs/point" }, "end": { "$ref": "#/$defs/point" } } },
-    "block": { "type": "object", "additionalProperties": false, "required": ["id", "bookmark", "index", "parentId", "depth", "kind", "position", "preview"], "properties": { "id": { "type": "string", "pattern": "^b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" }, "bookmark": { "type": "string", "pattern": "^adx_[0-9a-f]{32}$" }, "index": { "type": "integer", "minimum": 0 }, "parentId": { "anyOf": [{ "type": "string", "pattern": "^b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" }, { "type": "null" }] }, "depth": { "type": "integer", "minimum": 0 }, "kind": { "type": "string" }, "position": { "$ref": "#/$defs/position" }, "preview": { "type": "string" } } }
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "column", "offset"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 },
+        "offset": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/point" },
+        "end": { "$ref": "#/$defs/point" }
+      }
+    },
+    "block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "bookmark",
+        "index",
+        "parentId",
+        "depth",
+        "kind",
+        "position",
+        "preview"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "bookmark": { "type": "string", "pattern": "^adx_[0-9a-f]{32}$" },
+        "index": { "type": "integer", "minimum": 0 },
+        "parentId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^b_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            { "type": "null" }
+          ]
+        },
+        "depth": { "type": "integer", "minimum": 0 },
+        "kind": { "type": "string" },
+        "position": { "$ref": "#/$defs/position" },
+        "preview": { "type": "string" }
+      }
+    }
   }
 }

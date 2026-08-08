@@ -4,7 +4,22 @@
   "title": "agent-docx immutable revision version 1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "id", "documentId", "parents", "createdAt", "author", "message", "sourceObject", "documentConfigObject", "dependencyObjects", "workingTreeHash", "legalDocumentObject", "annotationsObject", "tool"],
+  "required": [
+    "schemaVersion",
+    "id",
+    "documentId",
+    "parents",
+    "createdAt",
+    "author",
+    "message",
+    "sourceObject",
+    "documentConfigObject",
+    "dependencyObjects",
+    "workingTreeHash",
+    "legalDocumentObject",
+    "annotationsObject",
+    "tool"
+  ],
   "properties": {
     "schemaVersion": { "const": 1 },
     "id": { "$ref": "#/$defs/revisionId" },
@@ -22,15 +37,31 @@
     "deltaObject": { "$ref": "#/$defs/revisionId" },
     "resolutionObject": { "$ref": "#/$defs/revisionId" },
     "tool": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "required": ["name", "version", "schemaVersion"],
-      "properties": { "name": { "const": "agent-docx" }, "version": { "type": "string" }, "schemaVersion": { "const": 1 } }
+      "properties": {
+        "name": { "const": "agent-docx" },
+        "version": { "type": "string" },
+        "schemaVersion": { "const": 1 }
+      }
     }
   },
   "$defs": {
     "revisionId": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "documentId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
-    "actor": { "type": "object", "additionalProperties": false, "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 }, "email": { "type": "string", "minLength": 1 } } },
-    "dependencyObjects": { "type": "object", "additionalProperties": { "$ref": "#/$defs/revisionId" } }
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "email": { "type": "string", "minLength": 1 }
+      }
+    },
+    "dependencyObjects": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/revisionId" }
+    }
   }
 }

@@ -470,7 +470,7 @@
       ],
       "properties": {
         "schemaVersion": { "const": 1 },
-        "pageCount": { "type": "integer", "minimum": 1 },
+        "pageCount": { "type": "integer", "minimum": 0 },
         "equivalentPages": { "type": "number" },
         "totalVisualLines": { "type": "integer" },
         "visualLinesByPage": {
@@ -551,7 +551,7 @@
       "properties": {
         "schemaVersion": { "const": 1 },
         "mode": { "enum": ["deterministic", "word", "libreoffice", "compare"] },
-        "pageCount": { "type": "integer", "minimum": 1 },
+        "pageCount": { "type": "integer", "minimum": 0 },
         "pageCountSource": { "enum": ["deterministic", "word", "libreoffice"] },
         "deterministic": { "$ref": "#/$defs/deterministic" },
         "renderers": {

@@ -4,7 +4,15 @@
   "title": "agent-docx rule pack version 1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "sourceUrl", "effectiveDate", "sourceSha256", "sourceExcerpt", "checks", "unmodeledProvisions"],
+  "required": [
+    "id",
+    "sourceUrl",
+    "effectiveDate",
+    "sourceSha256",
+    "sourceExcerpt",
+    "checks",
+    "unmodeledProvisions"
+  ],
   "properties": {
     "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9@.-]{0,127}$" },
     "sourceUrl": { "type": "string", "pattern": "^https://" },
@@ -20,51 +28,100 @@
         "required": ["id", "kind", "citation", "predicate", "params"],
         "properties": {
           "id": { "type": "string", "pattern": "^[a-z0-9.-]+$" },
-          "kind": { "enum": ["length-alternative", "page-size", "margin-minimum", "typeface", "line-spacing", "counted-lines-maximum", "required-metadata", "required-block", "required-footer", "reference-integrity"] },
+          "kind": {
+            "enum": [
+              "length-alternative",
+              "page-size",
+              "margin-minimum",
+              "typeface",
+              "line-spacing",
+              "counted-lines-maximum",
+              "required-metadata",
+              "required-block",
+              "required-footer",
+              "reference-integrity"
+            ]
+          },
           "citation": { "type": "string", "minLength": 1 },
           "predicate": { "type": "string", "minLength": 1 },
           "params": { "type": "object" }
         },
         "allOf": [
           {
-            "if": { "properties": { "kind": { "const": "length-alternative" } } },
-            "then": { "properties": { "params": { "$ref": "#/$defs/length-alternative" } } }
+            "if": {
+              "properties": { "kind": { "const": "length-alternative" } }
+            },
+            "then": {
+              "properties": {
+                "params": { "$ref": "#/$defs/length-alternative" }
+              }
+            }
           },
           {
             "if": { "properties": { "kind": { "const": "page-size" } } },
-            "then": { "properties": { "params": { "$ref": "#/$defs/page-size" } } }
+            "then": {
+              "properties": { "params": { "$ref": "#/$defs/page-size" } }
+            }
           },
           {
             "if": { "properties": { "kind": { "const": "margin-minimum" } } },
-            "then": { "properties": { "params": { "$ref": "#/$defs/margin-minimum" } } }
+            "then": {
+              "properties": { "params": { "$ref": "#/$defs/margin-minimum" } }
+            }
           },
           {
             "if": { "properties": { "kind": { "const": "typeface" } } },
-            "then": { "properties": { "params": { "$ref": "#/$defs/typeface" } } }
+            "then": {
+              "properties": { "params": { "$ref": "#/$defs/typeface" } }
+            }
           },
           {
             "if": { "properties": { "kind": { "const": "line-spacing" } } },
-            "then": { "properties": { "params": { "$ref": "#/$defs/line-spacing" } } }
+            "then": {
+              "properties": { "params": { "$ref": "#/$defs/line-spacing" } }
+            }
           },
           {
-            "if": { "properties": { "kind": { "const": "counted-lines-maximum" } } },
-            "then": { "properties": { "params": { "$ref": "#/$defs/counted-lines-maximum" } } }
+            "if": {
+              "properties": { "kind": { "const": "counted-lines-maximum" } }
+            },
+            "then": {
+              "properties": {
+                "params": { "$ref": "#/$defs/counted-lines-maximum" }
+              }
+            }
           },
           {
-            "if": { "properties": { "kind": { "const": "required-metadata" } } },
-            "then": { "properties": { "params": { "$ref": "#/$defs/required-metadata" } } }
+            "if": {
+              "properties": { "kind": { "const": "required-metadata" } }
+            },
+            "then": {
+              "properties": {
+                "params": { "$ref": "#/$defs/required-metadata" }
+              }
+            }
           },
           {
             "if": { "properties": { "kind": { "const": "required-block" } } },
-            "then": { "properties": { "params": { "$ref": "#/$defs/required-block" } } }
+            "then": {
+              "properties": { "params": { "$ref": "#/$defs/required-block" } }
+            }
           },
           {
             "if": { "properties": { "kind": { "const": "required-footer" } } },
-            "then": { "properties": { "params": { "$ref": "#/$defs/required-footer" } } }
+            "then": {
+              "properties": { "params": { "$ref": "#/$defs/required-footer" } }
+            }
           },
           {
-            "if": { "properties": { "kind": { "const": "reference-integrity" } } },
-            "then": { "properties": { "params": { "$ref": "#/$defs/reference-integrity" } } }
+            "if": {
+              "properties": { "kind": { "const": "reference-integrity" } }
+            },
+            "then": {
+              "properties": {
+                "params": { "$ref": "#/$defs/reference-integrity" }
+              }
+            }
           }
         ]
       }
@@ -143,7 +200,10 @@
       "additionalProperties": false,
       "required": ["fields"],
       "properties": {
-        "fields": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "fields": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
         "requireCounselComplete": { "type": "boolean" },
         "requireComplianceCertificate": { "type": "boolean" }
       }
@@ -152,13 +212,23 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["kinds"],
-      "properties": { "kinds": { "type": "array", "items": { "type": "string", "minLength": 1 } } }
+      "properties": {
+        "kinds": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
     },
     "required-footer": {
       "type": "object",
       "additionalProperties": false,
       "required": ["requiredTokens"],
-      "properties": { "requiredTokens": { "type": "array", "items": { "type": "string", "minLength": 1 } } }
+      "properties": {
+        "requiredTokens": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
     },
     "reference-integrity": {
       "type": "object",
