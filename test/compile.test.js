@@ -21,11 +21,14 @@ import { readDocxParts, repackDocxParts } from "../dist/docx/package.js";
 import { metadata } from "./helpers.js";
 
 test("standalone compilation parses legal Markdown and emits stable block bookmarks", async () => {
-  const compiled = await compileMarkdown("# Motion\n\nThe requested relief follows.\n", {
-    documentId: "motion",
-    profile: "us-district-conventional",
-    metadata,
-  });
+  const compiled = await compileMarkdown(
+    "# Motion\n\nThe requested relief follows.\n",
+    {
+      documentId: "motion",
+      profile: "us-district-conventional",
+      metadata,
+    },
+  );
   assert.ok(compiled.bytes.byteLength > 1000);
   assert.equal(compiled.artifact.revision, null);
   assert.equal(compiled.validation.status, "pass");
@@ -45,7 +48,9 @@ test("authority annotations survive compilation into the semantic manifest", asy
   );
   const inspected = await inspectDocx(compiled.bytes);
   const recognizedAuthority = inspected.recognized.blocks.flatMap(
-    (block) => block.runs?.flatMap((run) => (run.authority ? [run.authority] : [])) ?? [],
+    (block) =>
+      block.runs?.flatMap((run) => (run.authority ? [run.authority] : [])) ??
+      [],
   );
   assert.ok(
     recognizedAuthority.some(
@@ -71,7 +76,9 @@ test("ordered lists starting above one export a numbering start override", async
     builtInProfiles["us-district-conventional"],
   );
   const parts = await readDocxParts(generated.bytes);
-  const numberingXml = new TextDecoder().decode(parts.get("word/numbering.xml"));
+  const numberingXml = new TextDecoder().decode(
+    parts.get("word/numbering.xml"),
+  );
   assert.match(numberingXml, /<w:start w:val="4"\/>/);
   assert.ok(
     (numberingXml.match(/<w:abstractNum/g) ?? []).length >= 4,
@@ -80,9 +87,10 @@ test("ordered lists starting above one export a numbering start override", async
 });
 
 test("continuous section breaks preserve the deterministic page", async () => {
-  const before = Array.from({ length: 8 }, (_, index) => `Before ${index}`).join(
-    "\n\n",
-  );
+  const before = Array.from(
+    { length: 8 },
+    (_, index) => `Before ${index}`,
+  ).join("\n\n");
   const after = Array.from({ length: 8 }, (_, index) => `After ${index}`).join(
     "\n\n",
   );
@@ -184,7 +192,12 @@ test("native redline export accepts lists and footnotes and rejects tables", asy
     profile: builtInProfiles["us-district-conventional"],
   };
   await assert.rejects(
-    generateRedlineDocx(parsed.document, parsed.document, options.changes, options.profile),
+    generateRedlineDocx(
+      parsed.document,
+      parsed.document,
+      options.changes,
+      options.profile,
+    ),
     (error) =>
       error instanceof AgentDocxError &&
       error.code === "DOCX_REDLINE_UNSUPPORTED" &&
@@ -264,19 +277,23 @@ test("caption, signature, and certificate blocks emit borderless DOCX tables", a
       profile: "us-district-conventional",
       metadata: {
         ...metadata,
-        counsel: [{
-          id: "counsel-1",
-          name: "A. Counsel",
-          addressLines: [],
-          phone: "",
-          email: "",
-        }],
-        certificates: [{
-          id: "certificate-1",
-          kind: "compliance",
-          basis: "words",
-          signerCounselId: "counsel-1",
-        }],
+        counsel: [
+          {
+            id: "counsel-1",
+            name: "A. Counsel",
+            addressLines: [],
+            phone: "",
+            email: "",
+          },
+        ],
+        certificates: [
+          {
+            id: "certificate-1",
+            kind: "compliance",
+            basis: "words",
+            signerCounselId: "counsel-1",
+          },
+        ],
       },
     },
   );
@@ -329,17 +346,26 @@ test("compilation embeds images and emits exhibit attachment bundles", async () 
     },
   );
   assert.ok(compiled.attachments);
-  assert.deepEqual(compiled.attachments.manifest.entries, [{
-    name: "record.pdf",
-    mediaType: "application/pdf",
-    byteLength: 16,
-    sha256: "sha256:433e0e77106688bce4557b2a90b88f514d3ab2dccdcd181c608db95565332af3",
-    payloadPath: "files/record.pdf",
-  }]);
-  assert.deepEqual(compiled.artifact.attachments?.manifest, compiled.attachments.manifest);
+  assert.deepEqual(compiled.attachments.manifest.entries, [
+    {
+      name: "record.pdf",
+      mediaType: "application/pdf",
+      byteLength: 16,
+      sha256:
+        "sha256:433e0e77106688bce4557b2a90b88f514d3ab2dccdcd181c608db95565332af3",
+      payloadPath: "files/record.pdf",
+    },
+  ]);
+  assert.deepEqual(
+    compiled.artifact.attachments?.manifest,
+    compiled.attachments.manifest,
+  );
   const parts = await readDocxParts(compiled.bytes);
   assert.ok([...parts.keys()].some((path) => path.startsWith("word/media/")));
-  assert.match(new TextDecoder().decode(parts.get("word/document.xml")), /Exhibit A/);
+  assert.match(
+    new TextDecoder().decode(parts.get("word/document.xml")),
+    /Exhibit A/,
+  );
 });
 
 test("semantic DOCX import requires and verifies declared attachment bundles", async () => {
@@ -364,7 +390,8 @@ test("semantic DOCX import requires and verifies declared attachment bundles", a
   });
   assert.equal(inspected.fidelity.overall, "normalized");
   assert.equal(
-    inspected.fidelity.items.filter((item) => item.status === "externalized").length,
+    inspected.fidelity.items.filter((item) => item.status === "externalized")
+      .length,
     1,
   );
   assert.equal(
@@ -429,29 +456,31 @@ test("attachment bundles enforce file and path budgets", async () => {
   }
 });
 
-
 test("compilation emits native legal styles and document chrome", async () => {
-  const compiled = await compileMarkdown("# Argument\n\nThe requested relief follows.\n", {
-    documentId: "motion",
-    profile: "us-district-conventional",
-    metadata,
-    chrome: {
-      headers: { default: "{{caseName}} — {{documentTitle}}" },
-      footers: { default: "{{docketNumber}} — Page {{page}} of {{pages}}" },
-      pageNumber: {
-        story: "footer",
-        alignment: "center",
-        format: "decimal",
-        start: 1,
-      },
-      lineNumbers: {
-        countBy: 1,
-        start: 1,
-        distanceTwips: 360,
-        restart: "continuous",
+  const compiled = await compileMarkdown(
+    "# Argument\n\nThe requested relief follows.\n",
+    {
+      documentId: "motion",
+      profile: "us-district-conventional",
+      metadata,
+      chrome: {
+        headers: { default: "{{caseName}} — {{documentTitle}}" },
+        footers: { default: "{{docketNumber}} — Page {{page}} of {{pages}}" },
+        pageNumber: {
+          story: "footer",
+          alignment: "center",
+          format: "decimal",
+          start: 1,
+        },
+        lineNumbers: {
+          countBy: 1,
+          start: 1,
+          distanceTwips: 360,
+          restart: "continuous",
+        },
       },
     },
-  });
+  );
   const parts = await readDocxParts(compiled.bytes);
   const xml = (path) => new TextDecoder().decode(parts.get(path));
   assert.match(xml("word/styles.xml"), /AgentDocxBody/);
@@ -488,7 +517,9 @@ test("clean compilation carries a deterministic semantic manifest", async () => 
   const second = await compileMarkdown(source, options);
   assert.deepEqual(first.bytes, second.bytes);
   const parts = await readDocxParts(first.bytes);
-  const manifest = new TextDecoder().decode(parts.get("customXml/itemAgentDocx.xml"));
+  const manifest = new TextDecoder().decode(
+    parts.get("customXml/itemAgentDocx.xml"),
+  );
   assert.match(manifest, /semantic-manifest\/v1/);
   assert.match(manifest, /"documentId":"motion"/);
   assert.match(
@@ -498,11 +529,14 @@ test("clean compilation carries a deterministic semantic manifest", async () => 
 });
 
 test("semantic DOCX import restores source and validates emitted bookmarks", async () => {
-  const compiled = await compileMarkdown("# Motion\n\nThe requested relief follows.\n", {
-    documentId: "motion",
-    profile: "us-district-conventional",
-    metadata,
-  });
+  const compiled = await compileMarkdown(
+    "# Motion\n\nThe requested relief follows.\n",
+    {
+      documentId: "motion",
+      profile: "us-district-conventional",
+      metadata,
+    },
+  );
   const inspected = await inspectDocxMaterial(compiled.bytes);
   assert.match(inspected.source, /agent-docx:block/);
   assert.deepEqual(

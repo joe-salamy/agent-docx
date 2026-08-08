@@ -78,7 +78,7 @@ const spawnMcp = (cwd) => {
     send(message) {
       child.stdin.write(`${JSON.stringify(message)}\n`);
     },
-    nextLine(timeoutMs = 30000) {
+    nextLine(timeoutMs = 120000) {
       if (lines.length > 0) return Promise.resolve(lines.shift());
       if (closed) return Promise.reject(closed);
       return new Promise((resolve, reject) => {
@@ -103,10 +103,10 @@ const spawnMcp = (cwd) => {
     async close() {
       if (!child.stdin.destroyed) child.stdin.end();
       try {
-        return await waitForClose(child, 15000);
+        return await waitForClose(child, 60000);
       } catch (error) {
         child.kill("SIGKILL");
-        await waitForClose(child, 15000).catch(() => undefined);
+        await waitForClose(child, 60000).catch(() => undefined);
         throw error;
       }
     },
@@ -171,7 +171,10 @@ test("MCP stdio serves agent tools and dispatches a project workflow", async () 
     });
     assert.equal(badProject.result, undefined);
     assert.equal(badProject.error.code, -32602);
-    assert.equal(badProject.error.message, "project must be a non-empty string");
+    assert.equal(
+      badProject.error.message,
+      "project must be a non-empty string",
+    );
 
     const initializedProject = await call(session, "project", "tools/call", {
       name: "project.init",

@@ -16,6 +16,10 @@ agent-docx --version
 agent-docx --help
 ```
 
+### Input and package limits
+
+The CLI rejects oversized inputs before parsing: Markdown and stdin are capped at 64 MiB, and each JSONL request line is capped at 8 MiB. DOCX packages are capped at 25 MiB compressed input, 512 ZIP entries, 64 MiB decompressed total, and 4 MiB per XML part (with a 12 MiB XML total); attachment bundles allow at most 512 entries, 25 MiB per file, and 50 MiB decompressed total. These limits protect both the CLI and long-running agent transports; a rejected input is not partially processed.
+
 ## Quick start: a revision-bound filing workflow
 
 Create `metadata.json` with the litigation metadata required by the chosen rule pack, then initialize a project:
@@ -90,7 +94,7 @@ agent-docx agent --watch --project FILE --document ID --jsonl
 agent-docx mcp
 ```
 
-All workflow commands accept `--project FILE`; project creation and document addition use `--document`, `--source`, `--profile`, and `--metadata`. `project init` creates the manifest and first document; `project add` adds another document and accepts `--default` to make it the default document. Custom font input requires `--font-family` and `--font-regular` together; bold, italic, and bold-italic files are optional.
+All workflow commands accept `--project FILE`; project creation and document addition use `--document`, `--source`, `--profile`, and `--metadata`. `project init` creates the manifest and first document; `project add` adds another document and accepts `--default` to make it the default document. Font flags are an all-or-nothing family set: `--font-family` and `--font-regular` are required together, while `--font-bold`, `--font-italic`, and `--font-bold-italic` are optional face overrides. Supplying any face flag without `--font-regular` is rejected.
 
 ### Filing sets
 
@@ -108,6 +112,8 @@ agent-docx filing-set remove --project agent-docx.json --id motion-package
 ```
 
 Filing sets live in the project manifest (`filingSets`), reference existing documents in order, and are validated at add time (unknown or duplicate documents are rejected). `filing-set validate` (agent actions `filingSet.add`/`remove`/`get`/`validate`) reports each member document's validation result and deterministic page count, and when a `pageCap` is set, the summed page budget with `pass`/`fail`/`unknown` status—an unmeasured member makes the budget `unknown`, never a silent pass. Set membership is manifest state, not a revision; document revisions stay independently revision-bound.
+
+The published project schema enforces nonempty relative IDs and unique array items. JSON Schema cannot compare object properties across array elements, so duplicate document IDs with different configurations and filing-set `documentIds` references remain explicit runtime manifest invariants.
 
 ```sh
 # Inspect a supported template without copying arbitrary package parts.
@@ -133,7 +139,7 @@ agent-docx export \
 
 ## Agent protocol
 
-`agent-docx agent --input-jsonl` accepts one closed JSON request per stdin line and emits one closed JSON result or error record per accepted line. It is designed for stateful tools rather than shell parsing.
+`agent-docx agent --input-jsonl` accepts one closed JSON request per stdin line and emits one closed JSON result or error record per accepted line. It is designed for stateful tools rather than shell parsing. `--input-jsonl` is an agent transport mode and is rejected when combined with `--batch`; use either the JSONL request stream or batch file discovery, never both.
 
 ```sh
 printf '%s\n' \
@@ -162,6 +168,7 @@ agent-docx mcp
 ```
 
 `agent-docx mcp` serves the same version-1 protocol as a Model Context Protocol server over stdio (newline-delimited JSON-RPC, no framing). Every protocol action becomes one MCP tool named after the action (for example `document.validate`, `draft.evaluate`, `docx.export`, `filingSet.get`); each tool takes the action's `params` object plus an optional `project` path relative to the server's working directory. Tool results carry the serialized protocol value as both text and `structuredContent`; dispatch failures return `isError: true` results with a `{code, message}` structured payload. The server implements `initialize`, `ping`, `tools/list`, and `tools/call`, so MCP-capable agents (Claude Code, Cursor, and similar) can drive the full project, draft, review, validation, and export workflow without shell parsing. No binary DOCX bytes are ever embedded in MCP responses; artifacts are referenced by public path and SHA-256.
+MCP project paths are confined to the server working directory. Requests may name a project with a normalized relative path, but absolute paths and traversal outside that directory are rejected; responses expose cwd-relative public paths. Run the server from a directory that contains only the projects and assets you intend to make available.
 
 ## Markdown and legal structure
 
@@ -259,6 +266,8 @@ Deterministic pagination runs entirely in process:
 6. Results report physical pages, fractional equivalent-page use, visual and counted lines, paragraph-tail diagnostics, section attribution, and last-page metrics.
 
 The same Markdown, configuration, and metric-font bytes produce the same deterministic result. The model reports unsupported content instead of guessing.
+
+The `pnpm run accuracy` gate compares measured renderer page counts with each case's `targetPages` in the checked-in accuracy manifests. For `word` or `libreoffice`, an unavailable or errored requested renderer fails the run; the script never substitutes the deterministic or outer `pageCount` as a renderer measurement. Exact-match rate, mean absolute error, and worst-page error are computed against those manifest targets, while deterministic-only metrics are reported separately. Live Office gates require `AGENT_DOCX_TEST_WORD=1` or `AGENT_DOCX_TEST_LIBREOFFICE=1`; explicit test paths can be supplied with `AGENT_DOCX_ACCURACY_WORD_PATH` or `AGENT_DOCX_ACCURACY_LIBREOFFICE_PATH`.
 
 ## DOCX templates and import
 

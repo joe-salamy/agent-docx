@@ -31,7 +31,10 @@ The **first** point has a [link](https://example.test) and a footnote.[^n]
   assert.equal(document.blocks[1].kind, "paragraph");
   const paragraph = document.blocks[1];
   assert.equal(paragraph.kind, "paragraph");
-  assert.equal(paragraph.runs.some((run) => run.bold), true);
+  assert.equal(
+    paragraph.runs.some((run) => run.bold),
+    true,
+  );
   assert.equal(
     paragraph.runs.some((run) => run.link?.target === "https://example.test"),
     true,

@@ -57,10 +57,7 @@ test("explicit project and agent commands execute a revision-bound workflow", as
   const manifest = join(directory, "agent-docx.json");
   try {
     await writeFile(join(directory, "motion.md"), "# Motion\n\nBody text.\n");
-    await writeFile(
-      join(directory, "metadata.json"),
-      JSON.stringify(metadata),
-    );
+    await writeFile(join(directory, "metadata.json"), JSON.stringify(metadata));
     const initialized = await runInProcess(
       [
         "project",
@@ -848,12 +845,36 @@ test("watch JSONL emits validated ready, result, and signal end records", async 
   const path = join(temporary, "watch.md");
   await writeFile(path, "Watched.");
   try {
-    const capture = memoryRuntime("", {
-      cwd: temporary,
-      onceSignal(signal, listener) {
-        if (signal === "SIGINT") setTimeout(listener, 10);
-      },
-    });
+    const ready = Promise.withResolvers();
+    const initialResult = Promise.withResolvers();
+    const changedResult = Promise.withResolvers();
+    const capture = memoryRuntime("", { cwd: temporary });
+    const writeStdout = capture.runtime.writeStdout;
+    capture.runtime.writeStdout = async (text) => {
+      await writeStdout(text);
+      for (const line of text.trim().split("\n")) {
+        if (!line) continue;
+        const record = JSON.parse(line);
+        if (record.kind === "ready") ready.resolve(record);
+        else if (record.kind === "result" && record.trigger?.kind === "initial")
+          initialResult.resolve(record);
+        else if (
+          record.kind === "result" &&
+          record.trigger?.kind === "source-change"
+        )
+          changedResult.resolve(record);
+      }
+    };
+    capture.runtime.onceSignal = (signal, listener) => {
+      if (signal !== "SIGINT") return;
+      void (async () => {
+        await ready.promise;
+        await initialResult.promise;
+        await writeFile(path, "Watched after ready.");
+        await changedResult.promise;
+        listener();
+      })();
+    };
     const code = await runCli(
       ["measure", "--watch", "--jsonl", "watch.md"],
       capture.runtime,
@@ -863,14 +884,15 @@ test("watch JSONL emits validated ready, result, and signal end records", async 
     const records = capture.stdout().trim().split("\n").map(JSON.parse);
     assert.deepEqual(
       records.map(({ kind }) => kind),
-      ["ready", "result", "end"],
+      ["ready", "result", "result", "end"],
     );
     assert.deepEqual(
       records.map(({ sequence }) => sequence),
-      [1, 2, 3],
+      [1, 2, 3, 4],
     );
     assert.equal(records[1].trigger.kind, "initial");
-    assert.equal(records[2].reason, "SIGINT");
+    assert.equal(records[2].trigger.kind, "source-change");
+    assert.equal(records[3].reason, "SIGINT");
     for (const record of records)
       assert.equal(
         validateJsonl(record),
@@ -1079,24 +1101,34 @@ test("end-to-end legal project fixture exports clean and native-redline DOCX", a
       JSON.stringify(validateAgentResponse.errors),
     );
     const watchedSource = await readFile(join(directory, "motion.md"), "utf8");
-    const capture = memoryRuntime("", {
-      cwd: directory,
-      onceSignal(signal, listener) {
-        if (signal !== "SIGINT") return;
-        setTimeout(
-          () =>
-            void writeFile(
-              join(directory, "motion.md"),
-              watchedSource.replace(
-                "the Court should grant the motion.",
-                "the Court should grant the requested motion.",
-              ),
-            ),
-          10,
+    const ready = Promise.withResolvers();
+    const result = Promise.withResolvers();
+    const capture = memoryRuntime("", { cwd: directory });
+    const writeStdout = capture.runtime.writeStdout;
+    capture.runtime.writeStdout = async (text) => {
+      await writeStdout(text);
+      for (const line of text.trim().split("\n")) {
+        if (!line) continue;
+        const record = JSON.parse(line);
+        if (record.kind === "ready") ready.resolve(record);
+        else if (record.kind === "result") result.resolve(record);
+      }
+    };
+    capture.runtime.onceSignal = (signal, listener) => {
+      if (signal !== "SIGINT") return;
+      void (async () => {
+        await ready.promise;
+        await writeFile(
+          join(directory, "motion.md"),
+          watchedSource.replace(
+            "the Court should grant the motion.",
+            "the Court should grant the requested motion.",
+          ),
         );
-        setTimeout(listener, 600);
-      },
-    });
+        await result.promise;
+        listener();
+      })();
+    };
     const watchCode = await runCli(
       [
         "agent",

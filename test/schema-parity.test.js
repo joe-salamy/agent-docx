@@ -12,6 +12,30 @@ import {
   validatorForSchema,
 } from "./helpers.js";
 import { compileMarkdown, validateUserRulePack } from "../dist/index.js";
+const publishedSchemaNames = [
+  "config.schema.json",
+  "measurement-request.schema.json",
+  "measurement-result.schema.json",
+  "docx-template-inspection.schema.json",
+  "measurement-stream.schema.json",
+  "cli-error.schema.json",
+  "profile-catalog.schema.json",
+  "project.schema.json",
+  "rule-pack.schema.json",
+  "agent-request.schema.json",
+  "agent-response.schema.json",
+  "agent-stream.schema.json",
+  "revision.schema.json",
+  "change-set.schema.json",
+  "source-patch.schema.json",
+  "validation-result.schema.json",
+  "artifact-result.schema.json",
+  "compiled-docx.schema.json",
+  "docx-import-result.schema.json",
+  "redline-import-result.schema.json",
+  "filing-set.schema.json",
+  "filing-set-validation.schema.json",
+];
 
 const validateProject = validatorFor(
   "https://agent-docx.dev/schemas/project-v1.json",
@@ -61,9 +85,12 @@ const validateAgentResponse = validatorFor(
 const validateFatal = validatorFor(
   "https://agent-docx.dev/schemas/cli-error-v1.json",
 );
-
 test("every published schema loads and registers", () => {
-  assert.ok(schemaNames.length >= 21, `derived ${schemaNames.length} schemas`);
+  assert.deepEqual(
+    [...schemaNames].sort(),
+    [...publishedSchemaNames].sort(),
+    "published schema set drifted from package exports",
+  );
   for (const name of schemaNames)
     assert.equal(
       typeof validatorForSchema(name),
@@ -76,10 +103,16 @@ test("happy-path records validate against their published schemas", async () => 
   const directory = await mkdtemp(join(tmpdir(), "agent-docx-parity-"));
   const manifest = "agent-docx.json";
   try {
-    await writeFile(join(directory, "motion.md"), "# Motion\n\nOld statement.\n");
+    await writeFile(
+      join(directory, "motion.md"),
+      "# Motion\n\nOld statement.\n",
+    );
     await writeFile(join(directory, "metadata.json"), JSON.stringify(metadata));
 
-    const measured = await runInProcess(["measure", "--json"], "A short filing.\n");
+    const measured = await runInProcess(
+      ["measure", "--json"],
+      "A short filing.\n",
+    );
     assert.equal(measured.code, 0, measured.stderr);
     assert.equal(
       validateMeasurement(JSON.parse(measured.stdout)),
@@ -235,14 +268,7 @@ test("happy-path records validate against their published schemas", async () => 
     );
 
     const validation = await runInProcess(
-      [
-        "validate",
-        "--project",
-        manifest,
-        "--document",
-        "motion",
-        "--json",
-      ],
+      ["validate", "--project", manifest, "--document", "motion", "--json"],
       "",
       { cwd: directory },
     );
@@ -302,12 +328,7 @@ test("happy-path records validate against their published schemas", async () => 
     assert.equal(redline.code, 0, redline.stderr);
 
     const imported = await runInProcess(
-      [
-        "import",
-        "motion.docx",
-        "--inspect-only",
-        "--json",
-      ],
+      ["import", "motion.docx", "--inspect-only", "--json"],
       "",
       { cwd: directory },
     );
@@ -363,15 +384,7 @@ test("happy-path records validate against their published schemas", async () => 
     assert.equal(filingSetValue.filingSets.length, 1);
 
     const filingSetGot = await runInProcess(
-      [
-        "filing-set",
-        "get",
-        "--project",
-        manifest,
-        "--id",
-        "set-1",
-        "--json",
-      ],
+      ["filing-set", "get", "--project", manifest, "--id", "set-1", "--json"],
       "",
       { cwd: directory },
     );
@@ -675,6 +688,177 @@ test("manifest and rule-pack round trips match runtime acceptance", async () => 
   );
   const accepted = validateUserRulePack(pack);
   assert.equal(accepted.checks[0].params.perPageMaximum, 25);
+});
+test("schema contracts cover empty results, custom packs, and rejected malformed records", async () => {
+  const measured = await runInProcess(
+    ["measure", "--json"],
+    "A short filing.\n",
+  );
+  assert.equal(measured.code, 0, measured.stderr);
+  const emptyMeasurement = JSON.parse(measured.stdout);
+  emptyMeasurement.pageCount = 0;
+  emptyMeasurement.deterministic.pageCount = 0;
+  emptyMeasurement.deterministic.equivalentPages = 0;
+  emptyMeasurement.deterministic.totalVisualLines = 0;
+  emptyMeasurement.deterministic.visualLinesByPage = [];
+  emptyMeasurement.deterministic.countedLinesByPage = [];
+  emptyMeasurement.deterministic.lastPage = null;
+  assert.equal(
+    validateMeasurement(emptyMeasurement),
+    true,
+    JSON.stringify(validateMeasurement.errors),
+  );
+
+  const customValidation = {
+    schemaVersion: 1,
+    documentId: "motion",
+    revision: null,
+    rulePack: null,
+    scope: {
+      certification: false,
+      checkedRuleIds: [],
+      sourceSnapshots: [
+        {
+          id: "local-rules@2026-01-01",
+          sourceUrl: "https://example.com/local-rules.txt",
+          effectiveDate: "2026-01-01",
+          sha256: `sha256:${"b".repeat(64)}`,
+        },
+      ],
+      unmodeledProvisions: [],
+    },
+    status: "unknown",
+    summary: { pass: 0, fail: 0, unknown: 0 },
+    findings: [],
+  };
+  assert.equal(
+    validateValidation(customValidation),
+    true,
+    JSON.stringify(validateValidation.errors),
+  );
+
+  const revision = `sha256:${"c".repeat(64)}`;
+  // Cross-field ordering (end >= start) is not expressible in plain
+  // draft-2020-12 JSON Schema, so the published schema accepts the shape and
+  // runtime validation (PATCH_INVALID) rejects reversed ranges.
+  assert.equal(
+    validateSourcePatch({
+      schemaVersion: 1,
+      documentId: "motion",
+      baseRevision: revision,
+      edits: [{ start: 4, end: 3, expectedText: "", replacement: "" }],
+    }),
+    true,
+    "schema must remain portable draft-2020-12 (ordering is runtime-enforced)",
+  );
+
+  const agentProjectParams = {
+    documentId: "motion",
+    source: "motion.md",
+    profile: "us-district-conventional",
+    metadata,
+    makeDefault: true,
+  };
+  assert.equal(
+    validateAgentRequest({
+      schemaVersion: 1,
+      action: "project.add",
+      params: agentProjectParams,
+    }),
+    true,
+    JSON.stringify(validateAgentRequest.errors),
+  );
+  assert.equal(
+    validateAgentRequest({
+      schemaVersion: 1,
+      action: "project.init",
+      params: agentProjectParams,
+    }),
+    false,
+    "project.init must reject makeDefault",
+  );
+
+  const invalidAnnotationChange = {
+    schemaVersion: 1,
+    id: revision,
+    documentId: "motion",
+    baseRevision: revision,
+    headRevision: revision,
+    changes: [],
+    annotations: [
+      {
+        id: `c_${"d".repeat(64)}`,
+        kind: "add",
+        newValue: {
+          id: "a_00000000-0000-0000-0000-000000000000",
+          blockId: "b_00000000-0000-4000-8000-000000000000",
+          author: null,
+          createdAt: null,
+          message: "Invalid UUID version",
+          status: "open",
+        },
+      },
+    ],
+  };
+  assert.equal(
+    validateChangeSet(invalidAnnotationChange),
+    false,
+    "annotation IDs must be UUID v4 with the RFC variant",
+  );
+
+  const artifactWithoutPdf = {
+    schemaVersion: 1,
+    mediaType:
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    byteLength: 1,
+    sha256: revision,
+    provenanceSha256: revision,
+    documentId: "motion",
+    profile: "us-district-conventional",
+    rulePack: null,
+    rendererProvenance: {
+      generator: "agent-docx",
+      requested: "deterministic",
+      pageCountSource: "deterministic",
+    },
+    path: "motion.docx",
+    storePath: ".agent-docx/objects/docx",
+    attachments: null,
+    revision,
+    mode: "pdf",
+    baseRevision: null,
+  };
+  assert.equal(
+    validateArtifact(artifactWithoutPdf),
+    false,
+    "PDF artifacts must include their PDF payload",
+  );
+
+  const duplicateManifest = {
+    schemaVersion: 1,
+    projectId: "11111111-2222-4333-8444-555555555555",
+    defaultDocument: "motion",
+    storeDir: ".agent-docx",
+    documents: [
+      {
+        id: "motion",
+        source: "motion.md",
+        profile: "us-district-conventional",
+        metadata,
+      },
+      {
+        id: "motion",
+        source: "motion.md",
+        profile: "us-district-conventional",
+        metadata,
+      },
+    ],
+  };
+  assert.equal(
+    validateProject(duplicateManifest),
+    false,
+    "duplicate document IDs must be rejected",
+  );
 });
 
 test("published package version matches the runtime version literal", () => {

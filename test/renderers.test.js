@@ -13,12 +13,33 @@ import {
 import { AgentDocxError } from "../dist/index.js";
 import { measureMarkdown } from "../dist/index.js";
 
+const shellQuote = (value) => `'${value.replaceAll("'", "'\"'\"'")}'`;
+const fakeExecutable = async (root, name, source) => {
+  const scriptPath = join(root, `${name}.mjs`);
+  await writeFile(scriptPath, source);
+  const wrapperPath = join(
+    root,
+    process.platform === "win32" ? `${name}.cmd` : `${name}.sh`,
+  );
+  if (process.platform === "win32") {
+    await writeFile(
+      wrapperPath,
+      `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`,
+    );
+  } else {
+    await writeFile(
+      wrapperPath,
+      `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(scriptPath)} "$@"\n`,
+    );
+    await chmod(wrapperPath, 0o755);
+  }
+  return wrapperPath;
+};
 test("LibreOffice resolver rejects an explicit missing executable", async () => {
   await assert.rejects(
     () => resolveLibreOffice("/definitely/missing/soffice"),
     (error) =>
-      error instanceof AgentDocxError &&
-      error.code === "LIBREOFFICE_NOT_FOUND",
+      error instanceof AgentDocxError && error.code === "LIBREOFFICE_NOT_FOUND",
   );
 });
 
@@ -31,8 +52,7 @@ test("LibreOffice installed font entries must be readable regular files", async 
           { family: "Times New Roman", path: "/definitely/missing/font.ttf" },
         ],
       }),
-    (error) =>
-      error instanceof AgentDocxError && error.code === "INVALID_FONT",
+    (error) => error instanceof AgentDocxError && error.code === "INVALID_FONT",
   );
   await assert.rejects(
     () =>
@@ -42,8 +62,7 @@ test("LibreOffice installed font entries must be readable regular files", async 
           { family: "Times New Roman", path: "relative/font.ttf" },
         ],
       }),
-    (error) =>
-      error instanceof AgentDocxError && error.code === "INVALID_FONT",
+    (error) => error instanceof AgentDocxError && error.code === "INVALID_FONT",
   );
 });
 
@@ -65,8 +84,8 @@ test("explicit renderer paths must be absolute", async () => {
 
 test("LibreOffice terminates runaway transport output", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-docx-overflow-lo-"));
-  const executable = join(root, "soffice");
-  const script = `#!/usr/bin/env node
+  let executable;
+  const script = `
 const chunk = "x".repeat(65536);
 function write() {
   while (process.stdout.write(chunk)) {}
@@ -74,8 +93,7 @@ function write() {
 }
 write();`;
   try {
-    await writeFile(executable, script);
-    await chmod(executable, 0o755);
+    executable = await fakeExecutable(root, "soffice", script);
     const started = performance.now();
     await assert.rejects(
       () =>
@@ -98,17 +116,14 @@ write();`;
 
 test("LibreOffice adapter uses isolated exact conversion arguments and PDF page tree", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-docx-fake-lo-"));
-  const executable = join(root, "soffice");
   const pdf = await PDFDocument.create();
   pdf.addPage();
   pdf.addPage();
-  process.env.AGENT_DOCX_FAKE_PDF = Buffer.from(await pdf.save()).toString(
-    "base64",
-  );
-  const script = `#!/usr/bin/env node\nimport {writeFileSync} from 'node:fs';import {join} from 'node:path';const a=process.argv.slice(2);if(a[0]==='--version'){console.log('LibreOffice 99.0 fake');process.exit(0)}const expected=['--headless','--nologo','--nodefault','--norestore','--infilter=Office Open XML Text','--convert-to','pdf:writer_pdf_Export'];for(const x of expected)if(!a.includes(x)){console.error('missing '+x);process.exit(9)}const out=a[a.indexOf('--outdir')+1];writeFileSync(join(out,'render.pdf'),Buffer.from(process.env.AGENT_DOCX_FAKE_PDF,'base64'));`;
+  const pdfBase64 = Buffer.from(await pdf.save()).toString("base64");
+  const script = `import {writeFileSync} from 'node:fs';import {join} from 'node:path';const a=process.argv.slice(2);if(a[0]==='--version'){console.log('LibreOffice 99.0 fake');process.exit(0)}const expected=['--headless','--nologo','--nodefault','--norestore','--infilter=Office Open XML Text','--convert-to','pdf:writer_pdf_Export'];for(const x of expected)if(!a.includes(x)){console.error('missing '+x);process.exit(9)}const out=a[a.indexOf('--outdir')+1];writeFileSync(join(out,'render.pdf'),Buffer.from(${JSON.stringify(pdfBase64)},'base64'));`;
+  let executable;
   try {
-    await writeFile(executable, script);
-    await chmod(executable, 0o755);
+    executable = await fakeExecutable(root, "soffice", script);
     const rendered = await renderLibreOffice(
       new Uint8Array([1, 2, 3]),
       ["Times New Roman"],
@@ -120,23 +135,19 @@ test("LibreOffice adapter uses isolated exact conversion arguments and PDF page 
     assert.equal(rendered.calibratedFontEnvironment, false);
     assert.equal(rendered.requestedFontFamilies[0], "Times New Roman");
   } finally {
-    delete process.env.AGENT_DOCX_FAKE_PDF;
     await rm(root, { recursive: true, force: true });
   }
 });
 
 test("LibreOffice renders the exact returned generated DOCX", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-docx-fake-lo-sha-"));
-  const executable = join(root, "soffice");
   const pdf = await PDFDocument.create();
   pdf.addPage();
-  process.env.AGENT_DOCX_FAKE_PDF = Buffer.from(await pdf.save()).toString(
-    "base64",
-  );
-  const script = `#!/usr/bin/env node\nimport {writeFileSync} from 'node:fs';import {join} from 'node:path';const a=process.argv.slice(2);if(a[0]==='--version'){console.log('LibreOffice 99.0 fake');process.exit(0)}const out=a[a.indexOf('--outdir')+1];writeFileSync(join(out,'render.pdf'),Buffer.from(process.env.AGENT_DOCX_FAKE_PDF,'base64'));`;
+  const pdfBase64 = Buffer.from(await pdf.save()).toString("base64");
+  const script = `import {writeFileSync} from 'node:fs';import {join} from 'node:path';const a=process.argv.slice(2);if(a[0]==='--version'){console.log('LibreOffice 99.0 fake');process.exit(0)}const out=a[a.indexOf('--outdir')+1];writeFileSync(join(out,'render.pdf'),Buffer.from(${JSON.stringify(pdfBase64)},'base64'));`;
+  let executable;
   try {
-    await writeFile(executable, script);
-    await chmod(executable, 0o755);
+    executable = await fakeExecutable(root, "soffice", script);
     const result = await measureMarkdown("# Exact bytes", {
       renderer: "libreoffice",
       sectionDiagnostics: true,
@@ -151,15 +162,14 @@ test("LibreOffice renders the exact returned generated DOCX", async () => {
     assert.equal("sections" in result.renderers.libreoffice.value, false);
     assert.equal(hash, result.renderers.libreoffice.value.generatedDocxSha256);
   } finally {
-    delete process.env.AGENT_DOCX_FAKE_PDF;
     await rm(root, { recursive: true, force: true });
   }
 });
 
 test("Word bridge validates and maps version-2 Unicode paragraph records", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-docx-fake-word-"));
-  const executable = join(root, "powershell");
-  const script = `#!/usr/bin/env node
+  let executable;
+  const script = `
 let input='';for await(const chunk of process.stdin)input+=chunk;
 const request=JSON.parse(input);
 if(request.protocolVersion!==2||request.paragraphIds.length!==2)process.exit(9);
@@ -190,8 +200,7 @@ console.log(JSON.stringify({kind:'paragraphs',protocolVersion:2,status:'ok',valu
     },
   ];
   try {
-    await writeFile(executable, script);
-    await chmod(executable, 0o755);
+    executable = await fakeExecutable(root, "powershell", script);
     const rendered = await renderWord(
       new Uint8Array([1, 2, 3]),
       [],
@@ -232,15 +241,14 @@ console.log(JSON.stringify({kind:'paragraphs',protocolVersion:2,status:'ok',valu
 
 test("Word paragraph extraction failure preserves a successful summary", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-docx-fake-word-error-"));
-  const executable = join(root, "powershell");
-  const script = `#!/usr/bin/env node
+  const script = `
 for await(const chunk of process.stdin){}
 console.log(JSON.stringify({kind:'started',protocolVersion:2,hwnd:1}));
 console.log(JSON.stringify({kind:'summary',protocolVersion:2,pageCount:1,totalBodyLines:1,bodyLinesByPage:[1],bodyLinesOnLastPage:1,version:'99',build:'1',activePrinter:'fake'}));
 console.log(JSON.stringify({kind:'paragraphs',protocolVersion:2,status:'error',message:'injected extraction failure'}));`;
+  let executable;
   try {
-    await writeFile(executable, script);
-    await chmod(executable, 0o755);
+    executable = await fakeExecutable(root, "powershell", script);
     const rendered = await renderWord(
       new Uint8Array([1]),
       [],
@@ -308,14 +316,9 @@ test("Word bridge rejects malformed frame ordering and framing", async () => {
         ],
       ],
     ]) {
-      const executable = join(root, name);
-      await writeFile(
-        executable,
-        `#!/usr/bin/env node
-for await(const chunk of process.stdin){}
-for(const line of ${JSON.stringify(lines)})console.log(line);`,
-      );
-      await chmod(executable, 0o755);
+      const script = `for await(const chunk of process.stdin){}
+for(const line of ${JSON.stringify(lines)})console.log(line);`;
+      const executable = await fakeExecutable(root, name, script);
       await assert.rejects(
         () =>
           renderWord(

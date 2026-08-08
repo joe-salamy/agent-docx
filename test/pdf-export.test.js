@@ -12,16 +12,32 @@ import { metadata } from "./helpers.js";
 const sha256 = (bytes) =>
   `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 
-let libreOfficeAvailable = false;
-try {
-  await resolveLibreOffice();
-  libreOfficeAvailable = true;
-} catch {}
+const knownEnvironmentErrorCodes = new Set([
+  "LIBREOFFICE_FONT_ENVIRONMENT_UNVERIFIED",
+]);
+const libreOfficeResolution = await (async () => {
+  try {
+    await resolveLibreOffice();
+    return { status: "available" };
+  } catch (error) {
+    const code = error?.code;
+    if (code === "LIBREOFFICE_NOT_FOUND")
+      return { status: "unavailable", code };
+    if (knownEnvironmentErrorCodes.has(code))
+      return { status: "environment", code };
+    return { status: "error", error };
+  }
+})();
+const libreOfficeSkip =
+  libreOfficeResolution.status === "unavailable" ||
+  libreOfficeResolution.status === "environment";
 
 test(
   "project PDF export publishes a verified PDF and DOCX artifact",
-  { skip: !libreOfficeAvailable },
+  { skip: libreOfficeSkip },
   async () => {
+    if (libreOfficeResolution.status === "error")
+      throw libreOfficeResolution.error;
     const directory = await mkdtemp(join(tmpdir(), "agent-docx-pdf-export-"));
     const manifestPath = join(directory, "agent-docx.json");
     const sourcePath = join(directory, "motion.md");

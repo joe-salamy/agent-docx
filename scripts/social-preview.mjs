@@ -4,7 +4,10 @@ import { fileURLToPath } from "node:url";
 import { Resvg } from "@resvg/resvg-js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const previewSource = resolve(root, "docs/assets/agent-docx-social-preview.svg");
+const previewSource = resolve(
+  root,
+  "docs/assets/agent-docx-social-preview.svg",
+);
 const output = resolve(root, "docs/assets/agent-docx-social-preview.png");
 const fontDirectory = resolve(root, "assets/fonts/liberation-serif-2.1.5");
 const expectedWidth = 1280;
@@ -52,7 +55,9 @@ const png = new Resvg(svg, {
     ],
     loadSystemFonts: false,
   },
-}).render().asPng();
+})
+  .render()
+  .asPng();
 
 assertPreviewPng(png);
 await mkdir(dirname(output), { recursive: true });

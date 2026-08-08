@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { measureMarkdown, AgentDocxError } from "../dist/index.js";
 const argIndex = process.argv.indexOf("--renderer");
@@ -144,21 +144,59 @@ if (
   throw new Error(
     "Set AGENT_DOCX_TEST_LIBREOFFICE=1 to run the live LibreOffice release gate",
   );
+const rendererOptions =
+  renderer === "word" && process.env.AGENT_DOCX_ACCURACY_WORD_PATH
+    ? {
+        word: {
+          powerShellPath: process.env.AGENT_DOCX_ACCURACY_WORD_PATH,
+        },
+      }
+    : renderer === "libreoffice" &&
+        process.env.AGENT_DOCX_ACCURACY_LIBREOFFICE_PATH
+      ? {
+          libreoffice: {
+            executablePath: process.env.AGENT_DOCX_ACCURACY_LIBREOFFICE_PATH,
+          },
+        }
+      : {};
+const pageMetrics = (errors) => ({
+  exactMatchRate: errors.filter((error) => error === 0).length / errors.length,
+  meanAbsolutePageError:
+    errors.reduce((total, error) => total + error, 0) / errors.length,
+  worstPageError: Math.max(...errors),
+});
+if (!["deterministic", "word", "libreoffice"].includes(renderer))
+  throw new Error(
+    `Accuracy accepts --renderer deterministic, word, or libreoffice (received ${renderer})`,
+  );
 const observations = [];
 for (const entry of cases) {
   const generated = await loadCase(entry);
   try {
     const result = await measureMarkdown(generated.markdown, {
       ...generated.options,
+      ...rendererOptions,
       renderer,
     });
-    const measured =
-      renderer === "word" && result.renderers.word?.status === "ok"
-        ? result.renderers.word.value
-        : renderer === "libreoffice" &&
-            result.renderers.libreoffice?.status === "ok"
-          ? result.renderers.libreoffice.value
-          : null;
+    const rendererRecord =
+      renderer === "word"
+        ? result.renderers.word
+        : renderer === "libreoffice"
+          ? result.renderers.libreoffice
+          : undefined;
+    let measured;
+    if (renderer !== "deterministic") {
+      if (!rendererRecord)
+        throw new Error(
+          `requested renderer ${renderer} did not return a status`,
+        );
+      if (rendererRecord.status !== "ok")
+        throw new AgentDocxError(
+          rendererRecord.error.code,
+          `${renderer} renderer ${rendererRecord.status}: ${rendererRecord.error.message}`,
+        );
+      measured = rendererRecord.value;
+    }
     observations.push({
       id: entry.id,
       category: entry.category,
@@ -167,38 +205,55 @@ for (const entry of cases) {
       profileSha256: sha(JSON.stringify(result.deterministic.profile)),
       fontSha256: result.deterministic.profile.metricFonts.map((f) => f.sha256),
       deterministicPages: result.deterministic.pageCount,
-      rendererPages: measured?.pageCount ?? result.pageCount,
-      environment: measured,
+      ...(measured
+        ? { rendererPages: measured.pageCount, environment: measured }
+        : {}),
     });
     process.stderr.write(
-      `${entry.id}: ${result.deterministic.pageCount}/${measured?.pageCount ?? result.pageCount}\n`,
+      `${entry.id}: deterministic=${result.deterministic.pageCount}, target=${entry.targetPages}` +
+        (measured ? `, ${renderer}=${measured.pageCount}` : "") +
+        "\n",
     );
   } catch (error) {
-    if (error instanceof AgentDocxError) {
-      console.error(`${entry.id}: ${error.code}: ${error.message}`);
-      process.exitCode = 4;
-      break;
-    }
-    throw error;
+    const code = error instanceof AgentDocxError ? error.code : "UNKNOWN";
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      `${entry.id}: requested ${renderer} renderer failed (${code}): ${message}`,
+    );
+    process.exitCode = 4;
+    break;
   }
 }
 if (observations.length === cases.length) {
-  const errors = observations.map((o) =>
-    Math.abs(o.deterministicPages - o.rendererPages),
+  const deterministic = pageMetrics(
+    observations.map((observation) =>
+      Math.abs(observation.deterministicPages - observation.targetPages),
+    ),
   );
-  const exact = errors.filter((n) => n === 0).length / errors.length;
-  const mae = errors.reduce((a, b) => a + b, 0) / errors.length;
-  const worst = Math.max(...errors);
+  const rendererMetrics =
+    renderer === "deterministic"
+      ? deterministic
+      : pageMetrics(
+          observations.map((observation) =>
+            Math.abs(observation.rendererPages - observation.targetPages),
+          ),
+        );
   const report = {
     schemaVersion: 1,
     renderer,
     caseCount: observations.length,
-    exactMatchRate: exact,
-    meanAbsolutePageError: mae,
-    worstPageError: worst,
+    exactMatchRate: rendererMetrics.exactMatchRate,
+    meanAbsolutePageError: rendererMetrics.meanAbsolutePageError,
+    worstPageError: rendererMetrics.worstPageError,
+    ...(renderer === "deterministic" ? {} : { deterministic }),
     observations,
   };
   console.log(JSON.stringify(report, null, 2));
-  if (renderer !== "deterministic" && (exact < 0.95 || mae > 0.1 || worst > 1))
+  if (
+    renderer !== "deterministic" &&
+    (rendererMetrics.exactMatchRate < 0.95 ||
+      rendererMetrics.meanAbsolutePageError > 0.1 ||
+      rendererMetrics.worstPageError > 1)
+  )
     process.exitCode = 1;
 }

@@ -19,13 +19,40 @@ const expectedMetricFonts = manifest.fonts.map(({ sha256 }, index) => ({
 const packageJson = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
 );
+const publishedSchemaNames = [
+  "config.schema.json",
+  "measurement-request.schema.json",
+  "measurement-result.schema.json",
+  "docx-template-inspection.schema.json",
+  "measurement-stream.schema.json",
+  "cli-error.schema.json",
+  "profile-catalog.schema.json",
+  "project.schema.json",
+  "rule-pack.schema.json",
+  "agent-request.schema.json",
+  "agent-response.schema.json",
+  "agent-stream.schema.json",
+  "revision.schema.json",
+  "change-set.schema.json",
+  "source-patch.schema.json",
+  "validation-result.schema.json",
+  "artifact-result.schema.json",
+  "compiled-docx.schema.json",
+  "docx-import-result.schema.json",
+  "redline-import-result.schema.json",
+  "filing-set.schema.json",
+  "filing-set-validation.schema.json",
+];
 const schemaNames = Object.keys(packageJson.exports)
   .filter((key) => key.endsWith(".schema.json"))
   .map((key) => key.slice(2));
-if (schemaNames.length < 21)
-  throw new Error(
-    `Schema allowlist derivation found ${schemaNames.length} schemas; expected at least 21`,
-  );
+const codePointSort = (left, right) =>
+  left < right ? -1 : left > right ? 1 : 0;
+if (
+  [...schemaNames].sort(codePointSort).join("\n") !==
+  [...publishedSchemaNames].sort(codePointSort).join("\n")
+)
+  throw new Error(`Published schema set drifted: ${schemaNames.join(", ")}`);
 const fontPrefix = "assets/fonts/liberation-serif-2.1.5/";
 const requiredRuleAssets = [
   "assets/rules/cand-civil-2026-05-01.txt",
@@ -39,11 +66,19 @@ const requiredAssets = [
   ...requiredRuleAssets,
   ...schemaNames,
 ];
-const npmCli = process.env.npm_execpath;
-const usesNpmCli =
-  npmCli !== undefined && /(?:^|[/\\])npm-cli\.js$/.test(npmCli);
-const npmExecutable = usesNpmCli ? process.execPath : "npm";
-const npmArguments = usesNpmCli ? [npmCli] : [];
+const npmExecPath = process.env.npm_execpath;
+const npmUsesNodeLauncher =
+  npmExecPath !== undefined && /\.(?:c?m?js)$/.test(npmExecPath);
+const npmExecutable =
+  npmExecPath !== undefined
+    ? npmUsesNodeLauncher
+      ? process.execPath
+      : npmExecPath
+    : process.platform === "win32"
+      ? "npm.cmd"
+      : "npm";
+const npmArguments =
+  npmExecPath !== undefined && npmUsesNodeLauncher ? [npmExecPath] : [];
 function run(command, args, cwd) {
   const { promise, resolve: done, reject } = Promise.withResolvers();
   const child = spawn(command, args, {
@@ -143,7 +178,7 @@ try {
     [
       "--input-type=module",
       "-e",
-      `import {readFile} from "node:fs/promises"; import {createRequire} from "node:module"; import {Ajv2020} from "ajv/dist/2020.js"; const require=createRequire(import.meta.url); const names=${JSON.stringify(schemaNames)}; const schemas=await Promise.all(names.map(async name=>JSON.parse(await readFile(require.resolve("agent-docx/"+name),"utf8")))); const ajv=new Ajv2020({strict:true,allowUnionTypes:true,formats:{date:true,"date-time":true,uri:true}}); for(const schema of schemas) ajv.addSchema(schema); for(const schema of schemas) ajv.getSchema(schema.$id);`,
+      `import {readFile} from "node:fs/promises"; import {createRequire} from "node:module"; import {Ajv2020} from "ajv/dist/2020.js"; const require=createRequire(import.meta.url); const names=${JSON.stringify(schemaNames)}; const schemas=await Promise.all(names.map(async name=>JSON.parse(await readFile(require.resolve("agent-docx/"+name),"utf8")))); const ajv=new Ajv2020({strict:true,allowUnionTypes:true,$data:true,formats:{date:true,"date-time":true,uri:true}}); for(const schema of schemas) ajv.addSchema(schema); for(const schema of schemas) ajv.getSchema(schema.$id);`,
     ],
     installDir,
   );

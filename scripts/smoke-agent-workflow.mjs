@@ -1,13 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  cp,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,14 +9,15 @@ import { decodeDocxXml, readDocxParts } from "../dist/docx/package.js";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const fixture = join(root, "..", "test", "fixtures", "agent-project");
-const hash = (bytes) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+const hash = (bytes) =>
+  `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
 const allXml = async (bytes) => {
   const parts = await readDocxParts(bytes);
   return [...parts.entries()]
     .filter(([path]) => path.endsWith(".xml") || path.endsWith(".rels"))
     .map(([path, value]) => [path, decodeDocxXml(value)])
-    .sort(([left], [right]) => left.localeCompare(right));
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
 };
 const assertArtifact = async (compiled, label) => {
   assert.ok(compiled.bytes.byteLength > 0, `${label} DOCX is empty`);
@@ -31,7 +25,10 @@ const assertArtifact = async (compiled, label) => {
   assert.equal(compiled.artifact.sha256, hash(compiled.bytes));
   assert.ok(compiled.artifact.path);
   assert.ok(compiled.artifact.storePath);
-  assert.equal(hash(await readFile(compiled.artifact.path)), compiled.artifact.sha256);
+  assert.equal(
+    hash(await readFile(compiled.artifact.path)),
+    compiled.artifact.sha256,
+  );
   assert.notEqual(compiled.artifact.storePath, compiled.artifact.path);
   if (compiled.attachments) {
     assert.ok(compiled.artifact.attachments?.path);
@@ -46,7 +43,11 @@ const assertArtifact = async (compiled, label) => {
       assert.equal(attachment.bytes.byteLength, entry.byteLength);
       assert.equal(hash(attachment.bytes), entry.sha256);
       assert.equal(
-        hash(await readFile(join(compiled.artifact.attachments.path, entry.payloadPath))),
+        hash(
+          await readFile(
+            join(compiled.artifact.attachments.path, entry.payloadPath),
+          ),
+        ),
         entry.sha256,
       );
     }
@@ -60,7 +61,9 @@ const main = async () => {
   const assetsPath = join(directory, "assets");
   const cleanPath = join(directory, "motion-clean.docx");
   const redlinePath = join(directory, "motion-redline.docx");
-  const targetDirectory = await mkdtemp(join(tmpdir(), "agent-docx-smoke-import-"));
+  const targetDirectory = await mkdtemp(
+    join(tmpdir(), "agent-docx-smoke-import-"),
+  );
   try {
     await mkdir(assetsPath);
     await cp(join(fixture, "metadata.json"), join(directory, "metadata.json"));
@@ -94,12 +97,17 @@ const main = async () => {
     const baseRevision = initial.revision.id;
     const base = await project.getDocument("motion", baseRevision);
     const insertedBlockId = `b_${randomUUID()}`;
-    const insertedText = "The requested relief should be granted without a narrower remedy.";
-    const replacement = "the record establishes the required elements and no narrower remedy will cure the injury.";
+    const insertedText =
+      "The requested relief should be granted without a narrower remedy.";
+    const replacement =
+      "the record establishes the required elements and no narrower remedy will cure the injury.";
     const replacementTarget = "the record establishes the required elements.";
     const insert = `\n\n<!-- agent-docx:block id="${insertedBlockId}" -->\n${insertedText}\n`;
     const replacementStart = base.source.indexOf(replacementTarget);
-    assert.ok(replacementStart >= 0, "smoke fixture replacement target missing");
+    assert.ok(
+      replacementStart >= 0,
+      "smoke fixture replacement target missing",
+    );
     const patch = {
       schemaVersion: 1,
       documentId: "motion",
@@ -128,7 +136,10 @@ const main = async () => {
     );
     assert.equal(unknownFindings.length, 1);
     assert.equal(unknownFindings[0].severity, "error");
-    assert.match(`${unknownFindings[0].checkId} ${unknownFindings[0].message}`, /pitch|typeface/i);
+    assert.match(
+      `${unknownFindings[0].checkId} ${unknownFindings[0].message}`,
+      /pitch|typeface/i,
+    );
     assert.equal(evaluation.candidate.validation.scope.certification, false);
 
     const applied = await project.applyPatch(patch, {
@@ -139,7 +150,9 @@ const main = async () => {
     });
     assert.equal(applied.revision.parents.length, 1);
     const patched = await project.getDocument("motion", applied.revision.id);
-    const insertedBlock = patched.document.blocks.find((block) => block.id === insertedBlockId);
+    const insertedBlock = patched.document.blocks.find(
+      (block) => block.id === insertedBlockId,
+    );
     assert.ok(insertedBlock, "inserted fixed-marker block missing");
     const reviewBlock = patched.document.blocks.find(
       (block) => block.id !== insertedBlockId && block.kind === "heading",
@@ -176,8 +189,13 @@ const main = async () => {
     });
     await assertArtifact(clean, "clean");
     await assertArtifact(redline, "redline");
-    assert.ok((redline.artifact.rendererProvenance.verification?.revisionCount ?? 0) > 0);
-    assert.ok((redline.artifact.rendererProvenance.verification?.commentCount ?? 0) > 0);
+    assert.ok(
+      (redline.artifact.rendererProvenance.verification?.revisionCount ?? 0) >
+        0,
+    );
+    assert.ok(
+      (redline.artifact.rendererProvenance.verification?.commentCount ?? 0) > 0,
+    );
     const cleanXml = await allXml(clean.bytes);
     const redlineXml = await allXml(redline.bytes);
     const cleanText = cleanXml.map(([, xml]) => xml).join("\n");
@@ -220,35 +238,79 @@ const main = async () => {
     });
     assert.equal(imported.mode, "clean");
     assert.equal(imported.fidelity.overall, "normalized");
-    assert.equal(imported.fidelity.items.some((item) => item.status === "unsupported"), false);
-    const importedHead = await target.getDocument("motion", imported.headRevision);
-    assert.equal(importedHead.document.blocks.length, head.document.blocks.length);
-    assert.equal(importedHead.document.blocks[0].id, head.document.blocks[0].id);
+    assert.equal(
+      imported.fidelity.items.some((item) => item.status === "unsupported"),
+      false,
+    );
+    const importedHead = await target.getDocument(
+      "motion",
+      imported.headRevision,
+    );
+    assert.equal(
+      importedHead.document.blocks.length,
+      head.document.blocks.length,
+    );
+    assert.equal(
+      importedHead.document.blocks[0].id,
+      head.document.blocks[0].id,
+    );
     assert.deepEqual(importedHead.document.metadata, head.document.metadata);
     assert.deepEqual(importedHead.document.chrome, head.document.chrome);
     assert.deepEqual(await readFile(join(targetAssets, "record.pdf")), record);
-    const importedMeasurement = await target.measure("motion", imported.headRevision);
-    assert.equal(importedMeasurement.deterministic.totalVisualLines, clean.measurement.deterministic.totalVisualLines);
+    const importedMeasurement = await target.measure(
+      "motion",
+      imported.headRevision,
+    );
+    assert.equal(
+      importedMeasurement.deterministic.totalVisualLines,
+      clean.measurement.deterministic.totalVisualLines,
+    );
     assert.equal(importedMeasurement.pageCount, clean.measurement.pageCount);
 
     const serializable = JSON.stringify({
       initialized,
-      evaluation: { ...evaluation, candidate: evaluation.candidate.status === "ok" ? { ...evaluation.candidate, measurement: undefined } : evaluation.candidate },
-      clean: { ...clean, bytes: undefined, attachments: clean.attachments ? { manifest: clean.attachments.manifest, manifestSha256: clean.attachments.manifestSha256 } : null },
-      redline: { ...redline, bytes: undefined, attachments: redline.attachments ? { manifest: redline.attachments.manifest, manifestSha256: redline.attachments.manifestSha256 } : null },
+      evaluation: {
+        ...evaluation,
+        candidate:
+          evaluation.candidate.status === "ok"
+            ? { ...evaluation.candidate, measurement: undefined }
+            : evaluation.candidate,
+      },
+      clean: {
+        ...clean,
+        bytes: undefined,
+        attachments: clean.attachments
+          ? {
+              manifest: clean.attachments.manifest,
+              manifestSha256: clean.attachments.manifestSha256,
+            }
+          : null,
+      },
+      redline: {
+        ...redline,
+        bytes: undefined,
+        attachments: redline.attachments
+          ? {
+              manifest: redline.attachments.manifest,
+              manifestSha256: redline.attachments.manifestSha256,
+            }
+          : null,
+      },
       imported,
     });
     assert.ok(!serializable.includes("Uint8Array"));
     assert.ok(!serializable.includes('"bytes":{"0"'));
-    console.log(JSON.stringify({
-      project: manifestPath,
-      baseRevision,
-      appliedRevision: applied.revision.id,
-      reviewRevision: headRevision,
-      clean: clean.artifact,
-      redline: redline.artifact,
-      importedRevision: imported.headRevision,
-    }));
+    console.log(
+      JSON.stringify({
+        project: manifestPath,
+        baseRevision,
+        appliedRevision: applied.revision.id,
+        reviewRevision: headRevision,
+        clean: clean.artifact,
+        redline: redline.artifact,
+        importedRevision: imported.headRevision,
+      }),
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
     await rm(targetDirectory, { recursive: true, force: true });

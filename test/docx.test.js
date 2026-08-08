@@ -183,7 +183,11 @@ test("DOCX emits bookmarks, paragraph footnote children, native tables, and rule
   assert.match(documentXml, /<w:tbl>/);
   assert.match(documentXml, /<w:tblGrid>/);
   assert.match(documentXml, /<w:tblHeader\/>/);
-  assert.equal((documentXml.match(/<w:cantSplit\/>/g) ?? []).length, 2);
+  assert.doesNotMatch(
+    documentXml,
+    /<w:cantSplit\/>/,
+    "body table rows must stay splittable so Word can match the paginator",
+  );
   assert.match(documentXml, /<w:tcMar>/);
   assert.match(documentXml, /<w:insideH[^>]+w:sz="4"/);
   assert.match(documentXml, /<w:jc w:val="left"\/>/);

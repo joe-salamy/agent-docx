@@ -171,12 +171,10 @@ test("unsupported Markdown rejects with source-aware code", async () => {
   await assert.rejects(
     () => estimateMarkdown("```js\nalert(1)\n```"),
     (error) =>
-      error instanceof AgentDocxError &&
-      error.code === "UNSUPPORTED_MARKDOWN",
+      error instanceof AgentDocxError && error.code === "UNSUPPORTED_MARKDOWN",
   );
   for (const [markdown, line] of [
     ["| A |\n| - |\n| ![image](file.png) |", 3],
-    ["| A |\n| - |\n| Ref.[^1] |\n\n[^1]: Note.", 3],
     ["| A |\n| - |\n| <span>HTML</span> |", 3],
     ["[^1]:\n    - list child\n\nBody.[^1]", 2],
     ["Inline $$x + y$$ math.", 1],
@@ -190,6 +188,19 @@ test("unsupported Markdown rejects with source-aware code", async () => {
         error.details.position.start.line === line,
     );
   }
+});
+
+test("table footnote references are accepted and reserved in pagination", async () => {
+  const without = await estimateMarkdown("| A |\n| - |\n| body |\n");
+  const withFootnote = await estimateMarkdown(
+    "| A |\n| - |\n| Ref.[^1] |\n\n[^1]: " +
+      Array.from({ length: 30 }, (_, index) => `foot${index}`).join(" "),
+  );
+  assert.ok(withFootnote.totalVisualLines > 0);
+  assert.ok(
+    withFootnote.totalVisualLines > without.totalVisualLines,
+    "table footnote text must be reserved in deterministic line counts",
+  );
 });
 
 test("font shaping distinguishes narrow and wide glyphs", async () => {
@@ -528,7 +539,9 @@ test("generated DOCX inspection imports section geometry", async () => {
 
 test("template inspection resolves paragraph style inheritance into pagination", async () => {
   const template = await inspectDocxTemplate(
-    await readFile("test/fixtures/docx/theme-inheritance.docx"),
+    await readFile(
+      new URL("./fixtures/docx/theme-inheritance.docx", import.meta.url),
+    ),
   );
   assert.equal(template.styles.headings["1"].resolved.fontSizeTwips, 320);
   assert.equal(template.styles.headings["1"].provenance[""], "template");
@@ -559,7 +572,11 @@ test("template inspection reports numbering, chrome fields, and captions", async
     ),
   );
   assert.ok(inspected.fields.some((field) => field.kind === "NUMPAGES"));
-  assert.ok(inspected.captions.some((caption) => caption.styleId === "AgentDocxCaption"));
+  assert.ok(
+    inspected.captions.some(
+      (caption) => caption.styleId === "AgentDocxCaption",
+    ),
+  );
   assert.equal(inspected.styles.list.resolved.leftIndentTwips, 720);
   assert.deepEqual(inspected.unsupportedParts, []);
 });
