@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { createRequire } from "node:module";
+import { MAX_INPUT_BYTES } from "./input.js";
+import { AgentDocxError } from "./types.js";
 import { runCli, type CliRuntime } from "./cli-run.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as {
@@ -7,8 +9,16 @@ const { version } = createRequire(import.meta.url)("../package.json") as {
 };
 
 async function* readStdinChunks(): AsyncGenerator<Uint8Array> {
+  let total = 0;
   for await (const chunk of process.stdin) {
-    yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += bytes.byteLength;
+    if (total > MAX_INPUT_BYTES)
+      throw new AgentDocxError(
+        "INPUT_TOO_LARGE",
+        `stdin exceeds the ${MAX_INPUT_BYTES} byte input limit`,
+      );
+    yield bytes;
   }
 }
 

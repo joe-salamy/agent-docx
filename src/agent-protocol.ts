@@ -1,5 +1,10 @@
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import type { DocumentConfigUpdate, ProjectDocumentInput, ResolveChangesInput } from "./project/contracts.js";
+import { publicPath } from "./path-util.js";
+import type {
+  DocumentConfigUpdate,
+  ProjectDocumentInput,
+  ResolveChangesInput,
+} from "./project/contracts.js";
 import type { Actor, RevisionId } from "./legal/model.js";
 import type { ChangeSet } from "./revisions/types.js";
 import type { SourcePatch } from "./draft/types.js";
@@ -231,8 +236,10 @@ export type AgentDispatchResult = {
   value: unknown;
 };
 
-export const assertRecord = (value: unknown, label: string): Record<string, unknown> =>
-  objectRecord(value, label);
+export const assertRecord = (
+  value: unknown,
+  label: string,
+): Record<string, unknown> => objectRecord(value, label);
 
 export const assertKeys = (
   value: Record<string, unknown>,
@@ -307,12 +314,7 @@ export const actor = (value: unknown): Actor => {
 export const invocationPath = (cwd: string, path: string): string =>
   isAbsolute(path) ? path : resolve(cwd, path);
 
-export const publicPath = (cwd: string, path: string): string => {
-  const output = relative(cwd, isAbsolute(path) ? path : resolve(cwd, path))
-    .split(sep)
-    .join("/");
-  return output === "" ? "." : output;
-};
+export { publicPath };
 
 export const manifestRelativePath = (
   cwd: string,
@@ -328,15 +330,14 @@ export const manifestRelativePath = (
     candidate.startsWith("../") ||
     isAbsolute(candidate)
   )
-    throw new AgentDocxError(
-      "PATH_OUTSIDE_PROJECT",
-      `Path is outside project: ${path}`,
-    );
+    throw new AgentDocxError("PATH_OUTSIDE_PROJECT", "Path is outside project");
   return candidate;
 };
 
-export const projectPath = (cwd: string, requested: string | undefined): string =>
-  invocationPath(cwd, requested ?? "agent-docx.json");
+export const projectPath = (
+  cwd: string,
+  requested: string | undefined,
+): string => invocationPath(cwd, requested ?? "agent-docx.json");
 
 export const projectInput = (
   cwd: string,
@@ -434,7 +435,11 @@ export const projectInput = (
       ? { assetsDir: manifestRelativePath(cwd, manifestPath, assetsDir) }
       : {}),
     ...(filingKind
-      ? { filingKind: filingKind as NonNullable<ProjectDocumentInput["filingKind"]> }
+      ? {
+          filingKind: filingKind as NonNullable<
+            ProjectDocumentInput["filingKind"]
+          >,
+        }
       : {}),
     ...(rulePack
       ? { rulePack: rulePack as NonNullable<ProjectDocumentInput["rulePack"]> }
@@ -447,7 +452,9 @@ export const projectInput = (
         }
       : {}),
     ...(fontSet ? { fontSet } : {}),
-    ...(chrome ? { chrome: chrome as NonNullable<ProjectDocumentInput["chrome"]> } : {}),
+    ...(chrome
+      ? { chrome: chrome as NonNullable<ProjectDocumentInput["chrome"]> }
+      : {}),
     ...(includeDefault && optionalBoolean(params, "makeDefault")
       ? { makeDefault: true }
       : {}),
@@ -462,11 +469,17 @@ export const configUpdate = (
   const raw = assertRecord(value, "changes");
   const changes: DocumentConfigUpdate = {};
   if (raw.profile !== undefined)
-    changes.profile = raw.profile as NonNullable<DocumentConfigUpdate["profile"]>;
+    changes.profile = raw.profile as NonNullable<
+      DocumentConfigUpdate["profile"]
+    >;
   if (raw.filingKind !== undefined)
-    changes.filingKind = raw.filingKind as NonNullable<DocumentConfigUpdate["filingKind"]>;
+    changes.filingKind = raw.filingKind as NonNullable<
+      DocumentConfigUpdate["filingKind"]
+    >;
   if (raw.rulePack !== undefined)
-    changes.rulePack = raw.rulePack as NonNullable<DocumentConfigUpdate["rulePack"]>;
+    changes.rulePack = raw.rulePack as NonNullable<
+      DocumentConfigUpdate["rulePack"]
+    >;
   if (raw.rulePacks !== undefined)
     changes.rulePacks =
       raw.rulePacks === null
@@ -526,7 +539,9 @@ export const configUpdate = (
     }
   }
   if (raw.metadata !== undefined)
-    changes.metadata = raw.metadata as NonNullable<DocumentConfigUpdate["metadata"]>;
+    changes.metadata = raw.metadata as NonNullable<
+      DocumentConfigUpdate["metadata"]
+    >;
   if (raw.chrome !== undefined)
     changes.chrome = raw.chrome as NonNullable<DocumentConfigUpdate["chrome"]>;
   return changes;
@@ -542,7 +557,10 @@ export const asChangeSet = (value: unknown): ChangeSet => {
   return value as ChangeSet;
 };
 
-export const noOptions = (value: unknown, label: string): Record<string, never> => {
+export const noOptions = (
+  value: unknown,
+  label: string,
+): Record<string, never> => {
   const result = assertRecord(value, label);
   assertKeys(result, [], label);
   return result as Record<string, never>;
@@ -567,7 +585,10 @@ export const filingKinds = [
   "opposition-text",
   "reply-text",
 ] as const;
-export const rulePackIds = ["frap-32@2024-12-01", "cand-civil@2026-05-01"] as const;
+export const rulePackIds = [
+  "frap-32@2024-12-01",
+  "cand-civil@2026-05-01",
+] as const;
 export const rendererModes = [
   "deterministic",
   "word",
@@ -1163,45 +1184,82 @@ const changeKinds = new Set([
   "replace-dependency",
 ]);
 
+const dateTimePattern =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/;
+
+const assertDateTime = (value: string, label: string): void => {
+  const match = dateTimePattern.exec(value);
+  const year = match ? Number(match[1]) : NaN;
+  const month = match ? Number(match[2]) : NaN;
+  const day = match ? Number(match[3]) : NaN;
+  const hour = match ? Number(match[4]) : NaN;
+  const minute = match ? Number(match[5]) : NaN;
+  const second = match ? Number(match[6]) : NaN;
+  const offsetHour = match?.[8] === undefined ? 0 : Number(match[8]);
+  const offsetMinute = match?.[9] === undefined ? 0 : Number(match[9]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth =
+    month === 2
+      ? leapYear
+        ? 29
+        : 28
+      : [4, 6, 9, 11].includes(month)
+        ? 30
+        : 31;
+  if (
+    !match ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59
+  )
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      `${label} must be an RFC 3339 date-time or null`,
+    );
+};
+const assertChangeSetActor = (value: unknown, label: string): void => {
+  const author = assertRecord(value, label);
+  assertKeys(author, ["name", "email"], label);
+  if (typeof author.name !== "string" || author.name.length === 0)
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      `${label}.name must be a non-empty string`,
+    );
+  if (author.email !== undefined && typeof author.email !== "string")
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      `${label}.email must be a string`,
+    );
+};
+
 export const assertAttribution = (value: unknown, label: string): void => {
   const attribution = assertRecord(value, `${label}.attribution`);
-  if (
-    Object.keys(attribution).some(
-      (key) => !["author", "createdAt", "sourceRevisionId"].includes(key),
-    ) ||
-    !("author" in attribution) ||
-    !("createdAt" in attribution)
-  )
+  assertKeys(
+    attribution,
+    ["author", "createdAt", "sourceRevisionId"],
+    `${label}.attribution`,
+  );
+  if (!("author" in attribution) || !("createdAt" in attribution))
     throw new AgentDocxError(
       "INVALID_ARGUMENT",
       `${label}.attribution must have author and createdAt`,
     );
-  if (
-    attribution.author !== null &&
-    (typeof attribution.author !== "object" ||
-      Array.isArray(attribution.author))
-  )
-    throw new AgentDocxError(
-      "INVALID_ARGUMENT",
-      `${label}.attribution.author must be an actor or null`,
-    );
-  const author = attribution.author as Record<string, unknown> | null;
-  if (
-    author &&
-    (typeof author.name !== "string" || author.name.length === 0)
-  )
-    throw new AgentDocxError(
-      "INVALID_ARGUMENT",
-      `${label}.attribution.author.name must be a non-empty string`,
-    );
-  if (
-    attribution.createdAt !== null &&
-    typeof attribution.createdAt !== "string"
-  )
-    throw new AgentDocxError(
-      "INVALID_ARGUMENT",
-      `${label}.attribution.createdAt must be a string or null`,
-    );
+  if (attribution.author !== null)
+    assertChangeSetActor(attribution.author, `${label}.attribution.author`);
+  if (attribution.createdAt !== null) {
+    if (typeof attribution.createdAt !== "string")
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        `${label}.attribution.createdAt must be a date-time or null`,
+      );
+    assertDateTime(attribution.createdAt, `${label}.attribution.createdAt`);
+  }
   if (
     attribution.sourceRevisionId !== undefined &&
     typeof attribution.sourceRevisionId !== "string"
@@ -1248,6 +1306,22 @@ export const assertSourceRange = (value: unknown, label: string): void => {
       `${label}.end must not precede start`,
     );
   requiredText(range, "text", label);
+};
+const assertAttributionSpans = (value: unknown, label: string): void => {
+  if (!Array.isArray(value))
+    throw new AgentDocxError("INVALID_ARGUMENT", `${label} must be an array`);
+  for (const [index, entry] of value.entries()) {
+    const span = assertRecord(entry, `${label}[${index}]`);
+    assertKeys(span, ["start", "end", "attribution"], `${label}[${index}]`);
+    const start = requiredInteger(span, "start");
+    const end = requiredInteger(span, "end");
+    if (end < start)
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        `${label}[${index}].end must not precede start`,
+      );
+    assertAttribution(span.attribution, `${label}[${index}]`);
+  }
 };
 
 export const assertChangeItem = (value: unknown, label: string): void => {
@@ -1300,18 +1374,25 @@ export const assertChangeItem = (value: unknown, label: string): void => {
     );
   assertAttribution(change.attribution, label);
   if (change.blockId !== undefined) {
-    if (typeof change.blockId !== "string" || !blockIdPattern.test(change.blockId))
+    if (
+      typeof change.blockId !== "string" ||
+      !blockIdPattern.test(change.blockId)
+    )
       throw new AgentDocxError(
         "INVALID_ARGUMENT",
         `${label}.blockId must be a block ID`,
       );
   }
-  if (change.from !== undefined) assertBlockLocation(change.from, `${label}.from`);
+  if (change.from !== undefined)
+    assertBlockLocation(change.from, `${label}.from`);
   if (change.to !== undefined) assertBlockLocation(change.to, `${label}.to`);
   if (change.oldSource !== undefined)
     assertSourceRange(change.oldSource, `${label}.oldSource`);
   if (change.newSource !== undefined)
     assertSourceRange(change.newSource, `${label}.newSource`);
+  for (const key of ["oldAttributionSpans", "newAttributionSpans"] as const)
+    if (change[key] !== undefined)
+      assertAttributionSpans(change[key], `${label}.${key}`);
   for (const key of ["oldOffset", "newOffset"] as const)
     if (change[key] !== undefined) requiredInteger(change, key);
 };
@@ -1324,7 +1405,11 @@ export const assertAnnotationChange = (value: unknown, label: string): void => {
       "INVALID_ARGUMENT",
       `${label}.id must be a canonical change ID`,
     );
-  if (change.kind !== "add" && change.kind !== "replace" && change.kind !== "remove")
+  if (
+    change.kind !== "add" &&
+    change.kind !== "replace" &&
+    change.kind !== "remove"
+  )
     throw new AgentDocxError(
       "INVALID_ARGUMENT",
       `${label}.kind must be add, replace, or remove`,
@@ -1340,32 +1425,39 @@ export const assertAnnotationChange = (value: unknown, label: string): void => {
       `${label} must carry oldValue`,
     );
   for (const key of ["oldValue", "newValue"] as const)
-    if (change[key] !== undefined) assertReviewAnnotation(change[key]!, `${label}.${key}`);
+    if (change[key] !== undefined)
+      assertReviewAnnotation(change[key]!, `${label}.${key}`);
 };
 
 export const assertReviewAnnotation = (value: unknown, label: string): void => {
   const annotation = assertRecord(value, label);
+  assertKeys(
+    annotation,
+    ["id", "blockId", "range", "author", "createdAt", "message", "status"],
+    label,
+  );
+  for (const key of [
+    "id",
+    "blockId",
+    "author",
+    "createdAt",
+    "message",
+    "status",
+  ])
+    if (!(key in annotation))
+      throw new AgentDocxError("INVALID_ARGUMENT", `${label} must have ${key}`);
   if (
-    Object.keys(annotation).some(
-      (key) => !["id", "blockId", "range", "author", "createdAt", "message", "status"].includes(key),
-    ) ||
-    !("id" in annotation) ||
-    !("blockId" in annotation) ||
-    !("author" in annotation) ||
-    !("createdAt" in annotation) ||
-    !("message" in annotation) ||
-    !("status" in annotation)
+    typeof annotation.id !== "string" ||
+    !annotationIdPattern.test(annotation.id)
   )
-    throw new AgentDocxError(
-      "INVALID_ARGUMENT",
-      `${label} must have id, blockId, author, createdAt, message, and status`,
-    );
-  if (typeof annotation.id !== "string" || !annotationIdPattern.test(annotation.id))
     throw new AgentDocxError(
       "INVALID_ARGUMENT",
       `${label}.id must be an annotation ID`,
     );
-  if (typeof annotation.blockId !== "string" || !blockIdPattern.test(annotation.blockId))
+  if (
+    typeof annotation.blockId !== "string" ||
+    !blockIdPattern.test(annotation.blockId)
+  )
     throw new AgentDocxError(
       "INVALID_ARGUMENT",
       `${label}.blockId must be a block ID`,
@@ -1381,20 +1473,16 @@ export const assertReviewAnnotation = (value: unknown, label: string): void => {
         `${label}.range.end must not precede start`,
       );
   }
-  if (annotation.author !== null) {
-    const author = assertRecord(annotation.author, `${label}.author`);
-    if (Object.keys(author).some((key) => !["name", "email"].includes(key)) || !("name" in author))
+  if (annotation.author !== null)
+    assertChangeSetActor(annotation.author, `${label}.author`);
+  if (annotation.createdAt !== null) {
+    if (typeof annotation.createdAt !== "string")
       throw new AgentDocxError(
         "INVALID_ARGUMENT",
-        `${label}.author must have name`,
+        `${label}.createdAt must be a date-time or null`,
       );
-    requiredText(author, "name", `${label}.author`);
+    assertDateTime(annotation.createdAt, `${label}.createdAt`);
   }
-  if (annotation.createdAt !== null && typeof annotation.createdAt !== "string")
-    throw new AgentDocxError(
-      "INVALID_ARGUMENT",
-      `${label}.createdAt must be a string or null`,
-    );
   requiredText(annotation, "message", label);
   if (annotation.status !== "open" && annotation.status !== "resolved")
     throw new AgentDocxError(
@@ -1781,9 +1869,7 @@ export const parseAgentRequest = (value: unknown): AgentRequest => {
     );
   return {
     schemaVersion: 1,
-    ...(hasOwn(request, "id")
-      ? { id: request.id as AgentRequestId }
-      : {}),
+    ...(hasOwn(request, "id") ? { id: request.id as AgentRequestId } : {}),
     action,
     ...(hasOwn(request, "project")
       ? { project: request.project as string }

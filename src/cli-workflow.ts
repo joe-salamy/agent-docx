@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { publicPath } from "./path-util.js";
 import { parseCliArgsStrict, type CliCommand } from "./cli-args.js";
 import { readInputFile } from "./input.js";
 import { toErrorPayload } from "./errors.js";
@@ -15,7 +16,7 @@ import {
 import { openProject } from "./project/index.js";
 import { jsonlLines } from "./jsonl.js";
 import { AgentDocxError, type JsonValue } from "./types.js";
-import type { CliErrorPayload, CliRuntime, CliSequenceState } from "./cli-contract.js";
+import type { CliRuntime, CliSequenceState } from "./cli-contract.js";
 import { runWatchController } from "./watch.js";
 
 const string = { type: "string" } as const;
@@ -68,6 +69,13 @@ const readJson = async (
       ),
     );
   } catch (error) {
+    if (
+      error instanceof AgentDocxError &&
+      ["INPUT_TOO_LARGE", "INPUT_NOT_FOUND", "INPUT_NOT_UTF8"].includes(
+        error.code,
+      )
+    )
+      throw error;
     throw new AgentDocxError(
       "INVALID_ARGUMENT",
       `${label} must be valid JSON: ${error instanceof Error ? error.message : String(error)}`,
@@ -112,13 +120,6 @@ const print = async (
   await runtime.writeStdout(
     `${JSON.stringify(serializable, null, json ? 0 : 2)}\n`,
   );
-};
-
-const errorPayload = (error: unknown): CliErrorPayload =>
-  toErrorPayload(error);
-const publicProjectPath = (cwd: string, path: string): string => {
-  const project = relative(cwd, resolve(cwd, path)).split(sep).join("/");
-  return project || ".";
 };
 
 const partialRequest = (value: unknown) => {
@@ -282,10 +283,7 @@ const runAgentInput = async (
         );
       const dispatchRequest: AgentRequest =
         project === undefined ? parsed : { ...parsed, project };
-      const result = await dispatchAgentRequest(
-        dispatchRequest,
-        runtime.cwd,
-      );
+      const result = await dispatchAgentRequest(dispatchRequest, runtime.cwd);
       await runtime.writeStdout(
         `${JSON.stringify({
           schemaVersion: 1,
@@ -304,7 +302,7 @@ const runAgentInput = async (
       const selectedProject =
         partial.action === null || partial.stateless
           ? null
-          : publicProjectPath(
+          : publicPath(
               runtime.cwd,
               project ?? partial.project ?? "agent-docx.json",
             );
@@ -318,7 +316,7 @@ const runAgentInput = async (
           project: selectedProject,
           documentId: null,
           revision: null,
-          error: errorPayload(error),
+          error: toErrorPayload(error),
         })}\n`,
       );
     }
@@ -372,7 +370,7 @@ const watchDependencies = async (
     paths.add(path);
     entries.push({
       key,
-      path: relative(cwd, path).split(sep).join("/") || ".",
+      path: publicPath(cwd, path),
       byteLength: (await stat(path)).size,
       sha256,
     });
@@ -410,7 +408,7 @@ const watchDependencies = async (
     paths.add(assetsRoot);
     for (const [key, sha256] of Object.entries(target.dependencyObjects)
       .filter(([key]) => key.startsWith("asset/"))
-      .sort(([left], [right]) => left.localeCompare(right))) {
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))) {
       const relativeAssetPath = key.slice("asset/".length);
       const assetPath = resolve(assetsRoot, relativeAssetPath);
       const assetRelative = relative(assetsRoot, assetPath);
@@ -428,7 +426,9 @@ const watchDependencies = async (
     }
   }
   return {
-    entries: entries.sort((left, right) => left.key.localeCompare(right.key)),
+    entries: entries.sort((left, right) =>
+      left.key < right.key ? -1 : left.key > right.key ? 1 : 0,
+    ),
     paths: [...paths].sort(),
   };
 };
@@ -445,7 +445,7 @@ const runAgentWatch = async (
     );
   const projectPath = required(values, "project");
   const targetDocument = required(values, "document");
-  const publicProject = publicProjectPath(runtime.cwd, projectPath);
+  const publicProject = publicPath(runtime.cwd, projectPath);
   const initialDependencies = await watchDependencies(
     runtime.cwd,
     projectPath,
@@ -520,7 +520,7 @@ const runAgentWatch = async (
         project: publicProject,
         documentId: targetDocument,
         revision: null,
-        error: errorPayload(error),
+        error: toErrorPayload(error),
       });
     },
     signal: (name, listener) => runtime.onceSignal(name, listener),

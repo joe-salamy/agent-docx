@@ -32,7 +32,32 @@ type ProcessResult = {
   timedOut: boolean;
   stdoutOverflow: boolean;
   stderrOverflow: boolean;
+  stdinError?: string;
 };
+const childEnvironment = (
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv => {
+  const environment: NodeJS.ProcessEnv = {
+    LC_ALL: "C",
+    LANG: "C",
+    TZ: "UTC",
+  };
+  for (const key of [
+    "PATH",
+    "HOME",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "USERPROFILE",
+    "APPDATA",
+    "SystemRoot",
+    "COMSPEC",
+  ] as const) {
+    if (source[key] !== undefined) environment[key] = source[key];
+  }
+  return environment;
+};
+
 async function run(
   executable: string,
   args: string[],
@@ -44,7 +69,7 @@ async function run(
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     detached: process.platform !== "win32",
-    env,
+    env: childEnvironment(env),
   });
   let stopped = false;
   const terminate = () => {
@@ -65,6 +90,7 @@ async function run(
   let out = 0,
     err = 0,
     timedOut = false;
+  let stdinError: string | undefined;
   const stdoutLimit = 4 * 1024 * 1024;
   const stderrLimit = 1024 * 1024;
   child.stdout.on("data", (buffer: Buffer) => {
@@ -79,8 +105,9 @@ async function run(
     err += buffer.length;
     if (err > stderrLimit) terminate();
   });
-  if (stdin === undefined) child.stdin.end();
-  else child.stdin.end(stdin);
+  child.stdin.once("error", (error) => {
+    stdinError = error instanceof Error ? error.message : String(error);
+  });
   const timer = setTimeout(() => {
     timedOut = true;
     terminate();
@@ -88,6 +115,13 @@ async function run(
   const { promise, resolve, reject } = Promise.withResolvers<number | null>();
   child.once("error", reject);
   child.once("close", resolve);
+  try {
+    if (stdin === undefined) child.stdin.end();
+    else child.stdin.end(stdin);
+  } catch (error) {
+    stdinError = error instanceof Error ? error.message : String(error);
+    child.stdin.destroy();
+  }
   let code: number | null;
   try {
     code = await promise;
@@ -101,6 +135,7 @@ async function run(
     timedOut,
     stdoutOverflow: out > stdoutLimit,
     stderrOverflow: err > stderrLimit,
+    ...(stdinError === undefined ? {} : { stdinError }),
   };
 }
 async function exists(path: string) {
@@ -121,7 +156,7 @@ export async function resolveLibreOffice(explicit?: string): Promise<string> {
     if (await exists(explicit)) return explicit;
     throw new AgentDocxError(
       "LIBREOFFICE_NOT_FOUND",
-      `LibreOffice executable not found: ${explicit}`,
+      "LibreOffice executable not found",
     );
   }
   const candidates: string[] = [];
@@ -132,12 +167,26 @@ export async function resolveLibreOffice(explicit?: string): Promise<string> {
       process.env.ProgramFiles,
       process.env["ProgramFiles(x86)"],
     ])
-      if (base)
+      if (base && isAbsolute(base))
         candidates.push(join(base, "LibreOffice", "program", "soffice.com"));
-  } else
-    for (const dir of (process.env.PATH ?? "").split(delimiter))
+  } else {
+    const trusted: Record<string, true> = {
+      "/bin": true,
+      "/usr/bin": true,
+      "/usr/local/bin": true,
+      "/opt/homebrew/bin": true,
+    };
+    for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+      const normalized = dir.replace(/[\\/]+$/, "") || dir;
+      if (
+        !isAbsolute(normalized) ||
+        !(trusted[normalized] === true || normalized.startsWith("/opt/"))
+      )
+        continue;
       for (const name of ["soffice", "libreoffice"])
-        candidates.push(join(dir, name));
+        candidates.push(join(normalized, name));
+    }
+  }
   for (const candidate of candidates)
     if (await exists(candidate)) return candidate;
   throw new AgentDocxError(
@@ -168,7 +217,7 @@ export async function renderLibreOffice(
       if (!entry || !entry.isFile() || entry.isSymbolicLink())
         throw new AgentDocxError(
           "INVALID_FONT",
-          `installed font is not a regular readable file: ${font.path}`,
+          "Installed font is not a regular readable file",
         );
     }
   }
@@ -217,12 +266,7 @@ export async function renderLibreOffice(
       outputDir,
       input,
     ];
-    const rendered = await run(executable, args, undefined, timeoutMs, {
-      ...process.env,
-      LC_ALL: "C",
-      LANG: "C",
-      TZ: "UTC",
-    });
+    const rendered = await run(executable, args, undefined, timeoutMs);
     if (rendered.stdoutOverflow || rendered.stderrOverflow)
       throw new AgentDocxError(
         "LIBREOFFICE_RENDER_FAILED",
@@ -298,10 +342,7 @@ async function resolveWordPath(options: WordRendererOptions) {
         "PowerShell path must be absolute",
       );
     if (await exists(options.powerShellPath)) return options.powerShellPath;
-    throw new AgentDocxError(
-      "WORD_NOT_FOUND",
-      `PowerShell not found: ${options.powerShellPath}`,
-    );
+    throw new AgentDocxError("WORD_NOT_FOUND", "PowerShell not found");
   }
   if (process.platform === "win32") {
     const root = process.env.SystemRoot ?? "C:\\Windows";
@@ -377,6 +418,8 @@ export async function renderWord(
     }),
     timeoutMs,
   );
+  if (response.stdinError)
+    throw new AgentDocxError("WORD_RENDER_FAILED", "Word adapter stdin failed");
   if (response.timedOut)
     throw new AgentDocxError("WORD_TIMEOUT", `Word exceeded ${timeoutMs} ms`);
   const frames = response.stdout
@@ -442,6 +485,26 @@ export async function renderWord(
     throw new AgentDocxError(
       "WORD_RENDER_FAILED",
       "Word adapter returned a malformed version-2 summary",
+      { stdout: response.stdout },
+    );
+  const pageLineCounts = bodyLinesByPage as number[];
+  const summedBodyLines = pageLineCounts.reduce(
+    (total, lineCount) => total + lineCount,
+    0,
+  );
+  if (totalBodyLines !== summedBodyLines)
+    throw new AgentDocxError(
+      "WORD_RENDER_FAILED",
+      "Word summary totalBodyLines must equal the sum of bodyLinesByPage",
+      { stdout: response.stdout },
+    );
+  if (
+    bodyLinesOnLastPage !== null &&
+    bodyLinesOnLastPage !== pageLineCounts[pageLineCounts.length - 1]
+  )
+    throw new AgentDocxError(
+      "WORD_RENDER_FAILED",
+      "Word summary bodyLinesOnLastPage must equal the last bodyLinesByPage entry",
       { stdout: response.stdout },
     );
   let paragraphDiagnostics: WordRendering["paragraphDiagnostics"];

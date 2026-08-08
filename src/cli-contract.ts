@@ -98,10 +98,12 @@ export type CliSequenceState = { sequence: number };
 
 export type OutputFileHandle = {
   writeFile(bytes: Uint8Array): Promise<void>;
+  sync?(): Promise<void>;
   close(): Promise<void>;
 };
 export type OutputFileIo = {
   open(path: string, flags: "wx"): Promise<OutputFileHandle>;
+  link?(existingPath: string, newPath: string): Promise<void>;
   unlink(path: string): Promise<void>;
 };
 

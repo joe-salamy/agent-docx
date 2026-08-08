@@ -175,7 +175,6 @@ function parseMeasureArgs(args: readonly string[]): CliCommand {
   });
   const values = parsed.values as CliOptionValues;
 
-
   if (values.help || values.version) {
     throw new AgentDocxError(
       "INVALID_ARGUMENT",
@@ -261,6 +260,13 @@ function parseMeasureArgs(args: readonly string[]): CliCommand {
       );
     }
     return { mode: "watch", path: parsed.positionals[0]!, values };
+  }
+
+  if (values["input-jsonl"]) {
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "--input-jsonl requires --batch",
+    );
   }
 
   if (hasDiscoveryOptions) {

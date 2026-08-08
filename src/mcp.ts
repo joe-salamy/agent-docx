@@ -1,11 +1,21 @@
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import {
   agentActions,
   executeAgentRequest,
   serializeAgentValue,
 } from "./agent.js";
 import { toErrorPayload } from "./errors.js";
+import { MAX_JSONL_LINE_BYTES } from "./jsonl.js";
 import type { CliRuntime } from "./cli-contract.js";
+import { AgentDocxError } from "./types.js";
 
 export type McpRuntime = Pick<
   CliRuntime,
@@ -99,8 +109,7 @@ const resolveActionDef = (
   defs: Record<string, unknown>,
 ): ActionSchema => {
   const def = defs[name];
-  if (typeof def !== "object" || def === null || Array.isArray(def))
-    return {};
+  if (typeof def !== "object" || def === null || Array.isArray(def)) return {};
   const { properties, required, allOf } = def as ActionSchema & {
     allOf?: readonly SchemaBranch[];
   };
@@ -120,10 +129,7 @@ const resolveActionDef = (
       ...(inner.properties ?? {}),
       ...(merged.properties ?? {}),
     };
-    merged.required = [
-      ...(inner.required ?? []),
-      ...(merged.required ?? []),
-    ];
+    merged.required = [...(inner.required ?? []), ...(merged.required ?? [])];
   }
   return merged;
 };
@@ -172,7 +178,9 @@ const loadActionSchemas = async (): Promise<LoadedActionSchemas | null> => {
       ),
     ) as {
       $defs?: Record<string, unknown>;
-      allOf?: Array<{ oneOf?: Array<SchemaBranch & { properties?: PlainRecord }> }>;
+      allOf?: Array<{
+        oneOf?: Array<SchemaBranch & { properties?: PlainRecord }>;
+      }>;
     };
     const defs: Record<string, unknown> = { ...(raw.$defs ?? {}) };
     for (const external of EXTERNAL_ACTION_SCHEMAS) {
@@ -222,9 +230,7 @@ const loadActionSchemas = async (): Promise<LoadedActionSchemas | null> => {
   }
 };
 
-const tools = (
-  loaded: LoadedActionSchemas | null,
-): PlainRecord[] =>
+const tools = (loaded: LoadedActionSchemas | null): PlainRecord[] =>
   agentActions.map((name) => {
     const params = loaded?.byAction.get(name);
     return {
@@ -244,7 +250,7 @@ const tools = (
           ? { required: [...params.required] }
           : {}),
         ...(loaded ? { $defs: loaded.defs } : {}),
-        additionalProperties: true,
+        additionalProperties: false,
       },
     };
   });
@@ -261,6 +267,64 @@ const initializeResult = (params: unknown, version: string): PlainRecord => {
     capabilities: { tools: { listChanged: false } },
     serverInfo: { name: "agent-docx", version },
   };
+};
+
+const canonicalizePath = async (candidate: string): Promise<string> => {
+  let cursor = candidate;
+  const suffix: string[] = [];
+  for (;;) {
+    try {
+      const canonical = await realpath(cursor);
+      return suffix.length
+        ? resolve(canonical, ...suffix.reverse())
+        : canonical;
+    } catch (error) {
+      const code =
+        error !== null && typeof error === "object" && "code" in error
+          ? error.code
+          : undefined;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      const parent = dirname(cursor);
+      if (parent === cursor) throw error;
+      suffix.push(basename(cursor));
+      cursor = parent;
+    }
+  }
+};
+
+const confinedProjectPath = async (
+  cwd: string,
+  requested: string,
+): Promise<string> => {
+  let root: string;
+  try {
+    root = await realpath(cwd);
+  } catch {
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "project must stay inside the server cwd",
+    );
+  }
+  const candidate = isAbsolute(requested) ? requested : resolve(cwd, requested);
+  let canonical: string;
+  try {
+    canonical = await canonicalizePath(candidate);
+  } catch {
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "project must stay inside the server cwd",
+    );
+  }
+  const escaped = relative(root, canonical);
+  if (
+    escaped !== "" &&
+    (escaped === ".." || escaped.startsWith(`..${sep}`) || isAbsolute(escaped))
+  )
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "project must stay inside the server cwd",
+    );
+  return canonical;
 };
 
 const toolCallResult = async (
@@ -289,16 +353,18 @@ const toolCallResult = async (
   const callParams: PlainRecord = { ...argumentsObject };
   delete callParams.project;
 
-  const envelope: PlainRecord = {
-    schemaVersion: 1,
-    id,
-    action: name,
-    params: callParams,
-  };
-  if (typeof argumentsObject.project === "string")
-    envelope.project = argumentsObject.project;
-
   try {
+    const envelope: PlainRecord = {
+      schemaVersion: 1,
+      id,
+      action: name,
+      params: callParams,
+    };
+    if (typeof argumentsObject.project === "string")
+      envelope.project = await confinedProjectPath(
+        runtime.cwd,
+        argumentsObject.project,
+      );
     const result = await executeAgentRequest(envelope, runtime.cwd);
     const serialized = serializeAgentValue(result.value, runtime.cwd);
     const toolResult: PlainRecord = {
@@ -332,7 +398,7 @@ const handleMessage = async (
     message = JSON.parse(line) as unknown;
   } catch (error) {
     await writeReply(
-      rpcError(null, -32602, `Invalid JSON: ${errorMessage(error)}`),
+      rpcError(null, -32700, `Invalid JSON: ${errorMessage(error)}`),
     );
     return;
   }
@@ -437,18 +503,53 @@ export const runMcpServer = async (runtime: McpRuntime): Promise<number> => {
     return 1;
   }
 
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let pending = "";
+  const appendLines = (text: string): string[] => {
+    const lines: string[] = [];
+    let start = 0;
+    while (start <= text.length) {
+      const newline = text.indexOf("\n", start);
+      const fragment = text.slice(
+        start,
+        newline === -1 ? text.length : newline,
+      );
+      const rawBytes = Buffer.byteLength(pending) + Buffer.byteLength(fragment);
+      const normalizedBytes =
+        newline !== -1 && fragment.endsWith("\r") ? rawBytes - 1 : rawBytes;
+      if (normalizedBytes > MAX_JSONL_LINE_BYTES)
+        throw new AgentDocxError(
+          "INVALID_ARGUMENT",
+          `JSON-RPC line exceeds ${MAX_JSONL_LINE_BYTES} bytes`,
+        );
+      if (newline === -1) {
+        pending += fragment;
+        break;
+      }
+      const rawLine = pending + fragment;
+      pending = "";
+      lines.push(rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine);
+      start = newline + 1;
+      if (start === text.length) break;
+    }
+    return lines;
+  };
 
-  const processLines = async (): Promise<void> => {
-    while (!stopping) {
-      const newline = pending.indexOf("\n");
-      if (newline < 0) return;
-      const line = pending.slice(0, newline);
-      pending = pending.slice(newline + 1);
+  const processLines = async (lines: readonly string[]): Promise<void> => {
+    for (const line of lines) {
+      if (stopping) return;
       if (line.trim() === "") continue;
       await handleMessage(line, runtime, writeReply, actionSchemas);
     }
+  };
+  const protocolError = async (error: unknown): Promise<void> => {
+    await writeReply(
+      rpcError(
+        null,
+        -32700,
+        error instanceof AgentDocxError ? error.message : "Invalid UTF-8 input",
+      ),
+    );
   };
 
   while (!stopping) {
@@ -471,8 +572,17 @@ export const runMcpServer = async (runtime: McpRuntime): Promise<number> => {
     }
     if (outcome.result.done) break;
 
-    pending += decoder.decode(outcome.result.value, { stream: true });
-    const processTask = processLines();
+    let lines: string[];
+    try {
+      lines = appendLines(
+        decoder.decode(outcome.result.value, { stream: true }),
+      );
+    } catch (error) {
+      await protocolError(error);
+      void closeIterator(iterator);
+      return 0;
+    }
+    const processTask = processLines(lines);
     const processed = await Promise.race([
       processTask.then(
         () => ({ kind: "processed" as const }),
@@ -496,15 +606,17 @@ export const runMcpServer = async (runtime: McpRuntime): Promise<number> => {
     return 0;
   }
 
-  pending += decoder.decode();
-  if (pending.trim() !== "") {
-    const line = pending;
-    pending = "";
-    try {
-      await handleMessage(line, runtime, writeReply, actionSchemas);
-    } catch {
-      return 1;
+  try {
+    const lines = appendLines(decoder.decode());
+    await processLines(lines);
+    if (pending) {
+      const line = pending;
+      pending = "";
+      await processLines([line]);
     }
+  } catch (error) {
+    await protocolError(error);
+    return 0;
   }
   return 0;
 };

@@ -14,7 +14,11 @@ export {
   parseAgentRequest,
   serializeAgentValue,
 };
-export type { AgentAction, AgentDispatchResult, AgentRequest } from "./agent-protocol.js";
+export type {
+  AgentAction,
+  AgentDispatchResult,
+  AgentRequest,
+} from "./agent-protocol.js";
 
 /** Parses and executes one agent request. */
 export const executeAgentRequest = async (

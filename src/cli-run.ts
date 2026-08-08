@@ -1,5 +1,6 @@
 import {
   glob,
+  link,
   lstat,
   open,
   readFile,
@@ -11,31 +12,26 @@ import type { Stats } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { parseCliArgs, cliHelp, type CliOptionValues } from "./cli-args.js";
-import { readInputFile } from "./input.js";
+import { cliHelp, parseCliArgs, type CliOptionValues } from "./cli-args.js";
 import { toErrorPayload } from "./errors.js";
+import { MAX_FONT_BYTES, readInputFile } from "./input.js";
 import { inspectDocxTemplate } from "./docx/inspect.js";
 import { measureMarkdown } from "./renderers/index.js";
 import { runWorkflowCommand } from "./cli-workflow.js";
 import { builtInProfiles } from "./profiles.js";
 import { jsonlLines, strictUtf8 } from "./jsonl.js";
 import { runMcpServer } from "./mcp.js";
-import {
-  AgentDocxError,
-} from "./types.js";
+import { AgentDocxError } from "./types.js";
 import type {
   EstimateOptions,
   MeasureOptions,
   MeasurementResult,
   RendererMode,
 } from "./measurement.js";
-import type {
-  FontSetInput,
-  LayoutOverrides,
-} from "./layout/profile.js";
+import { serializableMeasurement } from "./measurement.js";
+import type { FontSetInput, LayoutOverrides } from "./layout/profile.js";
 import {
   type BatchSelection,
-  type CliErrorPayload,
   type CliErrorRecord,
   type CliFatalRecord,
   type CliJsonlRequest,
@@ -71,7 +67,6 @@ export type {
   SerializableConfig,
   Source,
 } from "./cli-contract.js";
-
 
 function invalidPattern(pattern: string) {
   if (!pattern || isAbsolute(pattern) || pattern.startsWith("!")) return true;
@@ -300,7 +295,24 @@ async function resolveBatchInputs(
   return output;
 }
 type SequenceState = CliSequenceState;
-const outputFileIo: OutputFileIo = { open, unlink };
+let outputStageSequence = 0;
+const outputFileIo: OutputFileIo = { open, link, unlink };
+
+const isFsCode = (error: unknown, code: string): boolean =>
+  error !== null &&
+  typeof error === "object" &&
+  "code" in error &&
+  error.code === code;
+
+const outputWriteError = (
+  displayPath: string,
+  error: unknown,
+): AgentDocxError =>
+  new AgentDocxError(
+    "OUTPUT_WRITE_FAILED",
+    `Failed to write output: ${displayPath}`,
+    { cause: error instanceof Error ? error.message : String(error) },
+  );
 
 export async function writeOutputExclusive(
   resolvedPath: string,
@@ -308,42 +320,51 @@ export async function writeOutputExclusive(
   bytes: Uint8Array,
   io: OutputFileIo = outputFileIo,
 ): Promise<void> {
-  let handle: OutputFileHandle;
+  let stagePath: string | undefined;
+  let handle: OutputFileHandle | undefined;
   try {
-    handle = await io.open(resolvedPath, "wx");
-  } catch (error) {
-    if (
-      error !== null &&
-      typeof error === "object" &&
-      "code" in error &&
-      error.code === "EEXIST"
-    ) {
-      throw new AgentDocxError(
-        "OUTPUT_EXISTS",
-        `Output already exists: ${displayPath}`,
-      );
+    for (let attempt = 0; attempt < 1000; attempt++) {
+      const sequence = ++outputStageSequence;
+      stagePath = `${resolvedPath}.agent-docx-stage-${process.pid}-${sequence}`;
+      try {
+        handle = await io.open(stagePath, "wx");
+        break;
+      } catch (error) {
+        if (!isFsCode(error, "EEXIST")) throw error;
+      }
     }
-    throw new AgentDocxError(
-      "OUTPUT_WRITE_FAILED",
-      `Failed to write output: ${displayPath}`,
-      { cause: error instanceof Error ? error.message : String(error) },
-    );
-  }
-  try {
+    if (!handle || !stagePath)
+      throw new Error("Could not allocate a unique output stage file");
     await handle.writeFile(bytes);
+    await handle.sync?.();
     await handle.close();
+    handle = undefined;
+    const publish = io.link ?? link;
+    try {
+      await publish(stagePath, resolvedPath);
+    } catch (error) {
+      if (isFsCode(error, "EEXIST"))
+        throw new AgentDocxError(
+          "OUTPUT_EXISTS",
+          `Output already exists: ${displayPath}`,
+        );
+      throw error;
+    }
+    await io.unlink(stagePath);
+    stagePath = undefined;
   } catch (error) {
-    try {
-      await handle.close();
-    } catch {}
-    try {
-      await io.unlink(resolvedPath);
-    } catch {}
-    throw new AgentDocxError(
-      "OUTPUT_WRITE_FAILED",
-      `Failed to write output: ${displayPath}`,
-      { cause: error instanceof Error ? error.message : String(error) },
-    );
+    if (handle) {
+      try {
+        await handle.close();
+      } catch {}
+    }
+    if (stagePath) {
+      try {
+        await io.unlink(stagePath);
+      } catch {}
+    }
+    if (error instanceof AgentDocxError) throw error;
+    throw outputWriteError(displayPath, error);
   }
 }
 
@@ -424,7 +445,7 @@ async function loadConfig(pathToken: string): Promise<{
 }
 
 async function fileBytes(path: string, base: string) {
-  return readFile(resolve(base, path));
+  return readInputFile(resolve(base, path), "Font", MAX_FONT_BYTES);
 }
 
 async function optionsFrom(
@@ -491,7 +512,7 @@ async function optionsFrom(
         : undefined;
   if (templateToken) {
     options.template = await inspectDocxTemplate(
-      await readFile(templateToken),
+      await readInputFile(templateToken, "DOCX template"),
       {
         ...(options.profile !== undefined
           ? { fallbackProfile: options.profile }
@@ -501,6 +522,19 @@ async function optionsFrom(
     dependencies.push(templateToken);
   }
 
+  const hasCliFontOption = [
+    "font-family",
+    "font-regular",
+    "font-bold",
+    "font-italic",
+    "font-bold-italic",
+  ].some((key) => values[key] !== undefined);
+  if (hasCliFontOption && typeof values["font-regular"] !== "string") {
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "--font-regular is required with --font-* options",
+    );
+  }
   const fontSpecification =
     typeof values["font-regular"] === "string"
       ? {
@@ -562,7 +596,9 @@ async function optionsFrom(
     options.profile = values.profile as NonNullable<MeasureOptions["profile"]>;
   }
   if (typeof values["filing-kind"] === "string") {
-    options.filingKind = values["filing-kind"] as NonNullable<EstimateOptions["filingKind"]>;
+    options.filingKind = values["filing-kind"] as NonNullable<
+      EstimateOptions["filingKind"]
+    >;
   }
   if (typeof values["page-limit"] === "string") {
     options.pageLimit = asciiInteger(values["page-limit"], "--page-limit");
@@ -674,13 +710,6 @@ async function optionsFrom(
   }
   if (Object.keys(layout).length) options.layout = layout;
   return { options, dependencies, batch: config.batch };
-}
-
-function serializableMeasurement(
-  measurement: MeasurementResult,
-): Omit<MeasurementResult, "generatedDocx"> {
-  const { generatedDocx: _generatedDocx, ...serializable } = measurement;
-  return serializable;
 }
 
 type ProfileCatalogEntry = {
@@ -854,10 +883,6 @@ function resultRecord(
   };
 }
 
-function errorObject(error: unknown): CliErrorPayload {
-  return toErrorPayload(error);
-}
-
 function errorRecord(
   state: SequenceState,
   mode: "batch" | "watch",
@@ -875,7 +900,7 @@ function errorRecord(
     requestId,
     source: publicSource(source, cwd),
     trigger: publicTrigger(trigger, cwd),
-    error: errorObject(error),
+    error: toErrorPayload(error),
   };
 }
 
@@ -911,10 +936,8 @@ function endRecord(
     reason,
   };
 }
-
-
 function fatalRecord(error: unknown): CliFatalRecord {
-  return { schemaVersion: 1, kind: "fatal", error: errorObject(error) };
+  return { schemaVersion: 1, kind: "fatal", error: toErrorPayload(error) };
 }
 function agentFatalRecord(error: unknown, sequence: number) {
   return {
@@ -926,7 +949,7 @@ function agentFatalRecord(error: unknown, sequence: number) {
     project: null,
     documentId: null,
     revision: null,
-    error: errorObject(error),
+    error: toErrorPayload(error),
   };
 }
 
@@ -1039,8 +1062,7 @@ async function executeCli(
             );
           }
           const record = request as CliJsonlRequest;
-          const hasPath =
-            "path" in record && typeof record.path === "string";
+          const hasPath = "path" in record && typeof record.path === "string";
           const hasMarkdown =
             "markdown" in record && typeof record.markdown === "string";
           if (hasPath && "path" in record && record.path !== "") {
@@ -1158,7 +1180,9 @@ async function executeCli(
         const resolvedPath = source.resolvedPath;
         try {
           const measurement = await measureMarkdown(
-            await strictUtf8(await readInputFile(resolvedPath, "Markdown input")),
+            await strictUtf8(
+              await readInputFile(resolvedPath, "Markdown input"),
+            ),
             base.options,
           );
           await runtime.writeStdout(
@@ -1225,7 +1249,7 @@ async function executeCli(
             )}\n`,
           );
         return measureMarkdown(
-          await strictUtf8(await readFile(path)),
+          await strictUtf8(await readInputFile(path, "Markdown input")),
           loaded.options,
         );
       },

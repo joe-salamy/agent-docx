@@ -1,13 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import * as fontkit from "fontkit";
-import type { Font } from "fontkit";
+import type { Font, FontCollection } from "fontkit";
 import { builtInProfiles } from "./profiles.js";
+import { MAX_FONT_BYTES } from "./input.js";
 import { AgentDocxError } from "./types.js";
 import type { Diagnostic } from "./types.js";
-import type {
-  EstimateOptions,
-} from "./measurement.js";
+import type { EstimateOptions } from "./measurement.js";
 import type {
   FontSetInput,
   LayoutProfile,
@@ -39,8 +38,11 @@ const bundledFontDirectory = new URL(
 let bundledPromise: Promise<FontSetInput> | undefined;
 async function readBundledFont(filename: string): Promise<Uint8Array> {
   try {
-    return await readFile(new URL(filename, bundledFontDirectory));
-  } catch {
+    const bytes = await readFile(new URL(filename, bundledFontDirectory));
+    if (bytes.byteLength > MAX_FONT_BYTES) throw fontTooLarge(filename);
+    return bytes;
+  } catch (error) {
+    if (error instanceof AgentDocxError) throw error;
     throw new AgentDocxError(
       "INVALID_FONT",
       `Bundled metric font asset could not be read: ${filename}`,
@@ -255,19 +257,38 @@ async function bundled(): Promise<FontSetInput> {
     boldItalic,
   })));
 }
+const fontTooLarge = (role: string): AgentDocxError =>
+  new AgentDocxError(
+    "INPUT_TOO_LARGE",
+    `${role} font exceeds the ${MAX_FONT_BYTES} byte font limit`,
+  );
+
+const parseFont = (bytes: Uint8Array, role: string): Font => {
+  if (bytes.byteLength > MAX_FONT_BYTES) throw fontTooLarge(role);
+  let created: Font | FontCollection;
+  try {
+    created = fontkit.create(Buffer.from(bytes));
+  } catch {
+    throw new AgentDocxError(
+      "INVALID_FONT",
+      `${role} font could not be parsed`,
+    );
+  }
+  if ("fonts" in created)
+    throw new AgentDocxError(
+      "INVALID_FONT",
+      `${role} is a font collection; supply a single font face`,
+    );
+  return created;
+};
+
 export async function loadFonts(
   input: FontSetInput | undefined,
   requested: string,
 ): Promise<LoadedFonts> {
   const source = input ?? (await bundled());
   const warnings: Diagnostic[] = [];
-  const createdRegular = fontkit.create(Buffer.from(source.regular));
-  if ("fonts" in createdRegular)
-    throw new AgentDocxError(
-      "INVALID_FONT",
-      "Font collections are not accepted; supply a single font face",
-    );
-  const regularFont: Font = createdRegular;
+  const regularFont = parseFont(source.regular, "regular");
   const embedded = regularFont.familyName ?? source.family;
   if (
     input &&
@@ -289,14 +310,7 @@ export async function loadFonts(
         message: `The regular face is reused for omitted ${role} metrics.`,
         details: { role },
       });
-    const created =
-      role === "regular" ? regularFont : fontkit.create(Buffer.from(bytes));
-    if ("fonts" in created)
-      throw new AgentDocxError(
-        "INVALID_FONT",
-        `${role} is a font collection; supply a single font face`,
-      );
-    const font: Font = created;
+    const font = role === "regular" ? regularFont : parseFont(bytes, role);
     const family = font.familyName ?? embedded;
     if (
       input &&

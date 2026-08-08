@@ -5,9 +5,7 @@ export type WatchTrigger = {
   paths: readonly string[];
 };
 
-type WatchRunEnvelope<T> =
-  | T
-  | { value: T; watchPaths?: readonly string[] };
+type WatchRunEnvelope<T> = T | { value: T; watchPaths?: readonly string[] };
 
 export type WatchControllerOptions<T> = {
   watchPaths: readonly string[];
@@ -18,10 +16,7 @@ export type WatchControllerOptions<T> = {
   run(trigger: WatchTrigger): Promise<WatchRunEnvelope<T>>;
   emitResult(result: T, trigger: WatchTrigger): Promise<void> | void;
   emitError(error: unknown, trigger: WatchTrigger): Promise<void> | void;
-  signal(
-    signal: "SIGINT" | "SIGTERM",
-    listener: () => void,
-  ): void;
+  signal(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
   onStop?(reason: "SIGINT" | "SIGTERM"): Promise<void> | void;
 };
 
@@ -51,9 +46,28 @@ export const runWatchController = async <T>({
     ignoreInitial: true,
     ...watchOptions,
   });
-  await new Promise<void>((resolve, reject) => {
-    watcher.once("ready", resolve).once("error", reject);
-  });
+  let readyListener: (() => void) | undefined;
+  let startupErrorListener: ((error: unknown) => void) | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      readyListener = () => {
+        if (startupErrorListener) watcher.off("error", startupErrorListener);
+        resolve();
+      };
+      startupErrorListener = (error: unknown) => {
+        if (readyListener) watcher.off("ready", readyListener);
+        reject(error);
+      };
+      watcher.once("ready", readyListener);
+      watcher.once("error", startupErrorListener);
+    });
+  } catch (error) {
+    try {
+      await watcher.close();
+    } catch {}
+    throw error;
+  }
+
   let closing = false;
   let timer: NodeJS.Timeout | undefined;
   let running = false;
@@ -104,17 +118,11 @@ export const runWatchController = async <T>({
       start(trigger);
     }, debounceMs);
   };
-  if (onReady) await onReady();
-  if (runInitial) {
-    start({ kind: "initial", paths: [...paths] });
-    await inFlight;
-  }
   watcher.on("all", (_event, changed) =>
     queue({ kind: "change", paths: [String(changed)] }),
   );
   watcher.on("error", (error) => {
-    if (!closing)
-      void emitError(error, { kind: "change", paths: [] });
+    if (!closing) void emitError(error, { kind: "change", paths: [] });
   });
   const completion = Promise.withResolvers<number>();
   const stop = async (reason: "SIGINT" | "SIGTERM"): Promise<void> => {
@@ -133,5 +141,20 @@ export const runWatchController = async <T>({
   };
   signal("SIGINT", () => void stop("SIGINT"));
   signal("SIGTERM", () => void stop("SIGTERM"));
+  try {
+    if (onReady) await onReady();
+    if (runInitial) {
+      start({ kind: "initial", paths: [...paths] });
+      await inFlight;
+    }
+  } catch (error) {
+    closing = true;
+    clearTimeout(timer);
+    try {
+      if (inFlight) await inFlight;
+      await watcher.close();
+    } catch {}
+    throw error;
+  }
   return completion.promise;
 };

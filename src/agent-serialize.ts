@@ -1,6 +1,10 @@
 import { isAbsolute } from "node:path";
 import type { AgentAction } from "./agent-protocol.js";
-import { isStatelessAgentRequest, publicPath, revisionIdPattern } from "./agent-protocol.js";
+import {
+  isStatelessAgentRequest,
+  revisionIdPattern,
+} from "./agent-protocol.js";
+import { publicPath } from "./path-util.js";
 import type { RevisionId } from "./legal/model.js";
 import type { JsonValue } from "./types.js";
 
@@ -143,7 +147,6 @@ export const responseMeta = (
   }
   return { documentId, revision: null };
 };
-
 
 /**
  * Projects API values onto JSON-safe protocol values. Generated DOCX and

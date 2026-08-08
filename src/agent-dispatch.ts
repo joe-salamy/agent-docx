@@ -10,10 +10,7 @@ import type {
   ResolveReviewInput,
 } from "./project/contracts.js";
 import { createProject, openProject } from "./project/index.js";
-import type {
-  AgentDispatchResult,
-  AgentRequest,
-} from "./agent-protocol.js";
+import type { AgentDispatchResult, AgentRequest } from "./agent-protocol.js";
 import { responseMeta } from "./agent-serialize.js";
 import {
   asChangeSet,
@@ -60,11 +57,7 @@ export const dispatchAgentRequest = async (
     case "document.configure": {
       const input: ConfigureDocumentInput = {
         baseRevision: request.params.baseRevision,
-        changes: configUpdate(
-          cwd,
-          manifestPath,
-          request.params.changes,
-        ),
+        changes: configUpdate(cwd, manifestPath, request.params.changes),
         author: request.params.author,
         message: request.params.message,
       };
@@ -206,7 +199,8 @@ export const dispatchAgentRequest = async (
     case "review.resolve": {
       const input: ResolveReviewInput = {
         revision: request.params.revision,
-        annotationId: request.params.annotationId as ResolveReviewInput["annotationId"],
+        annotationId: request.params
+          .annotationId as ResolveReviewInput["annotationId"],
         author: request.params.author,
         message: request.params.message,
       };
