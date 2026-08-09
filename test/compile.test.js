@@ -169,58 +169,31 @@ test("native DOCX generation accepts legal IR and its document chrome", async ()
   );
 });
 
-test("native redline export accepts lists and footnotes and rejects tables", async () => {
-  const parsed = parseLegalMarkdown(
-    [
-      "- First item",
-      "- Second item[^note]",
-      "",
-      "| Left | Right |",
-      "| --- | --- |",
-      "| One | Two |",
-      "",
-      "[^note]: Supporting note.",
-    ].join("\n"),
-    {
+test("native redline export rejects unsupported legal blocks", async () => {
+  const cases = [
+    ["- First item\n", "list"],
+    ["Body.[^note]\n\n[^note]: Supporting note.\n", "footnote"],
+    ["| Left | Right |\n| --- | --- |\n| One | Two |\n", "table"],
+  ];
+  for (const [source, kind] of cases) {
+    const parsed = parseLegalMarkdown(source, {
       documentId: "motion",
       profile: "us-district-conventional",
       metadata,
-    },
-  );
-  const options = {
-    changes: [],
-    profile: builtInProfiles["us-district-conventional"],
-  };
-  await assert.rejects(
-    generateRedlineDocx(
-      parsed.document,
-      parsed.document,
-      options.changes,
-      options.profile,
-    ),
-    (error) =>
-      error instanceof AgentDocxError &&
-      error.code === "DOCX_REDLINE_UNSUPPORTED" &&
-      /table/.test(error.message),
-  );
-  const textOnly = parseLegalMarkdown(
-    "- First item\n- Second item[^note]\n\n[^note]: Supporting note.\n",
-    {
-      documentId: "motion",
-      profile: "us-district-conventional",
-      metadata,
-    },
-  );
-  const generated = await generateRedlineDocx(
-    textOnly.document,
-    textOnly.document,
-    { changes: [] },
-    builtInProfiles["us-district-conventional"],
-  );
-  const parts = await readDocxParts(generated.bytes);
-  const documentXml = new TextDecoder().decode(parts.get("word/document.xml"));
-  assert.match(documentXml, /First item/);
-  assert.match(documentXml, /Supporting note/);
+    });
+    await assert.rejects(
+      generateRedlineDocx(
+        parsed.document,
+        parsed.document,
+        { changes: [] },
+        builtInProfiles["us-district-conventional"],
+      ),
+      (error) =>
+        error instanceof AgentDocxError &&
+        error.code === "DOCX_REDLINE_UNSUPPORTED" &&
+        error.message.includes(kind),
+    );
+  }
 });
 
 test("native redline comments preserve a code-point-safe text range", async () => {

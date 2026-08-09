@@ -72,30 +72,20 @@ const textBlock = (block: LegalBlock): block is TextBlock =>
   block.kind === "blockquote" ||
   block.kind === "numbered-paragraph";
 
-const REDLINE_SUPPORTED_KINDS = new Set<string>([
-  "paragraph",
-  "heading",
-  "blockquote",
-  "numbered-paragraph",
-  "list",
-  "footnote",
-  "exhibit",
-  "length-exclusion",
-]);
-
 const assertRedlineSupported = (document: LegalDocument): void => {
-  const visit = (blocks: readonly LegalBlock[]): void => {
-    for (const block of blocks) {
-      if (!REDLINE_SUPPORTED_KINDS.has(block.kind))
-        throw new AgentDocxError(
-          "DOCX_REDLINE_UNSUPPORTED",
-          `Redline does not support ${block.kind} blocks (block ${block.id})`,
-        );
-      if (block.kind === "exhibit" || block.kind === "length-exclusion")
-        visit(block.blocks);
-    }
-  };
-  visit(document.blocks);
+  for (const block of document.blocks) {
+    if (!textBlock(block))
+      throw new AgentDocxError(
+        "DOCX_REDLINE_UNSUPPORTED",
+        `Redline does not support ${block.kind} blocks (block ${block.id})`,
+      );
+  }
+  const footnote = document.footnotes[0];
+  if (footnote)
+    throw new AgentDocxError(
+      "DOCX_REDLINE_UNSUPPORTED",
+      `Redline does not support footnote blocks (block ${footnote.id})`,
+    );
 };
 
 const flowView = (block: TextBlock): TextFlowBlock => ({
@@ -453,56 +443,16 @@ const commentChildren = (
 };
 
 const redlineBlocks = (document: LegalDocument): readonly TextBlock[] => {
-  const asText = (block: LegalBlock): TextBlock =>
-    textBlock(block)
-      ? block
-      : {
-          id: block.id,
-          kind: "paragraph",
-          position: block.position,
-          sourceText: block.sourceText,
-          segments: block.segments,
-          runs: [
-            {
-              text: visibleTextForBlock(block),
-              bold: false,
-              italic: false,
-              strikethrough: false,
-              literal: false,
-              hardBreakAfter: false,
-            },
-          ],
-          footnoteRefs: [],
-        };
-  return [
-    ...document.blocks.map(asText),
-    ...document.footnotes.map(
-      (footnote): TextBlock => ({
-        id: footnote.id,
-        kind: "paragraph",
-        position: footnote.position,
-        sourceText: footnote.sourceText,
-        segments: footnote.segments,
-        runs: [
-          {
-            text: footnote.paragraphs
-              .map((paragraph) =>
-                paragraph.runs
-                  .map((run) => `${run.text}${run.hardBreakAfter ? "\n" : ""}`)
-                  .join(""),
-              )
-              .join("\n"),
-            bold: false,
-            italic: false,
-            strikethrough: false,
-            literal: false,
-            hardBreakAfter: false,
-          },
-        ],
-        footnoteRefs: [],
-      }),
-    ),
-  ];
+  const blocks: TextBlock[] = [];
+  for (const block of document.blocks) {
+    if (!textBlock(block))
+      throw new AgentDocxError(
+        "DOCX_REDLINE_UNSUPPORTED",
+        `Redline does not support ${block.kind} blocks (block ${block.id})`,
+      );
+    blocks.push(block);
+  }
+  return blocks;
 };
 
 /**

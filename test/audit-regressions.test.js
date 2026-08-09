@@ -549,14 +549,14 @@ test("diff source ranges keep astral and decomposed characters intact", () => {
   );
 });
 
-test("redline round-trip preserves astral text through list and paragraph edits", async () => {
-  const root = await mkdtemp(join(tmpdir(), "agent-docx-astral-redline-"));
+test("redline export rejects nested list blocks with a stable code", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-docx-nested-list-redline-"));
   try {
     const manifestPath = join(root, "agent-docx.json");
     const sourcePath = join(root, "motion.md");
     await writeFile(
       sourcePath,
-      "# Motion\n\n- Item A😀B e\u0301 old\n\nBody e\u0301😀 old.\n",
+      "# Motion\n\n- Parent\n  - Child A😀B e\u0301 old\n\nBody.\n",
     );
     const project = await createProject(manifestPath, {
       documentId: "motion",
@@ -569,56 +569,30 @@ test("redline round-trip preserves astral text through list and paragraph edits"
       author: { name: "Drafter" },
       message: "Initial draft",
     });
-    // Edit the markerized working copy so block ids stay stable across the
-    // revision (rewriting the file from scratch would re-derive ids and turn
-    // text edits into block replacements).
     await writeFile(
       sourcePath,
-      (await readFile(sourcePath, "utf8"))
-        .replaceAll("A😀B e\u0301 old", "A😀B e\u0301 new")
-        .replaceAll("Body e\u0301😀 old.", "Body e\u0301😀 new."),
+      (await readFile(sourcePath, "utf8")).replace(
+        "Child A😀B e\u0301 old",
+        "Child A😀B e\u0301 new",
+      ),
     );
     const head = await project.checkpoint("motion", {
       baseRevision: base.revision.id,
       author: { name: "Drafter" },
-      message: "Edit list item and paragraph",
+      message: "Edit nested list",
     });
-    const exported = await project.exportDocx("motion", {
-      revision: head.revision.id,
-      mode: "redline",
-      baseRevision: base.revision.id,
-      output: join(root, "motion-redline.docx"),
-    });
-    assert.ok(exported.bytes.byteLength > 0);
-    const imported = await project.importRedline({
-      documentId: "motion",
-      input: join(root, "motion-redline.docx"),
-      author: { name: "Reviewer" },
-      message: "Review redline",
-    });
-    assert.equal(imported.headRevision, head.revision.id);
-    assert.equal(imported.baseRevision, base.revision.id);
-    const changes = imported.changeSet.changes;
-    const shell = changes.find(
-      (change) => change.kind === "replace-container-shell",
+    await assert.rejects(
+      () =>
+        project.exportDocx("motion", {
+          revision: head.revision.id,
+          mode: "redline",
+          baseRevision: base.revision.id,
+          output: join(root, "motion-redline.docx"),
+        }),
+      (error) =>
+        error?.code === "DOCX_REDLINE_UNSUPPORTED" &&
+        /list/.test(error.message),
     );
-    assert.ok(shell, "list item edit must survive the redline round-trip");
-    assert.ok(
-      shell.oldShell.sourceRanges.some((range) =>
-        range.text.includes("A😀B e\u0301 old"),
-      ),
-      "list shell ranges must keep the astral text intact",
-    );
-    const paragraphChange = changes.find(
-      (change) => change.kind === "replace-text",
-    );
-    assert.ok(
-      paragraphChange,
-      "paragraph edit must survive the redline round-trip",
-    );
-    assert.equal(paragraphChange.oldText, "old.");
-    assert.equal(paragraphChange.newText, "new.");
-    assert.equal(paragraphChange.oldSource.text, "old.");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
