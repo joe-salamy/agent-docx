@@ -21,6 +21,7 @@ import { runWorkflowCommand } from "./cli-workflow.js";
 import { builtInProfiles } from "./profiles.js";
 import { jsonlLines, strictUtf8 } from "./jsonl.js";
 import { runMcpServer } from "./mcp.js";
+import { installSkills, listSkills } from "./skills.js";
 import { AgentDocxError } from "./types.js";
 import type {
   EstimateOptions,
@@ -1001,8 +1002,71 @@ async function executeCli(
 
   if (command.mode === "mcp") return runMcpServer(runtime);
 
-  if (command.mode === "workflow")
-    return runWorkflowCommand(command, runtime, state);
+  if (command.mode === "skills") {
+    if (command.subcommand === "list") {
+      const skills = await listSkills();
+      if (command.values.json === true) {
+        await runtime.writeStdout(`${JSON.stringify(skills, null, 2)}\n`);
+      } else {
+        if (skills.length === 0) {
+          await runtime.writeStdout("No skills available\n");
+        } else {
+          for (const s of skills) {
+            await runtime.writeStdout(`${s.name}@${s.version}: ${s.description}\n`);
+          }
+        }
+      }
+      return 0;
+    }
+    const dest = typeof command.values.dest === "string" ? command.values.dest : undefined;
+    const global = command.values.global === true;
+    const force = command.values.force === true;
+    const dryRun = command.values["dry-run"] === true;
+    const json = command.values.json === true;
+    const installOpts: { cwd: string; dest?: string; global?: boolean; force?: boolean; dryRun?: boolean } = {
+      cwd: runtime.cwd,
+    };
+    if (dest !== undefined) installOpts.dest = dest;
+    if (global) installOpts.global = true;
+    if (force) installOpts.force = true;
+    if (dryRun) installOpts.dryRun = true;
+    const result = await installSkills(installOpts);
+    const skipped = result.results.filter((r) => r.status === "skipped");
+    if (skipped.length > 0 && !json) {
+      for (const r of skipped) {
+        await runtime.writeStderr(`Skipped ${r.name}: exists at ${r.destPath} (use --force to overwrite)\n`);
+      }
+    }
+    if (json) {
+      await runtime.writeStdout(
+        `${JSON.stringify(
+          {
+            destBase: result.destBase,
+            dryRun,
+            results: result.results,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    } else {
+      for (const r of result.results) {
+        if (r.status === "skipped") continue;
+        const verb =
+          r.status === "dry-run" ? "would install" : r.status === "overwritten" ? "overwrote" : "installed";
+        await runtime.writeStdout(`${verb} ${r.name} -> ${r.destPath}\n`);
+      }
+      if (dryRun) {
+        await runtime.writeStdout(`dry-run: no files written (destBase: ${result.destBase})\n`);
+      }
+    }
+    if (skipped.length > 0) {
+      throw new AgentDocxError("OUTPUT_EXISTS", `Skills already exist at ${skipped[0]!.destPath} (use --force)`);
+    }
+    return 0;
+  }
+
+  if (command.mode === "workflow") return runWorkflowCommand(command, runtime, state);
 
   if (command.mode === "batch-files" || command.mode === "batch-jsonl") {
     const values = command.values;

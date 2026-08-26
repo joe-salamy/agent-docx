@@ -16,6 +16,18 @@ agent-docx --version
 agent-docx --help
 ```
 
+The package ships versioned agent skills under `skills/` (`skills/agent-docx` for the full drafting workflow, `skills/brief-to-agent-docx` as a thin alias). Install them into the consuming repo as an opt-in step — no postinstall side effect:
+
+```sh
+agent-docx skills list
+agent-docx skills install              # -> ./.omp/skills (opencode/omp)
+agent-docx skills install --dest .claude/skills  # Claude Code
+agent-docx skills install --global     # -> ~/.omp/skills
+agent-docx skills install --dry-run --json  # preview
+```
+
+Re-run after `pnpm update agent-docx` to pick up skill updates; use `--force` to overwrite an existing install. Skills are part of the published `files` and available at `node_modules/agent-docx/skills/` without copying.
+
 ### Input and package limits
 
 The CLI rejects oversized inputs before parsing: Markdown and stdin are capped at 64 MiB, and each JSONL request line is capped at 8 MiB. DOCX packages are capped at 25 MiB compressed input, 512 ZIP entries, 64 MiB decompressed total, and 4 MiB per XML part (with a 12 MiB XML total); attachment bundles allow at most 512 entries, 25 MiB per file, and 50 MiB decompressed total. These limits protect both the CLI and long-running agent transports; a rejected input is not partially processed.

@@ -62,6 +62,7 @@ export type CliCommand =
   | { mode: "mcp" }
   | { mode: "profiles"; json: boolean }
   | { mode: "inspect"; path: string; json: boolean }
+  | { mode: "skills"; subcommand: "list" | "install"; values: CliOptionValues; positionals: readonly string[] }
   | { mode: "batch-files"; paths: readonly string[]; values: CliOptionValues }
   | { mode: "batch-jsonl"; values: CliOptionValues }
   | { mode: "watch"; path: string; values: CliOptionValues }
@@ -88,7 +89,6 @@ export type CliCommand =
         | "agent";
       args: readonly string[];
     };
-
 const specs = {
   help: { type: "boolean" },
   version: { type: "boolean" },
@@ -133,14 +133,19 @@ const specs = {
   jsonl: { type: "boolean" },
   "debounce-ms": { type: "string" },
   poll: { type: "boolean" },
+  dest: { type: "string" },
+  global: { type: "boolean" },
+  force: { type: "boolean" },
+  "dry-run": { type: "boolean" },
 } as const;
-
 export const cliHelp = `Usage:
   agent-docx --help
   agent-docx --version
   agent-docx measure [FILE.md|-] [options]
   agent-docx profiles [--json]
   agent-docx template inspect FILE.docx [--json]
+  agent-docx skills list [--json]
+  agent-docx skills install [--dest DIR] [--global] [--force] [--dry-run] [--json]
 
 Project workflow:
   agent-docx project init|add ...
@@ -160,6 +165,12 @@ MCP:
   agent-docx mcp
   Serves the version-1 agent protocol as a Model Context Protocol server
   over stdio (newline-delimited JSON-RPC).
+
+Skills:
+  agent-docx skills list
+  agent-docx skills install [--dest DIR] [--global] [--force] [--dry-run]
+  Copies versioned skills from the installed package to a harness skill dir.
+  Default dest is ./.omp/skills; --global uses ~/.omp/skills. Re-run after updating the package.
 
 Measure options retain batch, watch, layout, diagnostics, renderer, and --output support after the measure command.
 Machine output is JSON/JSONL on stdout; fatal records are JSON on stderr.
@@ -391,6 +402,71 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
     if (rest.length > 0)
       throw new AgentDocxError("INVALID_ARGUMENT", "mcp accepts no arguments");
     return { mode: "mcp" };
+  }
+
+  if (command === "skills") {
+    const subcommand = rest[0];
+    if (subcommand !== "install" && subcommand !== "list") {
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        "skills requires one of: list, install",
+      );
+    }
+    const parsed = parseCliArgsStrict({
+      args: rest.slice(1),
+      options: specs,
+      strict: true,
+      allowPositionals: true,
+      tokens: true,
+    });
+    const values = parsed.values as CliOptionValues;
+    const positionals = parsed.positionals;
+    if (subcommand === "list") {
+      if (
+        positionals.length !== 0 ||
+        Object.keys(values).some((k) => k !== "json")
+      ) {
+        throw new AgentDocxError(
+          "INVALID_ARGUMENT",
+          "skills list accepts only optional --json",
+        );
+      }
+    } else {
+      // install
+      if (positionals.length !== 0) {
+        throw new AgentDocxError(
+          "INVALID_ARGUMENT",
+          "skills install accepts no positional arguments",
+        );
+      }
+      const allowedInstall: Record<string, true> = {
+        dest: true,
+        global: true,
+        force: true,
+        "dry-run": true,
+        json: true,
+      };
+      const unknown = Object.keys(values).find((k) => !allowedInstall[k]);
+      if (unknown) {
+        throw new AgentDocxError(
+          "INVALID_ARGUMENT",
+          `skills install does not accept --${unknown}`,
+        );
+      }
+      if (values.dest !== undefined && typeof values.dest !== "string") {
+        throw new AgentDocxError("INVALID_ARGUMENT", "--dest requires a path");
+      }
+      if (values.dest === "") {
+        throw new AgentDocxError("INVALID_ARGUMENT", "--dest must not be empty");
+      }
+      if (values.global && values.dest !== undefined) {
+        throw new AgentDocxError(
+          "INVALID_ARGUMENT",
+          "--dest and --global cannot be combined",
+        );
+      }
+    }
+    return { mode: "skills", subcommand, values, positionals };
   }
 
   if (!(command in workflowSubcommands)) {
