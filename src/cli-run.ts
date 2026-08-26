@@ -425,7 +425,7 @@ async function loadConfig(pathToken: string): Promise<{
     );
   }
   const schemaPath = fileURLToPath(
-    new URL("../config.schema.json", import.meta.url),
+    new URL("../schemas/config.schema.json", import.meta.url),
   );
   const schema = JSON.parse(await readFile(schemaPath, "utf8")) as object;
   const ajv = new Ajv2020({ allErrors: true, strict: true });

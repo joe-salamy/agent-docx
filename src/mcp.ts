@@ -141,12 +141,12 @@ const EXTERNAL_ACTION_SCHEMAS: ReadonlyArray<{
 }> = [
   {
     id: "https://agent-docx.dev/schemas/change-set-v1.json",
-    file: "../change-set.schema.json",
+    file: "../schemas/change-set.schema.json",
     defKey: "changeSet",
   },
   {
     id: "https://agent-docx.dev/schemas/source-patch-v1.json",
-    file: "../source-patch.schema.json",
+    file: "../schemas/source-patch.schema.json",
     defKey: "sourcePatch",
   },
 ];
@@ -173,7 +173,7 @@ const loadActionSchemas = async (): Promise<LoadedActionSchemas | null> => {
   try {
     const raw = JSON.parse(
       await readFile(
-        new URL("../agent-request.schema.json", import.meta.url),
+        new URL("../schemas/agent-request.schema.json", import.meta.url),
         "utf8",
       ),
     ) as {

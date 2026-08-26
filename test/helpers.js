@@ -26,7 +26,7 @@ export const schemaNames = Object.keys(pkg.exports)
   .map((key) => key.slice(2));
 export const schemas = await Promise.all(
   schemaNames.map(async (name) =>
-    JSON.parse(await readFile(new URL(`../${name}`, import.meta.url), "utf8")),
+    JSON.parse(await readFile(new URL(`../schemas/${name}`, import.meta.url), "utf8")),
   ),
 );
 export const ajv = new Ajv2020({

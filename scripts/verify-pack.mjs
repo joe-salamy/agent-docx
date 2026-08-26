@@ -64,7 +64,7 @@ const requiredAssets = [
   `${fontPrefix}manifest.json`,
   `${fontPrefix}OFL-1.1.txt`,
   ...requiredRuleAssets,
-  ...schemaNames,
+  ...schemaNames.map((name) => `schemas/${name}`),
 ];
 const npmExecPath = process.env.npm_execpath;
 const npmUsesNodeLauncher =
