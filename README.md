@@ -90,6 +90,8 @@ A project manifest owns document configuration; `.agent-docx/` is a private, con
 agent-docx measure [FILE.md|-] [options]
 agent-docx profiles [--json]
 agent-docx template inspect FILE.docx [--json]
+agent-docx skills list [--json]
+agent-docx skills install [--dest DIR] [--global] [--force] [--dry-run] [--json]
 
 agent-docx project init|add ...
 agent-docx document configure ...
@@ -109,7 +111,6 @@ agent-docx mcp
 All workflow commands accept `--project FILE`; project creation and document addition use `--document`, `--source`, `--profile`, and `--metadata`. `project init` creates the manifest and first document; `project add` adds another document and accepts `--default` to make it the default document. Font flags are an all-or-nothing family set: `--font-family` and `--font-regular` are required together, while `--font-bold`, `--font-italic`, and `--font-bold-italic` are optional face overrides. Supplying any face flag without `--font-regular` is rejected.
 
 ### Filing sets
-
 Documents can be grouped into ordered filing sets with an optional shared deterministic page cap:
 
 ```sh
@@ -179,13 +180,28 @@ The watch stream emits `ready`, debounced `document.measure` results or errors, 
 agent-docx mcp
 ```
 
-`agent-docx mcp` serves the same version-1 protocol as a Model Context Protocol server over stdio (newline-delimited JSON-RPC, no framing). Every protocol action becomes one MCP tool named after the action (for example `document.validate`, `draft.evaluate`, `docx.export`, `filingSet.get`); each tool takes the action's `params` object plus an optional `project` path relative to the server's working directory. Tool results carry the serialized protocol value as both text and `structuredContent`; dispatch failures return `isError: true` results with a `{code, message}` structured payload. The server implements `initialize`, `ping`, `tools/list`, and `tools/call`, so MCP-capable agents (Claude Code, Cursor, and similar) can drive the full project, draft, review, validation, and export workflow without shell parsing. No binary DOCX bytes are ever embedded in MCP responses; artifacts are referenced by public path and SHA-256.
+`agent-docx mcp` serves the same version-1 protocol as a Model Context Protocol server over stdio (newline-delimited JSON-RPC, no framing). Every protocol action becomes one MCP tool named after the action (for example `document.validate`, `draft.evaluate`, `docx.export`, `filingSet.get`); each tool takes the action's `params` object plus an optional `project` path relative to the server's working directory. Tool results carry the serialized protocol value as both text and `structuredContent`; dispatch failures return `isError: true` results with a `{code, message}` structured payload. The server implements `initialize`, `ping`, `tools/list`, and `tools/call`, so MCP-capable agents (Claude Code, Cursor, and similar) can drive the full project, draft, review, validation, and export workflow without shell parsing.
 MCP project paths are confined to the server working directory. Requests may name a project with a normalized relative path, but absolute paths and traversal outside that directory are rejected; responses expose cwd-relative public paths. Run the server from a directory that contains only the projects and assets you intend to make available.
+
+## Agent skills
+
+The package ships versioned skills as the canonical agent interface — no copy-paste of workflow steps:
+
+- `skills/agent-docx` — full drafting workflow (measure, project/revision/draft/validate/export/filing-set/redline/import, deterministic pagination, rule packs, agent JSONL, and MCP). This is the skill to install.
+- `skills/brief-to-agent-docx` — thin alias for the common brief/motion → DOCX path.
+
+Skills are part of the published `files` and live at `node_modules/agent-docx/skills/` after `pnpm add agent-docx`. The CLI copies them into the consumer repo on demand (see Install):
+
+```sh
+agent-docx skills list --json
+agent-docx skills install --dry-run --json
+```
+
+Full instruction text is in `skills/agent-docx/SKILL.md` (versioned with the package); `README.md` keeps only the distro commands. Re-run `skills install` after updating the package; use `--force` to overwrite.
 
 ## Markdown and legal structure
 
 agent-docx supports source-mapped paragraphs, headings, blockquotes, ordered and unordered lists, GFM tables, thematic breaks, hard breaks, emphasis, strong emphasis, strikethrough, inline code, safe absolute links, footnotes, and controlled directives.
-
 Supported directives are deliberately narrow:
 
 - `caption`, `toc`, `toa`, and `pagebreak`.
