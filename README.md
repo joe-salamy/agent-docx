@@ -20,7 +20,7 @@ The package ships versioned agent skills under `skills/` (`skills/agent-docx` fo
 
 ```sh
 agent-docx skills list
-agent-docx skills install              # -> ./.omp/skills (opencode/omp)
+agent-docx skills install              # -> ./.omp/skills (oh-my-pi)
 agent-docx skills install --dest .claude/skills  # Claude Code
 agent-docx skills install --global     # -> ~/.omp/skills
 agent-docx skills install --dry-run --json  # preview
