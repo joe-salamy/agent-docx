@@ -136,6 +136,7 @@ try {
     /^(?:package\.json|README\.md|LICENSE|THIRD_PARTY_NOTICES\.txt|dist\/)/.test(
       path,
     ) ||
+    /^skills\//.test(path) ||
     (basenameOf(path).endsWith(".schema.json") &&
       schemaNames.includes(basenameOf(path))) ||
     requiredAssets.includes(path);
