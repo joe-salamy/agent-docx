@@ -31,7 +31,7 @@
   },
   "packageManager": "pnpm@11.15.1",
   "bin": {
-    "agent-docx": "./dist/cli.js"
+    "agent-docx": "dist/cli.js"
   },
   "exports": {
     ".": {
