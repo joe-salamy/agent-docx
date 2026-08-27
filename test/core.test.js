@@ -472,6 +472,7 @@ test("block style, indentation, and line-cap exclusions affect deterministic lay
 
   const plain = await estimateMarkdown("Short line.", {
     paragraphDiagnostics: true,
+    layout: { body: { firstLineIndentTwips: 0 } },
   });
   const indented = await estimateMarkdown("Short line.", {
     paragraphDiagnostics: true,
@@ -481,7 +482,6 @@ test("block style, indentation, and line-cap exclusions affect deterministic lay
     indented.paragraphs[0].lastLineAvailableTwips,
     plain.paragraphs[0].lastLineAvailableTwips - 720,
   );
-
   const markdown = "> First line.  \n> Second line.";
   const pagination = {
     maxCountedLinesPerPage: 1,

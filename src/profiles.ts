@@ -57,7 +57,7 @@ const conventional: LayoutProfile = {
   sourceCitation: "Package convention; not a court rule.",
   page,
   requestedFontFamily: "Times New Roman",
-  body: style(240, double),
+  body: style(240, double, { firstLineIndentTwips: 720 }),
   headings: headings(style(240, double, { bold: true, keepWithNext: true })),
   blockquote: style(240, double, {
     leftIndentTwips: 720,
@@ -101,7 +101,7 @@ const frap: LayoutProfile = {
   sourceUrl:
     "https://www.uscourts.gov/forms-rules/current-rules-practice-procedure/federal-rules-appellate-procedure",
   sourceCitation: "Fed. R. App. P. 32(a)(4)-(7)",
-  body: style(280, double),
+  body: style(280, double, { firstLineIndentTwips: 720 }),
   headings: headings(style(280, single, { bold: true, keepWithNext: true })),
   blockquote: style(280, double, {
     leftIndentTwips: 720,
