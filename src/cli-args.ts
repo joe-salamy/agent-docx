@@ -34,7 +34,7 @@ export const parseCliArgsStrict = (
     const seen = new Set<string>();
     for (const token of parsed.tokens ?? []) {
       if (token.kind !== "option" || !token.name) continue;
-      if (seen.has(token.name) && !["include", "exclude"].includes(token.name))
+      if (seen.has(token.name) && !["include", "exclude", "lines-page"].includes(token.name))
         throw new AgentDocxError(
           "INVALID_ARGUMENT",
           `Duplicate option: --${token.name}`,
@@ -118,6 +118,8 @@ const specs = {
   trim: { type: "boolean" },
   "trim-limit": { type: "string" },
   "trim-threshold": { type: "string" },
+  lines: { type: "boolean" },
+  "lines-page": { type: "string", multiple: true },
   renderer: { type: "string" },
   "office-timeout": { type: "string" },
   "libreoffice-path": { type: "string" },
@@ -172,9 +174,35 @@ Skills:
   Copies versioned skills from the installed package to a harness skill dir.
   Default dest is ./.omp/skills; --global uses ~/.omp/skills. Re-run after updating the package.
 
-Measure options retain batch, watch, layout, diagnostics, renderer, and --output support after the measure command.
-Machine output is JSON/JSONL on stdout; fatal records are JSON on stderr.
+Measure:
+  agent-docx measure [FILE.md|-] [options] [--json] [--output FILE.docx]
+  Layout: --profile NAME --template FILE.docx --page-size letter|a4 --page-width-in N ... --font-* --font-size-pt N --line-spacing N
+  Diagnostics (deterministic, no Office):
+    --lines                 Per-line fill (highest-value for page-limit trimming)
+                            Emits deterministic.lines[] with page, used/available/unusedTwips, ratio (used/available)
+                            Filter client-side: jq '[.deterministic.lines[] | select(.page==2)]'  page 2 only
+                            jq '[.deterministic.lines[] | select(.isLastLineOfBlock)]'  last line per block
+                            jq '... | sort_by(.ratio) | .[0:10]'  slackest lines
+                            Human: bar per line when not --json
+    --lines-page N          Convenience filter: emit only page N (1-indexed, repeatable: --lines-page 2 --lines-page 3)
+                            Requires --lines; without it, throws INVALID_ARGUMENT
+    --paragraphs            Per-block last-line summary (subset of --lines)
+    --trim --trim-threshold 0-1 --trim-limit 1-100   Ranked short-last-line opportunities (subset of --lines, cheapest fix)
+    --sections              Section page breakdown
+  Limits: --page-limit N --fail-over-limit
+  Renderers: --renderer deterministic|word|libreoffice|compare ...
+  Machine output is JSON/JSONL on stdout; fatal records are JSON on stderr.
 `;
+function asciiIntegerCli(value: string, name: string, min = 1, max = Number.MAX_SAFE_INTEGER) {
+  if (!/^(?:0|[1-9][0-9]*)$/.test(value)) {
+    throw new AgentDocxError("INVALID_ARGUMENT", `${name} requires ASCII digits`);
+  }
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < min || number > max) {
+    throw new AgentDocxError("INVALID_ARGUMENT", `${name} is out of range`);
+  }
+  return number;
+}
 
 function parseMeasureArgs(args: readonly string[]): CliCommand {
   const parsed = parseCliArgsStrict({
@@ -297,6 +325,25 @@ function parseMeasureArgs(args: readonly string[]): CliCommand {
       "INVALID_ARGUMENT",
       "Watch-only option used outside watch",
     );
+  }
+  if (values["lines-page"] !== undefined && values.lines !== true) {
+    throw new AgentDocxError("INVALID_ARGUMENT", "--lines-page requires --lines");
+  }
+  if (values["lines-page"] !== undefined) {
+    const raw = values["lines-page"] as readonly string[];
+    const tokens: string[] = [];
+    for (const entry of raw) {
+      for (const part of String(entry).split(",")) {
+        const trimmed = part.trim();
+        if (trimmed.length) tokens.push(trimmed);
+      }
+    }
+    if (tokens.length === 0) {
+      throw new AgentDocxError("INVALID_ARGUMENT", "--lines-page requires a page number");
+    }
+    for (const token of tokens) {
+      asciiIntegerCli(token, "--lines-page", 1);
+    }
   }
   if (parsed.positionals.length > 1) {
     throw new AgentDocxError(

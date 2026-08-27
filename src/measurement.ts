@@ -45,6 +45,7 @@ export type EstimateOptions = {
   paragraphDiagnostics?: boolean;
   sectionDiagnostics?: boolean;
   trim?: false | { maxCandidates?: number; maxLastLineRatio?: number };
+  lineDiagnostics?: boolean;
 };
 
 export type SectionPageDiagnostic = {
@@ -104,6 +105,29 @@ export type LastPageMetrics = {
   bodyLineCapacity: number;
 };
 
+export type LineDiagnostic = {
+  source: "deterministic";
+  globalIndex: number;
+  page: number;
+  indexOnPage: number;
+  blockIndex: number;
+  position: SourcePosition;
+  visualLinesInBlock: number;
+  indexInBlock: number;
+  isLastLineOfBlock: boolean;
+  usedTwips: number;
+  availableTwips: number;
+  unusedTwips: number;
+  ratio: number;
+  overflowed: boolean;
+  counted: boolean;
+  text: string;
+  start: number;
+  end: number;
+  contentEnd: number;
+  startCause: "soft" | "hard" | "start";
+};
+
 export type ParagraphDiagnostic = {
   source: "deterministic";
   index: number;
@@ -159,6 +183,7 @@ export type DeterministicResult = {
   paragraphs?: readonly ParagraphDiagnostic[];
   trimOpportunities?: readonly TrimOpportunity[];
   sections?: readonly SectionDiagnostic[];
+  lines?: readonly LineDiagnostic[];
   budget?: Budget;
 };
 

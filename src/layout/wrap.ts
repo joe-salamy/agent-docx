@@ -8,7 +8,7 @@ import type {
 import type { LoadedFonts } from "../resolve.js";
 import type { Diagnostic, SourcePosition } from "../types.js";
 import type { LayoutProfile, TextStyle } from "./profile.js";
-import type { ParagraphDiagnostic, SectionDiagnostic } from "../measurement.js";
+import type { LineDiagnostic, ParagraphDiagnostic, SectionDiagnostic } from "../measurement.js";
 
 export type WrappedLine = {
   used: number;
@@ -523,6 +523,7 @@ export type SourceRangesFor = (
 
 export type BuildDiagnosticsResult = {
   paragraphResults: ParagraphDiagnostic[];
+  lines: LineDiagnostic[];
   sectionResults: SectionDiagnostic[] | undefined;
   warnings: Diagnostic[];
 };
@@ -539,6 +540,58 @@ export function buildDiagnostics(
   sourceRangesFor: SourceRangesFor,
 ): BuildDiagnosticsResult {
   const paragraphResults: ParagraphDiagnostic[] = [];
+  // Build per-line diagnostics: requires blockIndex and per-block line counts
+  const blockIndexMap = new Map<FlowBlock, number>();
+  document.blocks.forEach((block, idx) => blockIndexMap.set(block, idx));
+  const blockLinesMap = new Map<FlowBlock, WrappedLine[]>();
+  for (const page of pages) {
+    for (const line of page.bodyLines) {
+      const arr = blockLinesMap.get(line.block);
+      if (arr) arr.push(line);
+      else blockLinesMap.set(line.block, [line]);
+    }
+  }
+  const blockCursor = new Map<FlowBlock, number>();
+  const lines: LineDiagnostic[] = [];
+  let globalIndex = 0;
+  pages.forEach((page, pageIndex) => {
+    page.bodyLines.forEach((line, indexOnPage) => {
+      const block = line.block;
+      const blockIndex = blockIndexMap.get(block) ?? -1;
+      const blockLines = blockLinesMap.get(block) ?? [line];
+      const visualLinesInBlock = blockLines.length;
+      const indexInBlock = blockCursor.get(block) ?? 0;
+      blockCursor.set(block, indexInBlock + 1);
+      const isLastLineOfBlock = indexInBlock === visualLinesInBlock - 1;
+      const usedTwips = line.used;
+      const availableTwips = line.available;
+      const unusedTwips = availableTwips - usedTwips;
+      const ratio = availableTwips === 0 ? 0 : usedTwips / availableTwips;
+      const position = (block as TextFlowBlock).position ?? (block as FlowBlock & { position: SourcePosition }).position;
+      lines.push({
+        source: "deterministic",
+        globalIndex: globalIndex++,
+        page: pageIndex + 1,
+        indexOnPage,
+        blockIndex,
+        position,
+        visualLinesInBlock,
+        indexInBlock,
+        isLastLineOfBlock,
+        usedTwips,
+        availableTwips,
+        unusedTwips,
+        ratio,
+        overflowed: line.overflowed,
+        counted: line.counted,
+        text: line.text,
+        start: line.start,
+        end: line.end,
+        contentEnd: line.contentEnd,
+        startCause: line.startCause,
+      });
+    });
+  });
   let paragraphIndex = 0;
   for (const block of document.blocks) {
     if (
@@ -706,5 +759,5 @@ export function buildDiagnostics(
     });
   }
 
-  return { paragraphResults, sectionResults, warnings };
+  return { paragraphResults, lines, sectionResults, warnings };
 }

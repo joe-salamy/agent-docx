@@ -434,6 +434,54 @@
         }
       }
     },
+    "line": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "globalIndex",
+        "page",
+        "indexOnPage",
+        "blockIndex",
+        "position",
+        "visualLinesInBlock",
+        "indexInBlock",
+        "isLastLineOfBlock",
+        "usedTwips",
+        "availableTwips",
+        "unusedTwips",
+        "ratio",
+        "overflowed",
+        "counted",
+        "text",
+        "start",
+        "end",
+        "contentEnd",
+        "startCause"
+      ],
+      "properties": {
+        "source": { "const": "deterministic" },
+        "globalIndex": { "type": "integer", "minimum": 0 },
+        "page": { "type": "integer", "minimum": 1 },
+        "indexOnPage": { "type": "integer", "minimum": 0 },
+        "blockIndex": { "type": "integer", "minimum": 0 },
+        "position": { "$ref": "#/$defs/position" },
+        "visualLinesInBlock": { "type": "integer", "minimum": 1 },
+        "indexInBlock": { "type": "integer", "minimum": 0 },
+        "isLastLineOfBlock": { "type": "boolean" },
+        "usedTwips": { "type": "number" },
+        "availableTwips": { "type": "number" },
+        "unusedTwips": { "type": "number" },
+        "ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "overflowed": { "type": "boolean" },
+        "counted": { "type": "boolean" },
+        "text": { "type": "string" },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "contentEnd": { "type": "integer", "minimum": 0 },
+        "startCause": { "enum": ["soft", "hard", "start"] }
+      }
+    },
     "budget": {
       "type": "object",
       "additionalProperties": false,
@@ -498,6 +546,7 @@
           "items": { "$ref": "#/$defs/paragraph" }
         },
         "sections": { "type": "array", "items": { "type": "object" } },
+        "lines": { "type": "array", "items": { "$ref": "#/$defs/line" } },
         "budget": { "$ref": "#/$defs/budget" }
       }
     },

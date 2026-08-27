@@ -282,6 +282,8 @@ agent-docx profiles --json
 agent-docx measure filing.md --profile cand-civil --paragraphs --sections --trim
 ```
 
+Per-line trimming is the highest-value diagnostic for page-limit work: `agent-docx measure filing.md --lines --json` emits `deterministic.lines[]` with `page`, `ratio`, `unusedTwips`, `isLastLineOfBlock`. Filter client-side with `jq '[.deterministic.lines[] | select(.page==2)]'` or server-side via `--lines-page 2` (requires `--lines`); the human view shows a bar per line when not `--json`. `--paragraphs` / `--trim` are short-hand subsets of `--lines` (last-line only / ranked opportunities).
+
 Portable estimates use pinned Liberation Serif 2.1.5 bytes as metrics while reporting the requested `Times New Roman` family and explicit substitution. Provide legally obtained custom font files through project configuration when a different deterministic metric source is required.
 
 Deterministic pagination runs entirely in process:

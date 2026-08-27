@@ -109,6 +109,25 @@ agent-docx filing-set validate --project agent-docx.json --id motion-package
 
 ## Standalone measure (no project)
 
+**Primary way to trim to a page limit — use per-line fill, not word count:**
+```sh
+# Full per-line table: page, ratio (used/available), twips slack, isLastLineOfBlock
+agent-docx measure filing.md --profile cand-civil --lines --json | jq '[.deterministic.lines[] | {page,ratio,unusedTwips,isLastLineOfBlock,text}]'
+
+# Only slackest last lines (best edits): sort by ratio then fix lowest 10
+agent-docx measure filing.md --lines --json | jq '[.deterministic.lines[] | select(.isLastLineOfBlock)] | sort_by(.ratio) | .[0:10]'
+
+# Scope to page 2 (or --lines-page 2 for server-side filter)
+agent-docx measure filing.md --lines --lines-page 2 --json | jq .
+agent-docx measure filing.md --lines --json | jq '[.deterministic.lines[] | select(.page==2)]'
+
+# Human bar view
+agent-docx measure filing.md --profile cand-civil --lines
+```
+`--paragraphs` / `--trim` are short-hand subsets of `--lines` (last-line only / ranked opportunities). `--sections` remains separate for section page breakdown.
+
+Agents MUST prefer `deterministic.lines[].ratio` + `unusedTwips` + `estimatedRemovalTwips` (via `paragraphs.oneLineReduction`) over `wordCount/wordsPerPage`. A 25% last line wastes ~0.75*availableTwips; deleting that many twips of text collapses one visual line.
+
 ```sh
 agent-docx measure filing.md --profile cand-civil --paragraphs --sections --trim --json
 agent-docx measure filing.md --profile us-district-conventional --renderer compare --json

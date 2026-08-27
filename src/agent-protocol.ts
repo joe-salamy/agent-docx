@@ -58,6 +58,7 @@ export type AgentRendererOptions = AgentParams & {
   officeTimeoutMs?: number;
   paragraphDiagnostics?: boolean;
   sectionDiagnostics?: boolean;
+  lineDiagnostics?: boolean;
   trim?: false | AgentParams;
   word?: AgentParams;
   libreoffice?: AgentParams;
@@ -951,6 +952,8 @@ export const assertRendererOptions = (
     optionalBoolean(options, "paragraphDiagnostics");
   if (options.sectionDiagnostics !== undefined)
     optionalBoolean(options, "sectionDiagnostics");
+  if (options.lineDiagnostics !== undefined)
+    optionalBoolean(options, "lineDiagnostics");
   if (options.trim !== undefined) {
     if (options.trim !== false) {
       const trim = assertRecord(options.trim, `${label}.trim`);
@@ -1605,14 +1608,13 @@ const assertAgentParams = (
         ["documentId", "revision", "options"],
         "document.measure params",
       );
-      requiredDocumentId(params, "documentId");
-      optionalRevision(params, "revision");
       if (params.options !== undefined)
         assertRendererOptions(params.options, "document.measure options", [
           "renderer",
           "officeTimeoutMs",
           "paragraphDiagnostics",
           "sectionDiagnostics",
+          "lineDiagnostics",
           "trim",
           "word",
           "libreoffice",

@@ -456,6 +456,7 @@ async function optionsFrom(
   options: MeasureOptions;
   dependencies: string[];
   batch: SerializableConfig["batch"];
+  linePageFilter?: number[];
 }> {
   let config: SerializableConfig = {};
   let base = cwd;
@@ -475,6 +476,9 @@ async function optionsFrom(
   }
   if (config.sectionDiagnostics !== undefined) {
     options.sectionDiagnostics = config.sectionDiagnostics;
+  }
+  if ((config as Record<string, unknown>).lineDiagnostics === true) {
+    options.lineDiagnostics = true;
   }
   if (config.trim !== undefined) options.trim = config.trim;
   if (config.renderer) options.renderer = config.renderer;
@@ -606,6 +610,25 @@ async function optionsFrom(
   }
   if (values.paragraphs === true) options.paragraphDiagnostics = true;
   if (values.sections === true) options.sectionDiagnostics = true;
+  if (values.lines === true) options.lineDiagnostics = true;
+  let linePageFilter: number[] | undefined;
+  if (values["lines-page"] !== undefined) {
+    if (values.lines !== true) {
+      throw new AgentDocxError("INVALID_ARGUMENT", "--lines-page requires --lines");
+    }
+    const raw = values["lines-page"] as readonly string[];
+    const tokens: string[] = [];
+    for (const entry of raw) {
+      for (const part of String(entry).split(",")) {
+        const trimmed = part.trim();
+        if (trimmed.length) tokens.push(trimmed);
+      }
+    }
+    if (tokens.length === 0) {
+      throw new AgentDocxError("INVALID_ARGUMENT", "--lines-page requires a page number");
+    }
+    linePageFilter = tokens.map((t) => asciiInteger(t, "--lines-page", 1));
+  }
   if (values.trim === true) options.trim = {};
   if (typeof values["trim-limit"] === "string") {
     options.trim = {
@@ -710,7 +733,12 @@ async function optionsFrom(
     };
   }
   if (Object.keys(layout).length) options.layout = layout;
-  return { options, dependencies, batch: config.batch };
+  return {
+    options,
+    dependencies,
+    batch: config.batch,
+    ...(linePageFilter ? { linePageFilter } : {}),
+  };
 }
 
 type ProfileCatalogEntry = {
@@ -763,7 +791,7 @@ function humanProfiles(catalog: ProfileCatalog) {
 
 function human(
   measurement: MeasurementResult,
-  display: { paragraphs: boolean; trim: boolean },
+  display: { paragraphs: boolean; trim: boolean; lines: boolean; linesPageFilter?: number[] },
 ) {
   const deterministic = measurement.deterministic;
   const rows = [
@@ -829,6 +857,28 @@ function human(
       for (const opportunity of opportunities) {
         rows.push(
           `${opportunity.rank}. Lines ${opportunity.position.start.line}-${opportunity.position.end.line}: ${JSON.stringify(opportunity.lastLineText)}; ${Math.round(opportunity.lastLineRatio * 100)}%; ${opportunity.oneLineReduction!.estimatedRemovalTwips} twips; ${opportunity.message}`,
+        );
+      }
+    }
+  }
+  if (display.lines) {
+    const allLines = measurement.deterministic.lines ?? [];
+    const lines = display.linesPageFilter
+      ? allLines.filter((l) => display.linesPageFilter!.includes(l.page))
+      : allLines;
+    if (lines.length === 0) {
+      rows.push(
+        `Lines: none${display.linesPageFilter ? ` (page ${display.linesPageFilter.join(",")})` : ""}`,
+      );
+    } else {
+      rows.push(
+        `Lines: ${lines.length} body lines${display.linesPageFilter ? ` (page ${display.linesPageFilter.join(",")})` : ""}`,
+      );
+      for (const l of lines) {
+        const pct = Math.round(l.ratio * 100);
+        const filled = Math.max(0, Math.min(10, Math.round(l.ratio * 10)));
+        rows.push(
+          `P${l.page} L${l.globalIndex + 1} [${l.indexInBlock + 1}/${l.visualLinesInBlock}] ${pct}% ${"█".repeat(filled)}${"░".repeat(10 - filled)} ${l.unusedTwips}twips slack ${l.isLastLineOfBlock ? "(last)" : ""} ${l.text.slice(0, 60).replace(/\s+/g, " ")}`,
         );
       }
     }
@@ -1203,7 +1253,18 @@ async function executeCli(
               : "markdown" in record
                 ? record.markdown
                 : "";
-          const measurement = await measureMarkdown(markdown, base.options);
+          const rawMeasurementJsonl = await measureMarkdown(markdown, base.options);
+          const measurement = base.linePageFilter && rawMeasurementJsonl.deterministic.lines
+            ? {
+                ...rawMeasurementJsonl,
+                deterministic: {
+                  ...rawMeasurementJsonl.deterministic,
+                  lines: rawMeasurementJsonl.deterministic.lines.filter((l) =>
+                    base.linePageFilter!.includes(l.page),
+                  ),
+                },
+              }
+            : rawMeasurementJsonl;
           await runtime.writeStdout(
             `${JSON.stringify(
               resultRecord(
@@ -1243,12 +1304,23 @@ async function executeCli(
       for (const source of batchSources) {
         const resolvedPath = source.resolvedPath;
         try {
-          const measurement = await measureMarkdown(
+          const rawMeasurementBatch = await measureMarkdown(
             await strictUtf8(
               await readInputFile(resolvedPath, "Markdown input"),
             ),
             base.options,
           );
+          const measurement = base.linePageFilter && rawMeasurementBatch.deterministic.lines
+            ? {
+                ...rawMeasurementBatch,
+                deterministic: {
+                  ...rawMeasurementBatch.deterministic,
+                  lines: rawMeasurementBatch.deterministic.lines.filter((l) =>
+                    base.linePageFilter!.includes(l.page),
+                  ),
+                },
+              }
+            : rawMeasurementBatch;
           await runtime.writeStdout(
             `${JSON.stringify(
               resultRecord(state, "batch", source, measurement, runtime.cwd),
@@ -1319,6 +1391,18 @@ async function executeCli(
       },
       emitResult: async (measurement, trigger) => {
         const cliTrigger = toCliTrigger(trigger);
+        const filteredMeasurement =
+          loaded.linePageFilter && measurement.deterministic.lines
+            ? {
+                ...measurement,
+                deterministic: {
+                  ...measurement.deterministic,
+                  lines: measurement.deterministic.lines.filter((l) =>
+                    loaded.linePageFilter!.includes(l.page),
+                  ),
+                },
+              }
+            : measurement;
         await runtime.writeStdout(
           values.jsonl
             ? `${JSON.stringify(
@@ -1332,9 +1416,11 @@ async function executeCli(
                   cliTrigger,
                 ),
               )}\n`
-            : `\n[${cliTrigger.kind}]\n${human(measurement, {
+            : `\n[${cliTrigger.kind}]\n${human(filteredMeasurement, {
                 paragraphs: values.paragraphs === true,
                 trim: loaded.options.trim !== undefined,
+                lines: values.lines === true,
+                ...(loaded.linePageFilter ? { linesPageFilter: loaded.linePageFilter } : {}),
               })}`,
         );
       },
@@ -1388,7 +1474,18 @@ async function executeCli(
     }
     markdown = await strictUtf8(await runtime.readStdin());
   }
-  const measurement = await measureMarkdown(markdown, loaded.options);
+  const rawMeasurementSingle = await measureMarkdown(markdown, loaded.options);
+  const measurement = loaded.linePageFilter && rawMeasurementSingle.deterministic.lines
+    ? {
+        ...rawMeasurementSingle,
+        deterministic: {
+          ...rawMeasurementSingle.deterministic,
+          lines: rawMeasurementSingle.deterministic.lines.filter((l) =>
+            loaded.linePageFilter!.includes(l.page),
+          ),
+        },
+      }
+    : rawMeasurementSingle;
   if (outputPath) {
     await writeOutputExclusive(
       resolve(runtime.cwd, outputPath),
@@ -1405,6 +1502,8 @@ async function executeCli(
       human(measurement, {
         paragraphs: command.values.paragraphs === true,
         trim: loaded.options.trim !== undefined,
+        lines: command.values.lines === true,
+        ...(loaded.linePageFilter ? { linesPageFilter: loaded.linePageFilter } : {}),
       }),
     );
     for (const warning of measurement.deterministic.warnings) {

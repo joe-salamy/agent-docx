@@ -122,6 +122,7 @@ export type SerializableConfig = {
   pageLimit?: number;
   paragraphDiagnostics?: boolean;
   sectionDiagnostics?: boolean;
+  lineDiagnostics?: boolean;
   trim?: EstimateOptions["trim"];
   renderer?: RendererMode;
   officeTimeoutMs?: number;

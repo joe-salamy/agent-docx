@@ -25,7 +25,7 @@ import {
 } from "./wrap.js";
 import type { Diagnostic, SourcePosition } from "../types.js";
 import type { LayoutProfile, TextStyle } from "./profile.js";
-import type { ParagraphDiagnostic, SectionDiagnostic } from "../measurement.js";
+import type { LineDiagnostic, ParagraphDiagnostic, SectionDiagnostic } from "../measurement.js";
 
 export type PaginationOutput = {
   pageCount: number;
@@ -41,6 +41,7 @@ export type PaginationOutput = {
     bodyLineCapacity: number;
   } | null;
   paragraphs: ParagraphDiagnostic[];
+  lines: LineDiagnostic[];
   warnings: Diagnostic[];
   sections?: SectionDiagnostic[];
 };
@@ -456,6 +457,7 @@ export function paginate(
       countedLinesByPage: [],
       lastPage: null,
       paragraphs: [],
+      lines: [],
       warnings: [],
       ...(sectionIndex
         ? {
@@ -1037,6 +1039,7 @@ export function paginate(
       bodyLineCapacity: Math.floor(usableHeight / bodyPitch),
     },
     paragraphs: diagnostics.paragraphResults,
+    lines: diagnostics.lines,
     warnings: diagnostics.warnings,
     ...(diagnostics.sectionResults
       ? { sections: diagnostics.sectionResults }

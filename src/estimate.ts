@@ -122,6 +122,7 @@ export async function estimateNormalizedDocument(
     warnings,
   };
   if (layout.sections) result.sections = layout.sections;
+  if (options.lineDiagnostics) result.lines = layout.lines;
   if (options.paragraphDiagnostics || options.trim)
     result.paragraphs = layout.paragraphs;
   if (options.trim) {
