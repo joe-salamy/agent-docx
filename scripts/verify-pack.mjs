@@ -102,12 +102,13 @@ function run(command, args, cwd) {
 const packDir = await mkdtemp(join(tmpdir(), "agent-docx-pack-"));
 const installDir = await mkdtemp(join(tmpdir(), "agent-docx-install-"));
 try {
+  const isPnpm = (npmExecPath ?? npmExecutable).includes("pnpm");
   const packed = await run(
     npmExecutable,
     [
       ...npmArguments,
       "pack",
-      "--ignore-scripts",
+      ...(isPnpm ? [] : ["--ignore-scripts"]),
       "--json",
       "--pack-destination",
       packDir,

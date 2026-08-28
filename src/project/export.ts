@@ -483,7 +483,9 @@ const assertExportDestination = async (
   config: AgentDocxDocumentConfig,
   output: string,
 ): Promise<{ output: string; attachment: string }> => {
-  const absoluteOutput = resolve(output);
+  const absoluteOutput = isAbsolute(output)
+    ? resolve(output)
+    : resolve(opened.projectDirectory, output);
   const relativeOutput = relative(opened.projectDirectory, absoluteOutput);
   if (
     relativeOutput === ".." ||
