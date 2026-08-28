@@ -187,11 +187,28 @@ export const assertNoSymlinkComponents = async (
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
     }
-    if (entry.isSymbolicLink())
+    if (entry.isSymbolicLink()) {
+      // On macOS /var -> private/var and /tmp -> private/tmp are system symlinks;
+      // allow those, but reject user-created symlinks.
+      if (
+        process.platform === "darwin" &&
+        (current === "/var" || current === "/tmp")
+      ) {
+        try {
+          const real = await realpath(current);
+          if (
+            (current === "/var" && real === "/private/var") ||
+            (current === "/tmp" && real === "/private/tmp")
+          ) {
+            continue;
+          }
+        } catch {}
+      }
       throw new AgentDocxError(
         "PATH_OUTSIDE_PROJECT",
         `${name} contains a symbolic-link component`,
       );
+    }
   }
 };
 

@@ -1,0 +1,13 @@
+# Enforce LF for all text files to make prettier --check pass on Windows
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.pdf binary
+*.docx binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.node binary
