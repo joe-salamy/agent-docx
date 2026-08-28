@@ -173,11 +173,16 @@ try {
     JSON.stringify({ name: "pack-smoke", private: true, type: "module" }),
   );
   const tgz = resolve(packDir, info.filename);
-  await run(
-    npmExecutable,
-    [...npmArguments, "install", "--ignore-scripts", tgz],
-    installDir,
-  );
+  if (isPnpm) {
+    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+    await run(npmCmd, ["install", "--ignore-scripts", tgz], installDir);
+  } else {
+    await run(
+      npmExecutable,
+      [...npmArguments, "install", "--ignore-scripts", tgz],
+      installDir,
+    );
+  }
   const expected = JSON.stringify(expectedMetricFonts);
   await run(
     process.execPath,
