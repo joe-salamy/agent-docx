@@ -102,20 +102,26 @@ function run(command, args, cwd) {
 const packDir = await mkdtemp(join(tmpdir(), "agent-docx-pack-"));
 const installDir = await mkdtemp(join(tmpdir(), "agent-docx-install-"));
 try {
-  const isPnpm = (npmExecPath ?? npmExecutable).includes("pnpm");
-  const packed = await run(
-    npmExecutable,
-    [
-      ...npmArguments,
-      "pack",
-      ...(isPnpm ? [] : ["--ignore-scripts"]),
-      "--json",
-      "--pack-destination",
-      packDir,
-    ],
-    process.cwd(),
-  );
-  const info = JSON.parse(packed.stdout)[0];
+  const isPnpm = (npmExecPath ?? "").includes("pnpm");
+  let packed;
+  if (isPnpm) {
+    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+    packed = await run(
+      npmCmd,
+      ["pack", "--ignore-scripts", "--json", "--pack-destination", packDir],
+      process.cwd(),
+    );
+  } else {
+    packed = await run(
+      npmExecutable,
+      [...npmArguments, "pack", "--ignore-scripts", "--json", "--pack-destination", packDir],
+      process.cwd(),
+    );
+  }
+  const raw = packed.stdout.trim();
+  const jsonStart = raw.indexOf("[");
+  const jsonText = jsonStart >= 0 ? raw.slice(jsonStart) : raw;
+  const info = JSON.parse(jsonText)[0];
   if (!info?.filename || !Array.isArray(info.files)) {
     throw new Error("npm pack returned an invalid manifest");
   }
