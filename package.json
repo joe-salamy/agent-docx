@@ -73,7 +73,8 @@
   ],
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "pnpm run clean && tsc -p tsconfig.json",
+    "build": "pnpm run clean && tsc -p tsconfig.json && node scripts/build.mjs",
+    "build:tsc": "pnpm run clean && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -108,7 +109,14 @@
     "@types/node": "^24.0.0",
     "@types/proper-lockfile": "^4.1.4",
     "@types/yauzl": "3.4.0",
+    "esbuild": "^0.25.0",
     "prettier": "3.6.2",
     "typescript": "7.0.2"
-  }
+  },
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "test"
+  },
+  "author": ""
 }

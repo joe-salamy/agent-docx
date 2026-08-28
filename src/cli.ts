@@ -1,12 +1,17 @@
 #!/usr/bin/env node
-import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 import { MAX_INPUT_BYTES } from "./input.js";
 import { AgentDocxError } from "./types.js";
 import { runCli, type CliRuntime } from "./cli-run.js";
 
-const { version } = createRequire(import.meta.url)("../package.json") as {
-  version: string;
-};
+const version: string = (() => {
+  try {
+    const text = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    return (JSON.parse(text) as { version: string }).version;
+  } catch {
+    return "0.1.0";
+  }
+})();
 
 async function* readStdinChunks(): AsyncGenerator<Uint8Array> {
   let total = 0;

@@ -11,17 +11,11 @@ import {
 import type { Stats } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Ajv2020 } from "ajv/dist/2020.js";
 import { cliHelp, parseCliArgs, type CliOptionValues } from "./cli-args.js";
 import { toErrorPayload } from "./errors.js";
 import { MAX_FONT_BYTES, readInputFile } from "./input.js";
-import { inspectDocxTemplate } from "./docx/inspect.js";
-import { measureMarkdown } from "./renderers/index.js";
-import { runWorkflowCommand } from "./cli-workflow.js";
 import { builtInProfiles } from "./profiles.js";
 import { jsonlLines, strictUtf8 } from "./jsonl.js";
-import { runMcpServer } from "./mcp.js";
-import { installSkills, listSkills } from "./skills.js";
 import { AgentDocxError } from "./types.js";
 import type {
   EstimateOptions,
@@ -48,7 +42,7 @@ import {
   type SerializableConfig,
   type Source,
 } from "./cli-contract.js";
-import { runWatchController } from "./watch.js";
+// runWatchController is dynamically imported per-command (see watch handling).
 
 export type {
   BatchSelection,
@@ -429,6 +423,8 @@ async function loadConfig(pathToken: string): Promise<{
     new URL("../schemas/config.schema.json", import.meta.url),
   );
   const schema = JSON.parse(await readFile(schemaPath, "utf8")) as object;
+  // Lazy Ajv: only needed when --config is supplied; avoids 5s 9p load for --help/profiles
+  const { Ajv2020 } = await import("ajv/dist/2020.js");
   const ajv = new Ajv2020({ allErrors: true, strict: true });
   const validate = ajv.compile(schema);
   if (!validate(value)) {
@@ -516,6 +512,8 @@ async function optionsFrom(
         ? resolve(base, config.templatePath)
         : undefined;
   if (templateToken) {
+    // Lazy docx inspect: yauzl/saxes heavy; only for --template
+    const { inspectDocxTemplate } = await import("./docx/inspect.js");
     options.template = await inspectDocxTemplate(
       await readInputFile(templateToken, "DOCX template"),
       {
@@ -1039,6 +1037,8 @@ async function executeCli(
     return 0;
   }
   if (command.mode === "inspect") {
+    // Lazy docx inspect: avoids yauzl/saxes load for --help
+    const { inspectDocxTemplate } = await import("./docx/inspect.js");
     const result = await inspectDocxTemplate(
       await readInputFile(resolve(runtime.cwd, command.path), "DOCX template"),
     );
@@ -1050,9 +1050,15 @@ async function executeCli(
     return 0;
   }
 
-  if (command.mode === "mcp") return runMcpServer(runtime);
+  if (command.mode === "mcp") {
+    // Lazy MCP: only for mcp server mode
+    const { runMcpServer } = await import("./mcp.js");
+    return runMcpServer(runtime);
+  }
 
   if (command.mode === "skills") {
+    // Lazy skills: avoid fs/cp overhead for --help
+    const { listSkills, installSkills } = await import("./skills.js");
     if (command.subcommand === "list") {
       const skills = await listSkills();
       if (command.values.json === true) {
@@ -1116,9 +1122,15 @@ async function executeCli(
     return 0;
   }
 
-  if (command.mode === "workflow") return runWorkflowCommand(command, runtime, state);
+  if (command.mode === "workflow") {
+    // Lazy workflow: project/store/proper-lockfile heavy
+    const { runWorkflowCommand } = await import("./cli-workflow.js");
+    return runWorkflowCommand(command, runtime, state);
+  }
 
   if (command.mode === "batch-files" || command.mode === "batch-jsonl") {
+    // Lazy renderers: unified/remark/fontkit heavy, only for measure modes
+    const { measureMarkdown } = await import("./renderers/index.js");
     const values = command.values;
     const base = await optionsFrom(values, runtime.cwd);
     const batchSources =
@@ -1347,6 +1359,9 @@ async function executeCli(
   }
 
   if (command.mode === "watch") {
+    // Lazy watch/renderers: chokidar + fontkit heavy
+    const { measureMarkdown } = await import("./renderers/index.js");
+    const { runWatchController } = await import("./watch.js");
     const values = command.values;
     const token = command.path;
     const path = resolve(runtime.cwd, token);
@@ -1452,6 +1467,8 @@ async function executeCli(
   }
 
   const loaded = await optionsFrom(command.values, runtime.cwd);
+  // Lazy renderers: only for single-file measure
+  const { measureMarkdown } = await import("./renderers/index.js");
   const outputPath =
     typeof command.values.output === "string"
       ? command.values.output
