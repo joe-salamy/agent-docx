@@ -284,6 +284,15 @@ agent-docx measure filing.md --profile cand-civil --paragraphs --sections --trim
 
 Per-line trimming is the highest-value diagnostic for page-limit work: `agent-docx measure filing.md --lines --json` emits `deterministic.lines[]` with `page`, `ratio`, `unusedTwips`, `isLastLineOfBlock`. Filter client-side with `jq '[.deterministic.lines[] | select(.page==2)]'` or server-side via `--lines-page 2` (requires `--lines`); the human view shows a bar per line when not `--json`. `--paragraphs` / `--trim` are short-hand subsets of `--lines` (last-line only / ranked opportunities).
 
+**Amortize iterative preflight — do not spawn per variant.** `measureMarkdown` caches Liberation Serif parsing (first ~90ms, ~30ms each after) inside one Node process. In an agent harness, import once and measure many variants without re-spawning:
+
+```js
+import { measureMarkdown } from "agent-docx";
+const opts = { profile: "us-district-conventional", lines: true };
+for (const md of variants) console.log(await measureMarkdown(md, opts)); // 15× ~600ms total
+```
+
+If you must use the CLI, batch in one spawn `printf '%s\n' '{"markdown":"# Hello"}' | agent-docx measure --batch --input-jsonl` or stream `agent-docx measure --watch filing.md --lines --jsonl`. See `skills/agent-docx/SKILL.md` (Performance section) for ext4 vs 9p benchmarks: `5× spawn 3.1s` vs `batch 0.69s`, library `15× 475ms`.
 Portable estimates use pinned Liberation Serif 2.1.5 bytes as metrics while reporting the requested `Times New Roman` family and explicit substitution. Provide legally obtained custom font files through project configuration when a different deterministic metric source is required.
 
 Deterministic pagination runs entirely in process:

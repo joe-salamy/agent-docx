@@ -134,9 +134,54 @@ agent-docx measure filing.md --profile us-district-conventional --renderer compa
 printf '%s\n' '{"path":"filing.md"}' | agent-docx measure --batch --input-jsonl
 agent-docx measure --batch "briefs/*.md" --include "*.md" --exclude "draft/*"
 echo "# Hello" | agent-docx measure - --profile us-district-conventional --json
+## Performance — amortize iterative preflight (no spawn per measure)
+
+Single `measureMarkdown` is deterministic and cheap (~30ms after first ~90ms font load, fonts cached per process). Never loop `npx agent-docx measure` or `node dist/cli.js measure` per variant — that pays ~0.7s/spawn on ext4 and 30s on WSL 9p (`/mnt/c`). One spawn per session, then reuse the process.
+
+**Agent harness (omp): prefer library import via `eval` — zero extra process, font cache retained in the JS kernel:**
+
+```js
+import { measureMarkdown } from "agent-docx"; // one import per eval kernel
+
+const opts = { profile: "us-district-conventional", lines: true };
+// single process, 15 variants <600ms total (first 90ms, ~30ms each after cache)
+for (const md of variants) {
+  const r = await measureMarkdown(md, opts);
+  // use r.pageCount, r.deterministic.lines, r.deterministic.paragraphs
+}
+// per-line trim: pick slackest last lines
+const r = await measureMarkdown(draft, { profile: "cand-civil", lines: true });
+const slackest = r.deterministic.lines
+  .filter(l => l.isLastLineOfBlock)
+  .sort((a,b) => a.ratio - b.ratio)
+  .slice(0, 10);
 ```
 
-Stateless JSONL batch and watch streaming are also available: `agent-docx agent --input-jsonl` (one closed JSON request/response per line) and `agent-docx agent --watch --project FILE --document ID --jsonl`.
+If the harness must use `bash`, batch in one CLI process — not N spawns:
+
+```sh
+# One spawn for N markdowns (stdin JSONL — no temp files)
+printf '%s\n' \
+  '{"id":1,"markdown":"# Hello variant 1\n\nLorem..."}' \
+  '{"id":2,"markdown":"# Hello variant 2\n\nLorem..."}' \
+  | node ./node_modules/agent-docx/dist/cli.js measure --batch --input-jsonl
+# glob batch (discovery)
+node ./node_modules/agent-docx/dist/cli.js measure --batch "briefs/*.md" --include "*.md" --exclude "draft/*"
+```
+
+Single-file iterative drafting — `watch` streams without re-spawning:
+
+```sh
+# emits ready + debounced measure on every save (75ms debounce)
+node ./node_modules/agent-docx/dist/cli.js measure --watch filing.md --lines --jsonl
+# project-aware watch via agent transport
+node ./node_modules/agent-docx/dist/cli.js agent --watch --project agent-docx.json --document motion --jsonl
+```
+
+Benchmark (~/code/agent-docx, ext4, Node 24, Liberation Serif cached):
+`first 89ms, 15× amortized library 606ms (~40ms each), second loop 475ms (~32ms each)` vs `5× spawn 3.1s (~620ms each)` → one process amortizes 6–10× on ext4, ~300× on 9p. Keep the process alive with `hub start` or the persistent `eval` kernel; do not `npx` per iteration.
+
+<!-- batch/watch details moved to Performance section above; agent transport covers project workflow -->
 
 ## Profiles, rule packs, and validation
 

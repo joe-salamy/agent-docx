@@ -36,6 +36,11 @@ const bundledFontDirectory = new URL(
   import.meta.url,
 );
 let bundledPromise: Promise<FontSetInput> | undefined;
+// Amortized cache: parsed bundled faces reused across measures — avoids 4× fontkit.create per call
+let bundledFaces: Record<(typeof roles)[number], LoadedFace> | null = null;
+let bundledFamily: string | null = null;
+let bundledFacesPromise: Promise<{ faces: Record<(typeof roles)[number], LoadedFace>; family: string }> | null = null;
+const bundledLoadedCache = new Map<string, LoadedFonts>(); // requestedFamily.lower → LoadedFonts
 async function readBundledFont(filename: string): Promise<Uint8Array> {
   try {
     const bytes = await readFile(new URL(filename, bundledFontDirectory));
@@ -281,19 +286,57 @@ const parseFont = (bytes: Uint8Array, role: string): Font => {
     );
   return created;
 };
+async function getBundledFaces(): Promise<{
+  faces: Record<(typeof roles)[number], LoadedFace>;
+  family: string;
+}> {
+  if (bundledFaces && bundledFamily) return { faces: bundledFaces, family: bundledFamily };
+  if (bundledFacesPromise) return bundledFacesPromise;
+  bundledFacesPromise = (async () => {
+    const source = await bundled();
+    const tmpFaces = {} as Record<(typeof roles)[number], LoadedFace>;
+    let family = source.family;
+    for (const role of roles) {
+      const bytes = source[role] ?? source.regular;
+      const font = parseFont(bytes, role);
+      const resolvedFamily = font.familyName ?? family;
+      if (role === "regular") family = resolvedFamily;
+      tmpFaces[role] = { bytes, hash: sha(bytes), font };
+    }
+    bundledFaces = tmpFaces;
+    bundledFamily = family;
+    return { faces: tmpFaces, family };
+  })();
+  return bundledFacesPromise;
+}
 
 export async function loadFonts(
   input: FontSetInput | undefined,
   requested: string,
 ): Promise<LoadedFonts> {
-  const source = input ?? (await bundled());
+  if (!input) {
+    const key = requested.toLowerCase();
+    const cached = bundledLoadedCache.get(key);
+    if (cached) return cached;
+    const { faces, family } = await getBundledFaces();
+    const metrics = roles.map((role) => ({
+      role,
+      requestedFamily: requested,
+      metricsFamily: "Liberation Serif",
+      sha256: faces[role].hash,
+      substitutedMetrics: requested.toLowerCase() !== "liberation serif",
+    }));
+    const result: LoadedFonts = { ...faces, family, metrics, warnings: [] };
+    bundledLoadedCache.set(key, result);
+    return result;
+  }
+  const source = input;
   const warnings: Diagnostic[] = [];
   const regularFont = parseFont(source.regular, "regular");
   const embedded = regularFont.familyName ?? source.family;
   if (
-    input &&
     embedded.toLocaleLowerCase("en-US") !==
-      source.family.toLocaleLowerCase("en-US")
+    source.family.toLocaleLowerCase("en-US")
   )
     throw new AgentDocxError(
       "INVALID_FONT",
@@ -313,7 +356,6 @@ export async function loadFonts(
     const font = role === "regular" ? regularFont : parseFont(bytes, role);
     const family = font.familyName ?? embedded;
     if (
-      input &&
       family.toLocaleLowerCase("en-US") !== embedded.toLocaleLowerCase("en-US")
     )
       throw new AgentDocxError(
@@ -325,10 +367,9 @@ export async function loadFonts(
   const metrics = roles.map((role) => ({
     role,
     requestedFamily: requested,
-    metricsFamily: input ? source.family : "Liberation Serif",
+    metricsFamily: source.family,
     sha256: faces[role].hash,
-    substitutedMetrics:
-      !input && requested.toLocaleLowerCase("en-US") !== "liberation serif",
+    substitutedMetrics: false,
   }));
   return { ...faces, family: source.family, metrics, warnings };
 }
