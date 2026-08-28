@@ -33,8 +33,13 @@ await esbuild.build({
 
 // Verify bundled CLI still has correct permissions and shebang handling
 // esbuild banner adds shebang already, but ensure file starts correctly
-const bundled = await readFile(fileURLToPath(new URL("../dist/cli.js", import.meta.url)), "utf8");
+const bundled = await readFile(
+  fileURLToPath(new URL("../dist/cli.js", import.meta.url)),
+  "utf8",
+);
 if (!bundled.startsWith("#!/usr/bin/env node")) {
   throw new Error("Bundled CLI missing shebang");
 }
-console.log(`Bundled CLI: ${outfile} (${(bundled.length / 1024).toFixed(1)} KB)`);
+console.log(
+  `Bundled CLI: ${outfile} (${(bundled.length / 1024).toFixed(1)} KB)`,
+);

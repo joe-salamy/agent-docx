@@ -25,7 +25,11 @@ import {
 } from "./wrap.js";
 import type { Diagnostic, SourcePosition } from "../types.js";
 import type { LayoutProfile, TextStyle } from "./profile.js";
-import type { LineDiagnostic, ParagraphDiagnostic, SectionDiagnostic } from "../measurement.js";
+import type {
+  LineDiagnostic,
+  ParagraphDiagnostic,
+  SectionDiagnostic,
+} from "../measurement.js";
 
 export type PaginationOutput = {
   pageCount: number;

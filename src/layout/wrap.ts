@@ -8,7 +8,11 @@ import type {
 import type { LoadedFonts } from "../resolve.js";
 import type { Diagnostic, SourcePosition } from "../types.js";
 import type { LayoutProfile, TextStyle } from "./profile.js";
-import type { LineDiagnostic, ParagraphDiagnostic, SectionDiagnostic } from "../measurement.js";
+import type {
+  LineDiagnostic,
+  ParagraphDiagnostic,
+  SectionDiagnostic,
+} from "../measurement.js";
 
 export type WrappedLine = {
   used: number;
@@ -567,7 +571,9 @@ export function buildDiagnostics(
       const availableTwips = line.available;
       const unusedTwips = availableTwips - usedTwips;
       const ratio = availableTwips === 0 ? 0 : usedTwips / availableTwips;
-      const position = (block as TextFlowBlock).position ?? (block as FlowBlock & { position: SourcePosition }).position;
+      const position =
+        (block as TextFlowBlock).position ??
+        (block as FlowBlock & { position: SourcePosition }).position;
       lines.push({
         source: "deterministic",
         globalIndex: globalIndex++,

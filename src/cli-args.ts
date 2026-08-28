@@ -34,7 +34,10 @@ export const parseCliArgsStrict = (
     const seen = new Set<string>();
     for (const token of parsed.tokens ?? []) {
       if (token.kind !== "option" || !token.name) continue;
-      if (seen.has(token.name) && !["include", "exclude", "lines-page"].includes(token.name))
+      if (
+        seen.has(token.name) &&
+        !["include", "exclude", "lines-page"].includes(token.name)
+      )
         throw new AgentDocxError(
           "INVALID_ARGUMENT",
           `Duplicate option: --${token.name}`,
@@ -62,7 +65,12 @@ export type CliCommand =
   | { mode: "mcp" }
   | { mode: "profiles"; json: boolean }
   | { mode: "inspect"; path: string; json: boolean }
-  | { mode: "skills"; subcommand: "list" | "install"; values: CliOptionValues; positionals: readonly string[] }
+  | {
+      mode: "skills";
+      subcommand: "list" | "install";
+      values: CliOptionValues;
+      positionals: readonly string[];
+    }
   | { mode: "batch-files"; paths: readonly string[]; values: CliOptionValues }
   | { mode: "batch-jsonl"; values: CliOptionValues }
   | { mode: "watch"; path: string; values: CliOptionValues }
@@ -193,9 +201,17 @@ Measure:
   Renderers: --renderer deterministic|word|libreoffice|compare ...
   Machine output is JSON/JSONL on stdout; fatal records are JSON on stderr.
 `;
-function asciiIntegerCli(value: string, name: string, min = 1, max = Number.MAX_SAFE_INTEGER) {
+function asciiIntegerCli(
+  value: string,
+  name: string,
+  min = 1,
+  max = Number.MAX_SAFE_INTEGER,
+) {
   if (!/^(?:0|[1-9][0-9]*)$/.test(value)) {
-    throw new AgentDocxError("INVALID_ARGUMENT", `${name} requires ASCII digits`);
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      `${name} requires ASCII digits`,
+    );
   }
   const number = Number(value);
   if (!Number.isSafeInteger(number) || number < min || number > max) {
@@ -327,7 +343,10 @@ function parseMeasureArgs(args: readonly string[]): CliCommand {
     );
   }
   if (values["lines-page"] !== undefined && values.lines !== true) {
-    throw new AgentDocxError("INVALID_ARGUMENT", "--lines-page requires --lines");
+    throw new AgentDocxError(
+      "INVALID_ARGUMENT",
+      "--lines-page requires --lines",
+    );
   }
   if (values["lines-page"] !== undefined) {
     const raw = values["lines-page"] as readonly string[];
@@ -339,7 +358,10 @@ function parseMeasureArgs(args: readonly string[]): CliCommand {
       }
     }
     if (tokens.length === 0) {
-      throw new AgentDocxError("INVALID_ARGUMENT", "--lines-page requires a page number");
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        "--lines-page requires a page number",
+      );
     }
     for (const token of tokens) {
       asciiIntegerCli(token, "--lines-page", 1);
@@ -504,7 +526,10 @@ export function parseCliArgs(args: readonly string[]): CliCommand {
         throw new AgentDocxError("INVALID_ARGUMENT", "--dest requires a path");
       }
       if (values.dest === "") {
-        throw new AgentDocxError("INVALID_ARGUMENT", "--dest must not be empty");
+        throw new AgentDocxError(
+          "INVALID_ARGUMENT",
+          "--dest must not be empty",
+        );
       }
       if (values.global && values.dest !== undefined) {
         throw new AgentDocxError(

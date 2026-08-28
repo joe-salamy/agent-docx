@@ -40,9 +40,11 @@ async function resolveSourceDir(): Promise<string> {
   );
 }
 
-function parseFrontmatter(
-  text: string,
-): { name?: string; description?: string; version?: string } {
+function parseFrontmatter(text: string): {
+  name?: string;
+  description?: string;
+  version?: string;
+} {
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return {};
   const yaml = match[1] ?? "";

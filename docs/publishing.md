@@ -44,14 +44,14 @@ You have a granular token in `~/.npmrc`:
 
 Token expired or 404/403 on `publish`:
 
-* **With current token:** generate new one at https://www.npmjs.com/settings/tokens → `Granular Access Token` → package `agent-docx` → `Read and write` → enable `Bypass 2FA` if shown → `npm config set //registry.npmjs.org/:_authToken=npm_yyyy`
-* **Without token (TOTP):** add an authenticator app at https://www.npmjs.com/settings/2fa (needs `Disable 2FA` → `Enable 2FA` → pick `Authenticator App` → scan QR → keep security key as well), then `npm publish --access public --otp=123456`
-* **Security-key only:** `npm publish` won’t prompt in WSL — use the granular token path above.
+- **With current token:** generate new one at https://www.npmjs.com/settings/tokens → `Granular Access Token` → package `agent-docx` → `Read and write` → enable `Bypass 2FA` if shown → `npm config set //registry.npmjs.org/:_authToken=npm_yyyy`
+- **Without token (TOTP):** add an authenticator app at https://www.npmjs.com/settings/2fa (needs `Disable 2FA` → `Enable 2FA` → pick `Authenticator App` → scan QR → keep security key as well), then `npm publish --access public --otp=123456`
+- **Security-key only:** `npm publish` won’t prompt in WSL — use the granular token path above.
 
 Rotate immediately if token was pasted/logged: revoke at https://www.npmjs.com/settings/tokens and create a new one.
 
 ## Notes
 
-* Node 24 lives at `~/.local/node24` — add `export PATH="$HOME/.local/node24/bin:$PATH"` to `~/.bashrc`.
-* `prepack` runs `pnpm run build` — the 40s `node_modules` reinstall on `/mnt/c` is normal.
-* Published `files`: `dist`, `assets`, `schemas`, `skills`, `README.md`, `LICENSE`. `verify-pack` enforces this.
+- Node 24 lives at `~/.local/node24` — add `export PATH="$HOME/.local/node24/bin:$PATH"` to `~/.bashrc`.
+- `prepack` runs `pnpm run build` — the 40s `node_modules` reinstall on `/mnt/c` is normal.
+- Published `files`: `dist`, `assets`, `schemas`, `skills`, `README.md`, `LICENSE`. `verify-pack` enforces this.

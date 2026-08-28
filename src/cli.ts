@@ -6,7 +6,10 @@ import { runCli, type CliRuntime } from "./cli-run.js";
 
 const version: string = (() => {
   try {
-    const text = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    const text = readFileSync(
+      new URL("../package.json", import.meta.url),
+      "utf8",
+    );
     return (JSON.parse(text) as { version: string }).version;
   } catch {
     return "0.1.1";

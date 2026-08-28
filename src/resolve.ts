@@ -39,7 +39,10 @@ let bundledPromise: Promise<FontSetInput> | undefined;
 // Amortized cache: parsed bundled faces reused across measures — avoids 4× fontkit.create per call
 let bundledFaces: Record<(typeof roles)[number], LoadedFace> | null = null;
 let bundledFamily: string | null = null;
-let bundledFacesPromise: Promise<{ faces: Record<(typeof roles)[number], LoadedFace>; family: string }> | null = null;
+let bundledFacesPromise: Promise<{
+  faces: Record<(typeof roles)[number], LoadedFace>;
+  family: string;
+}> | null = null;
 async function readBundledFont(filename: string): Promise<Uint8Array> {
   try {
     const bytes = await readFile(new URL(filename, bundledFontDirectory));
@@ -289,7 +292,8 @@ async function getBundledFaces(): Promise<{
   faces: Record<(typeof roles)[number], LoadedFace>;
   family: string;
 }> {
-  if (bundledFaces && bundledFamily) return { faces: bundledFaces, family: bundledFamily };
+  if (bundledFaces && bundledFamily)
+    return { faces: bundledFaces, family: bundledFamily };
   if (bundledFacesPromise) return bundledFacesPromise;
   bundledFacesPromise = (async () => {
     const source = await bundled();

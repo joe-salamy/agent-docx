@@ -612,7 +612,10 @@ async function optionsFrom(
   let linePageFilter: number[] | undefined;
   if (values["lines-page"] !== undefined) {
     if (values.lines !== true) {
-      throw new AgentDocxError("INVALID_ARGUMENT", "--lines-page requires --lines");
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        "--lines-page requires --lines",
+      );
     }
     const raw = values["lines-page"] as readonly string[];
     const tokens: string[] = [];
@@ -623,7 +626,10 @@ async function optionsFrom(
       }
     }
     if (tokens.length === 0) {
-      throw new AgentDocxError("INVALID_ARGUMENT", "--lines-page requires a page number");
+      throw new AgentDocxError(
+        "INVALID_ARGUMENT",
+        "--lines-page requires a page number",
+      );
     }
     linePageFilter = tokens.map((t) => asciiInteger(t, "--lines-page", 1));
   }
@@ -789,7 +795,12 @@ function humanProfiles(catalog: ProfileCatalog) {
 
 function human(
   measurement: MeasurementResult,
-  display: { paragraphs: boolean; trim: boolean; lines: boolean; linesPageFilter?: number[] },
+  display: {
+    paragraphs: boolean;
+    trim: boolean;
+    lines: boolean;
+    linesPageFilter?: number[];
+  },
 ) {
   const deterministic = measurement.deterministic;
   const rows = [
@@ -1068,18 +1079,27 @@ async function executeCli(
           await runtime.writeStdout("No skills available\n");
         } else {
           for (const s of skills) {
-            await runtime.writeStdout(`${s.name}@${s.version}: ${s.description}\n`);
+            await runtime.writeStdout(
+              `${s.name}@${s.version}: ${s.description}\n`,
+            );
           }
         }
       }
       return 0;
     }
-    const dest = typeof command.values.dest === "string" ? command.values.dest : undefined;
+    const dest =
+      typeof command.values.dest === "string" ? command.values.dest : undefined;
     const global = command.values.global === true;
     const force = command.values.force === true;
     const dryRun = command.values["dry-run"] === true;
     const json = command.values.json === true;
-    const installOpts: { cwd: string; dest?: string; global?: boolean; force?: boolean; dryRun?: boolean } = {
+    const installOpts: {
+      cwd: string;
+      dest?: string;
+      global?: boolean;
+      force?: boolean;
+      dryRun?: boolean;
+    } = {
       cwd: runtime.cwd,
     };
     if (dest !== undefined) installOpts.dest = dest;
@@ -1090,7 +1110,9 @@ async function executeCli(
     const skipped = result.results.filter((r) => r.status === "skipped");
     if (skipped.length > 0 && !json) {
       for (const r of skipped) {
-        await runtime.writeStderr(`Skipped ${r.name}: exists at ${r.destPath} (use --force to overwrite)\n`);
+        await runtime.writeStderr(
+          `Skipped ${r.name}: exists at ${r.destPath} (use --force to overwrite)\n`,
+        );
       }
     }
     if (json) {
@@ -1109,15 +1131,24 @@ async function executeCli(
       for (const r of result.results) {
         if (r.status === "skipped") continue;
         const verb =
-          r.status === "dry-run" ? "would install" : r.status === "overwritten" ? "overwrote" : "installed";
+          r.status === "dry-run"
+            ? "would install"
+            : r.status === "overwritten"
+              ? "overwrote"
+              : "installed";
         await runtime.writeStdout(`${verb} ${r.name} -> ${r.destPath}\n`);
       }
       if (dryRun) {
-        await runtime.writeStdout(`dry-run: no files written (destBase: ${result.destBase})\n`);
+        await runtime.writeStdout(
+          `dry-run: no files written (destBase: ${result.destBase})\n`,
+        );
       }
     }
     if (skipped.length > 0) {
-      throw new AgentDocxError("OUTPUT_EXISTS", `Skills already exist at ${skipped[0]!.destPath} (use --force)`);
+      throw new AgentDocxError(
+        "OUTPUT_EXISTS",
+        `Skills already exist at ${skipped[0]!.destPath} (use --force)`,
+      );
     }
     return 0;
   }
@@ -1265,18 +1296,22 @@ async function executeCli(
               : "markdown" in record
                 ? record.markdown
                 : "";
-          const rawMeasurementJsonl = await measureMarkdown(markdown, base.options);
-          const measurement = base.linePageFilter && rawMeasurementJsonl.deterministic.lines
-            ? {
-                ...rawMeasurementJsonl,
-                deterministic: {
-                  ...rawMeasurementJsonl.deterministic,
-                  lines: rawMeasurementJsonl.deterministic.lines.filter((l) =>
-                    base.linePageFilter!.includes(l.page),
-                  ),
-                },
-              }
-            : rawMeasurementJsonl;
+          const rawMeasurementJsonl = await measureMarkdown(
+            markdown,
+            base.options,
+          );
+          const measurement =
+            base.linePageFilter && rawMeasurementJsonl.deterministic.lines
+              ? {
+                  ...rawMeasurementJsonl,
+                  deterministic: {
+                    ...rawMeasurementJsonl.deterministic,
+                    lines: rawMeasurementJsonl.deterministic.lines.filter((l) =>
+                      base.linePageFilter!.includes(l.page),
+                    ),
+                  },
+                }
+              : rawMeasurementJsonl;
           await runtime.writeStdout(
             `${JSON.stringify(
               resultRecord(
@@ -1322,17 +1357,18 @@ async function executeCli(
             ),
             base.options,
           );
-          const measurement = base.linePageFilter && rawMeasurementBatch.deterministic.lines
-            ? {
-                ...rawMeasurementBatch,
-                deterministic: {
-                  ...rawMeasurementBatch.deterministic,
-                  lines: rawMeasurementBatch.deterministic.lines.filter((l) =>
-                    base.linePageFilter!.includes(l.page),
-                  ),
-                },
-              }
-            : rawMeasurementBatch;
+          const measurement =
+            base.linePageFilter && rawMeasurementBatch.deterministic.lines
+              ? {
+                  ...rawMeasurementBatch,
+                  deterministic: {
+                    ...rawMeasurementBatch.deterministic,
+                    lines: rawMeasurementBatch.deterministic.lines.filter((l) =>
+                      base.linePageFilter!.includes(l.page),
+                    ),
+                  },
+                }
+              : rawMeasurementBatch;
           await runtime.writeStdout(
             `${JSON.stringify(
               resultRecord(state, "batch", source, measurement, runtime.cwd),
@@ -1435,7 +1471,9 @@ async function executeCli(
                 paragraphs: values.paragraphs === true,
                 trim: loaded.options.trim !== undefined,
                 lines: values.lines === true,
-                ...(loaded.linePageFilter ? { linesPageFilter: loaded.linePageFilter } : {}),
+                ...(loaded.linePageFilter
+                  ? { linesPageFilter: loaded.linePageFilter }
+                  : {}),
               })}`,
         );
       },
@@ -1492,17 +1530,18 @@ async function executeCli(
     markdown = await strictUtf8(await runtime.readStdin());
   }
   const rawMeasurementSingle = await measureMarkdown(markdown, loaded.options);
-  const measurement = loaded.linePageFilter && rawMeasurementSingle.deterministic.lines
-    ? {
-        ...rawMeasurementSingle,
-        deterministic: {
-          ...rawMeasurementSingle.deterministic,
-          lines: rawMeasurementSingle.deterministic.lines.filter((l) =>
-            loaded.linePageFilter!.includes(l.page),
-          ),
-        },
-      }
-    : rawMeasurementSingle;
+  const measurement =
+    loaded.linePageFilter && rawMeasurementSingle.deterministic.lines
+      ? {
+          ...rawMeasurementSingle,
+          deterministic: {
+            ...rawMeasurementSingle.deterministic,
+            lines: rawMeasurementSingle.deterministic.lines.filter((l) =>
+              loaded.linePageFilter!.includes(l.page),
+            ),
+          },
+        }
+      : rawMeasurementSingle;
   if (outputPath) {
     await writeOutputExclusive(
       resolve(runtime.cwd, outputPath),
@@ -1520,7 +1559,9 @@ async function executeCli(
         paragraphs: command.values.paragraphs === true,
         trim: loaded.options.trim !== undefined,
         lines: command.values.lines === true,
-        ...(loaded.linePageFilter ? { linesPageFilter: loaded.linePageFilter } : {}),
+        ...(loaded.linePageFilter
+          ? { linesPageFilter: loaded.linePageFilter }
+          : {}),
       }),
     );
     for (const warning of measurement.deterministic.warnings) {

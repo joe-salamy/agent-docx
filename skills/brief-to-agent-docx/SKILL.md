@@ -47,4 +47,3 @@ agent-docx measure motion.md --profile cand-civil --paragraphs --sections --trim
 ```
 
 Redline (two checkpoints, then `export --base <earlier> --mode redline`); PDF (`--mode pdf` requires local LibreOffice). See `agent-docx` skill for failure codes, caps, and `--renderer compare` opt-in.
-

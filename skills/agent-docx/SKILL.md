@@ -110,6 +110,7 @@ agent-docx filing-set validate --project agent-docx.json --id motion-package
 ## Standalone measure (no project)
 
 **Primary way to trim to a page limit — use per-line fill, not word count:**
+
 ```sh
 # Full per-line table: page, ratio (used/available), twips slack, isLastLineOfBlock
 agent-docx measure filing.md --profile cand-civil --lines --json | jq '[.deterministic.lines[] | {page,ratio,unusedTwips,isLastLineOfBlock,text}]'
@@ -124,11 +125,12 @@ agent-docx measure filing.md --lines --json | jq '[.deterministic.lines[] | sele
 # Human bar view
 agent-docx measure filing.md --profile cand-civil --lines
 ```
+
 `--paragraphs` / `--trim` are short-hand subsets of `--lines` (last-line only / ranked opportunities). `--sections` remains separate for section page breakdown.
 
-Agents MUST prefer `deterministic.lines[].ratio` + `unusedTwips` + `estimatedRemovalTwips` (via `paragraphs.oneLineReduction`) over `wordCount/wordsPerPage`. A 25% last line wastes ~0.75*availableTwips; deleting that many twips of text collapses one visual line.
+Agents MUST prefer `deterministic.lines[].ratio` + `unusedTwips` + `estimatedRemovalTwips` (via `paragraphs.oneLineReduction`) over `wordCount/wordsPerPage`. A 25% last line wastes ~0.75\*availableTwips; deleting that many twips of text collapses one visual line.
 
-```sh
+````sh
 agent-docx measure filing.md --profile cand-civil --paragraphs --sections --trim --json
 agent-docx measure filing.md --profile us-district-conventional --renderer compare --json
 printf '%s\n' '{"path":"filing.md"}' | agent-docx measure --batch --input-jsonl
@@ -155,7 +157,7 @@ const slackest = r.deterministic.lines
   .filter(l => l.isLastLineOfBlock)
   .sort((a,b) => a.ratio - b.ratio)
   .slice(0, 10);
-```
+````
 
 If the harness must use `bash`, batch in one CLI process — not N spawns:
 
@@ -223,8 +225,17 @@ All failures are closed JSON on stderr, exit 1 (3 for `fail-over-limit` budget b
 ## Project library (for hosts that embed agent-docx)
 
 ```ts
-import { createProject, openProject, measureMarkdown, compileMarkdown, estimateMarkdown } from "agent-docx";
-import type { ProjectMeasureOptions, SerializableMeasurementResult } from "agent-docx";
+import {
+  createProject,
+  openProject,
+  measureMarkdown,
+  compileMarkdown,
+  estimateMarkdown,
+} from "agent-docx";
+import type {
+  ProjectMeasureOptions,
+  SerializableMeasurementResult,
+} from "agent-docx";
 ```
 
 `measureMarkdown(markdown, {profile, ...})` is the programmatic equivalent of `agent-docx measure`. Use `compileMarkdown` / `generateDocx` / `generateRedlineDocx` for direct DOCX bytes when you own the workflow outside the project store.

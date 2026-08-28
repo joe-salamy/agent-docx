@@ -111,6 +111,7 @@ agent-docx mcp
 All workflow commands accept `--project FILE`; project creation and document addition use `--document`, `--source`, `--profile`, and `--metadata`. `project init` creates the manifest and first document; `project add` adds another document and accepts `--default` to make it the default document. Font flags are an all-or-nothing family set: `--font-family` and `--font-regular` are required together, while `--font-bold`, `--font-italic`, and `--font-bold-italic` are optional face overrides. Supplying any face flag without `--font-regular` is rejected.
 
 ### Filing sets
+
 Documents can be grouped into ordered filing sets with an optional shared deterministic page cap:
 
 ```sh
