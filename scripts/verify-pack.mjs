@@ -114,7 +114,14 @@ try {
   } else {
     packed = await run(
       npmExecutable,
-      [...npmArguments, "pack", "--ignore-scripts", "--json", "--pack-destination", packDir],
+      [
+        ...npmArguments,
+        "pack",
+        "--ignore-scripts",
+        "--json",
+        "--pack-destination",
+        packDir,
+      ],
       process.cwd(),
     );
   }
