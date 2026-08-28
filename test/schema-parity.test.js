@@ -872,5 +872,5 @@ test("schema contracts cover empty results, custom packs, and rejected malformed
 });
 
 test("published package version matches the runtime version literal", () => {
-  assert.equal(pkg.version, "0.1.0");
+  assert.equal(pkg.version, "0.1.1");
 });

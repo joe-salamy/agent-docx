@@ -1,6 +1,6 @@
 {
   "name": "agent-docx",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agent-first legal Markdown-to-DOCX compiler with deterministic page and line constraints, native redlines, embedded revisions, and optional Word validation.",
   "license": "MIT",
   "repository": {
