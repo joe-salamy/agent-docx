@@ -40,7 +40,6 @@ let bundledPromise: Promise<FontSetInput> | undefined;
 let bundledFaces: Record<(typeof roles)[number], LoadedFace> | null = null;
 let bundledFamily: string | null = null;
 let bundledFacesPromise: Promise<{ faces: Record<(typeof roles)[number], LoadedFace>; family: string }> | null = null;
-const bundledLoadedCache = new Map<string, LoadedFonts>(); // requestedFamily.lower → LoadedFonts
 async function readBundledFont(filename: string): Promise<Uint8Array> {
   try {
     const bytes = await readFile(new URL(filename, bundledFontDirectory));
@@ -315,9 +314,6 @@ export async function loadFonts(
   requested: string,
 ): Promise<LoadedFonts> {
   if (!input) {
-    const key = requested.toLowerCase();
-    const cached = bundledLoadedCache.get(key);
-    if (cached) return cached;
     const { faces, family } = await getBundledFaces();
     const metrics = roles.map((role) => ({
       role,
@@ -326,9 +322,10 @@ export async function loadFonts(
       sha256: faces[role].hash,
       substitutedMetrics: requested.toLowerCase() !== "liberation serif",
     }));
-    const result: LoadedFonts = { ...faces, family, metrics, warnings: [] };
-    bundledLoadedCache.set(key, result);
-    return result;
+    // Fresh wrapper each call — metrics/warnings must not be shared mutable state
+    // exposed via public measurement results. Only faces (bytes/hash/font) are
+    // intentionally shared via getBundledFaces() single-flight.
+    return { ...faces, family, metrics, warnings: [] };
   }
   const source = input;
   const warnings: Diagnostic[] = [];
