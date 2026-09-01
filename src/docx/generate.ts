@@ -163,13 +163,17 @@ const paragraphStyle = (
   fontFamily: string,
   options: {
     basedOn?: string;
+    next?: string;
     alignment?: (typeof AlignmentType)[keyof typeof AlignmentType];
     outlineLevel?: number;
+    qFormat?: boolean;
   } = {},
 ) => ({
   id,
   name,
   ...(options.basedOn ? { basedOn: options.basedOn } : {}),
+  ...(options.next ? { next: options.next } : {}),
+  ...(options.qFormat !== undefined ? { quickFormat: options.qFormat } : {}),
   paragraph: {
     spacing: spacing(style),
     indent: {
@@ -195,11 +199,39 @@ const paragraphStyle = (
 
 export const nativeStyles = (profile: LayoutProfile) => {
   const font = profile.requestedFontFamily;
+  // Normal is the base for all custom styles — required for Word to preserve
+  // custom formatting on round-trip. Without it Word injects its own Normal
+  // (Calibri) and strips our indent/font on save, making the doc look
+  // unformatted. AgentDocxBody is basedOn Normal and carries the profile's
+  // body metrics (including firstLine 720).
+  const normalBase: TextStyle = {
+    ...profile.body,
+    firstLineIndentTwips: 0,
+    leftIndentTwips: 0,
+    rightIndentTwips: 0,
+    hangingIndentTwips: 0,
+    keepWithNext: false,
+    keepLines: false,
+  };
+  const normal = paragraphStyle("Normal", "Normal", normalBase, font, {
+    next: "Normal",
+    qFormat: true,
+  });
+  // Body's *style* is intentionally firstLine 0 — the 720 twip indent is
+  // applied as direct w:ind on each w:p via paragraphOptions(). If style
+  // and direct both have 720, Word sees them as redundant and on save
+  // removes direct from 5/7 p and then strips the style's pPr entirely,
+  // leaving the doc unindented. With style 0 vs direct 720 Word keeps direct.
+  const bodyForStyle: TextStyle = {
+    ...profile.body,
+    firstLineIndentTwips: 0,
+  };
   const body = paragraphStyle(
     "AgentDocxBody",
     "AgentDocxBody",
-    profile.body,
+    bodyForStyle,
     font,
+    { basedOn: "Normal", next: "Normal", qFormat: true },
   );
   const headings = ([1, 2, 3, 4, 5, 6] as const).map((level) =>
     paragraphStyle(
@@ -207,7 +239,7 @@ export const nativeStyles = (profile: LayoutProfile) => {
       `AgentDocxHeading${level}`,
       profile.headings[String(level) as "1"],
       font,
-      { basedOn: "AgentDocxBody", outlineLevel: level - 1 },
+      { basedOn: "AgentDocxBody", next: "Normal", outlineLevel: level - 1 },
     ),
   );
   const derivative = (
@@ -217,8 +249,19 @@ export const nativeStyles = (profile: LayoutProfile) => {
   ) =>
     paragraphStyle(id, id, style, font, {
       basedOn: "AgentDocxBody",
+      next: "Normal",
       ...options,
     });
+  // ListParagraph is the built-in style that Word and inspect look for.
+  // Override it to match our profile.list so template inspection resolves
+  // leftIndent 720 and Word doesn't inject a competing 0-indent definition.
+  const listParagraph = paragraphStyle(
+    "ListParagraph",
+    "List Paragraph",
+    profile.list,
+    font,
+    { basedOn: "Normal", next: "Normal" },
+  );
   const single = (style: TextStyle): TextStyle => ({
     ...style,
     beforeTwips: 0,
@@ -226,8 +269,10 @@ export const nativeStyles = (profile: LayoutProfile) => {
     lineSpacing: { rule: "auto", numerator: 240, denominator: 240 },
   });
   return [
+    normal,
     body,
     ...headings,
+    listParagraph,
     derivative("AgentDocxBlockQuote", profile.blockquote),
     derivative("AgentDocxList", profile.list),
     ...([1, 2, 3, 4] as const).map((level) =>
@@ -249,6 +294,7 @@ export const nativeStyles = (profile: LayoutProfile) => {
     derivative("AgentDocxFooter", single(profile.body)),
   ];
 };
+
 
 const styleFor = (
   block: TextFlowBlock,
