@@ -106,7 +106,7 @@
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "@types/fontkit": "^2.0.8",
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.4.0",
     "@types/proper-lockfile": "^4.1.4",
     "@types/yauzl": "3.4.0",
     "esbuild": "^0.25.0",
