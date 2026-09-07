@@ -18,6 +18,7 @@ import {
   snapshotProjectDocument,
   storeSnapshot,
   updateManifest,
+  validateDocumentConfig,
   withLockedStore,
   writeHead,
   writeObject,
@@ -831,6 +832,7 @@ export const configureDocument = async (
     if (input.changes.chrome === null) delete next.chrome;
     else if (input.changes.chrome !== undefined)
       next.chrome = input.changes.chrome;
+    validateDocumentConfig(next);
     const snapshot = await snapshotProjectDocument(opened, next);
     const annotations = await annotationsForHead(opened, documentId);
     const prepared = await prepareWorkingDocument(

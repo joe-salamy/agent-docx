@@ -79,6 +79,20 @@ const assertUniqueMetadataIds = (value: unknown): void => {
       ids.add(id);
     }
   }
+  const certificates = metadata.certificates;
+  if (Array.isArray(certificates)) {
+    const seen = new Set<string>();
+    for (const certificate of certificates) {
+      const id = (certificate as Record<string, unknown>).id;
+      if (typeof id !== "string") continue;
+      if (seen.has(id))
+        throw new AgentDocxError(
+          "PROJECT_INVALID",
+          "Document metadata certificate id is invalid",
+        );
+      seen.add(id);
+    }
+  }
 };
 
 const assertMetadata = (value: unknown): void => {
@@ -92,6 +106,31 @@ const assertMetadata = (value: unknown): void => {
   assertUniqueMetadataIds(value);
 };
 
+const assertChromeTokens = (value: unknown): void => {
+  const chrome = value as Record<string, unknown>;
+  for (const storyKind of ["headers", "footers"] as const) {
+    const stories = chrome[storyKind] as Record<string, unknown> | undefined;
+    if (stories === undefined) continue;
+    for (const text of Object.values(stories)) {
+      if (typeof text !== "string") continue;
+      for (const token of text.matchAll(/\{\{([^}]+)\}\}/g))
+        if (
+          ![
+            "caseName",
+            "docketNumber",
+            "documentTitle",
+            "page",
+            "pages",
+          ].includes(token[1]!)
+        )
+          throw new AgentDocxError(
+            "PROJECT_INVALID",
+            `Unknown document chrome token: ${token[1]!}`,
+          );
+    }
+  }
+};
+
 const assertChrome = (value: unknown): void => {
   try {
     assertAgentChrome(value);
@@ -100,9 +139,12 @@ const assertChrome = (value: unknown): void => {
       throw new AgentDocxError("PROJECT_INVALID", error.message);
     throw error;
   }
+  assertChromeTokens(value);
 };
 
-const validateDocumentConfig = (value: unknown): AgentDocxDocumentConfig => {
+export const validateDocumentConfig = (
+  value: unknown,
+): AgentDocxDocumentConfig => {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new AgentDocxError(
       "PROJECT_INVALID",
