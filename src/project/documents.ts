@@ -30,11 +30,11 @@ import {
   currentRevision,
   dependencyPathsChanged,
   materialFor,
-  isUtf16Boundary,
   materializeSelectedDependencies,
   provenanceForRevision,
   snapshotForMaterial,
 } from "./revisions.js";
+import { isCodePointBoundary } from "../docx/text.js";
 import {
   createRevisionDelta,
   defaultAttribution,
@@ -761,14 +761,17 @@ export const workingSnapshotLocked = async (
   return { snapshot, document, annotations };
 };
 
+const withOpen = <T>(
+  ctx: ProjectContext,
+  fn: (opened: OpenedStore) => Promise<T>,
+): Promise<T> => withLockedStore(ctx.manifestPath, fn);
+
 export const getDocument = async (
   ctx: ProjectContext,
   documentId: string,
   revision?: RevisionId | "HEAD",
 ): Promise<DocumentSnapshot> => {
-  return withLockedStore(ctx.manifestPath, (opened) =>
-    getDocumentLocked(opened, documentId, revision),
-  );
+  return withOpen(ctx, (o) => getDocumentLocked(o, documentId, revision));
 };
 
 export const configureDocument = async (
@@ -776,7 +779,7 @@ export const configureDocument = async (
   documentId: string,
   input: ConfigureDocumentInput,
 ): Promise<RevisionMutationResult> => {
-  return withLockedStore(ctx.manifestPath, async (opened) => {
+  return withOpen(ctx, async (opened) => {
     const current = documentById(opened.manifest, documentId);
     const head = await readHead(opened.storePath, documentId);
     const base = input.baseRevision === "HEAD" ? head : input.baseRevision;
@@ -864,7 +867,7 @@ export const checkpoint = async (
     message: string;
   },
 ): Promise<RevisionMutationResult> => {
-  return withLockedStore(ctx.manifestPath, async (opened) => {
+  return withOpen(ctx, async (opened) => {
     const config = documentById(opened.manifest, documentId);
     const head = await readHead(opened.storePath, documentId);
     const base = input.baseRevision === "HEAD" ? head : input.baseRevision;
@@ -901,9 +904,7 @@ export const measure = async (
   revision?: RevisionId | "HEAD",
   options: ProjectMeasureOptions = {},
 ): Promise<ProjectMeasurementResult> => {
-  return withLockedStore(ctx.manifestPath, (opened) =>
-    measureLocked(opened, documentId, revision, options),
-  );
+  return withOpen(ctx, (o) => measureLocked(o, documentId, revision, options));
 };
 
 export const validateLocked = async (
@@ -976,9 +977,7 @@ export const validate = async (
   documentId: string,
   revision?: RevisionId | "HEAD",
 ): Promise<ValidationResult> => {
-  return withLockedStore(ctx.manifestPath, (opened) =>
-    validateLocked(opened, documentId, revision),
-  );
+  return withOpen(ctx, (o) => validateLocked(o, documentId, revision));
 };
 
 export const getDraftGuidance = async (
@@ -1115,8 +1114,8 @@ export const evaluatePatch = async (
         edit.deleteCount < 0 ||
         !Number.isSafeInteger(end) ||
         edit.start < previousEnd ||
-        !isUtf16Boundary(material.source, edit.start) ||
-        !isUtf16Boundary(material.source, end) ||
+        !isCodePointBoundary(material.source, edit.start) ||
+        !isCodePointBoundary(material.source, end) ||
         material.source.slice(edit.start, end) !== edit.expectedText
       )
         throw new AgentDocxError(
@@ -1359,8 +1358,8 @@ export const applyPatch = async (
         edit.deleteCount < 0 ||
         !Number.isSafeInteger(end) ||
         edit.start < previousEnd ||
-        !isUtf16Boundary(snapshot.source, edit.start) ||
-        !isUtf16Boundary(snapshot.source, end) ||
+        !isCodePointBoundary(snapshot.source, edit.start) ||
+        !isCodePointBoundary(snapshot.source, end) ||
         snapshot.source.slice(edit.start, end) !== edit.expectedText
       )
         throw new AgentDocxError(

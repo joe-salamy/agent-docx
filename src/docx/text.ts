@@ -1,5 +1,6 @@
 /** True when `offset` does not split a UTF-16 surrogate pair in `text`. */
 export const isCodePointBoundary = (text: string, offset: number): boolean =>
+  Number.isInteger(offset) &&
   offset >= 0 &&
   offset <= text.length &&
   (offset === 0 ||

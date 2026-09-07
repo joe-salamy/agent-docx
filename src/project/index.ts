@@ -4,13 +4,13 @@ import { dirname, resolve } from "node:path";
 import {
   currentRevision,
   diff,
-  isUtf16Boundary,
   getRevision,
   listRevisions,
   materialFor,
   resolveChanges,
   restore,
 } from "./revisions.js";
+import { isCodePointBoundary } from "../docx/text.js";
 import {
   applyPatch,
   checkpoint,
@@ -346,8 +346,8 @@ class Project implements AgentDocxProject {
         );
       if (
         range &&
-        (!isUtf16Boundary(visibleTextForBlock(block), range.start) ||
-          !isUtf16Boundary(visibleTextForBlock(block), range.end) ||
+        (!isCodePointBoundary(visibleTextForBlock(block), range.start) ||
+          !isCodePointBoundary(visibleTextForBlock(block), range.end) ||
           range.start > range.end)
       )
         throw new AgentDocxError(

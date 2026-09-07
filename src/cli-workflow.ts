@@ -204,6 +204,287 @@ const projectDocument = {
   "font-bold-italic": string,
   default: boolean,
 } as const;
+type WorkflowOptionsEntry = {
+  command: string;
+  subcommand: string | null;
+  options: Record<string, { type: "string" | "boolean" }>;
+  positionalsLabel: string | null;
+};
+
+const workflowOptions = {
+  "project init": {
+    command: "project",
+    subcommand: "init",
+    options: projectDocument,
+    positionalsLabel: "project init",
+  },
+  "project add": {
+    command: "project",
+    subcommand: "add",
+    options: projectDocument,
+    positionalsLabel: "project add",
+  },
+  "document configure": {
+    command: "document",
+    subcommand: "configure",
+    options: {
+      ...commonProject,
+      document: string,
+      base: string,
+      changes: string,
+      author: string,
+      email: string,
+      message: string,
+    },
+    positionalsLabel: "document configure",
+  },
+  "revision checkpoint": {
+    command: "revision",
+    subcommand: "checkpoint",
+    options: {
+      ...commonProject,
+      document: string,
+      base: string,
+      author: string,
+      email: string,
+      message: string,
+    },
+    positionalsLabel: "revision checkpoint",
+  },
+  "revision list": {
+    command: "revision",
+    subcommand: "list",
+    options: {
+      ...commonProject,
+      document: string,
+      limit: string,
+      cursor: string,
+    },
+    positionalsLabel: "revision list",
+  },
+  "revision show": {
+    command: "revision",
+    subcommand: "show",
+    options: {
+      ...commonProject,
+      document: string,
+      revision: string,
+    },
+    positionalsLabel: null,
+  },
+  "revision restore": {
+    command: "revision",
+    subcommand: "restore",
+    options: {
+      ...commonProject,
+      document: string,
+      base: string,
+      author: string,
+      email: string,
+      message: string,
+    },
+    positionalsLabel: null,
+  },
+  "revision diff": {
+    command: "revision",
+    subcommand: "diff",
+    options: {
+      ...commonProject,
+      document: string,
+      base: string,
+      head: string,
+      output: string,
+    },
+    positionalsLabel: null,
+  },
+  "revision resolve": {
+    command: "revision",
+    subcommand: "resolve",
+    options: {
+      ...commonProject,
+      document: string,
+      "change-set": string,
+      decisions: string,
+      author: string,
+      email: string,
+      message: string,
+    },
+    positionalsLabel: "revision resolve",
+  },
+  "draft guidance": {
+    command: "draft",
+    subcommand: "guidance",
+    options: {
+      ...commonProject,
+      document: string,
+      revision: string,
+    },
+    positionalsLabel: "draft guidance",
+  },
+  "draft evaluate": {
+    command: "draft",
+    subcommand: "evaluate",
+    options: {
+      ...commonProject,
+      document: string,
+      patch: string,
+      base: string,
+      edits: string,
+      renderer: string,
+      "patch-hash": string,
+      gate: string,
+      author: string,
+      email: string,
+      message: string,
+    },
+    positionalsLabel: "draft evaluate",
+  },
+  "draft apply": {
+    command: "draft",
+    subcommand: "apply",
+    options: {
+      ...commonProject,
+      document: string,
+      patch: string,
+      base: string,
+      edits: string,
+      renderer: string,
+      "patch-hash": string,
+      gate: string,
+      author: string,
+      email: string,
+      message: string,
+    },
+    positionalsLabel: "draft apply",
+  },
+  "review add": {
+    command: "review",
+    subcommand: "add",
+    options: {
+      ...commonProject,
+      document: string,
+      revision: string,
+      block: string,
+      start: string,
+      end: string,
+      author: string,
+      email: string,
+      message: string,
+    },
+    positionalsLabel: "review add",
+  },
+  "review resolve": {
+    command: "review",
+    subcommand: "resolve",
+    options: {
+      ...commonProject,
+      document: string,
+      revision: string,
+      annotation: string,
+      author: string,
+      email: string,
+      message: string,
+    },
+    positionalsLabel: "review resolve",
+  },
+  validate: {
+    command: "validate",
+    subcommand: null,
+    options: {
+      ...commonProject,
+      document: string,
+      revision: string,
+    },
+    positionalsLabel: "validate",
+  },
+  export: {
+    command: "export",
+    subcommand: null,
+    options: {
+      ...commonProject,
+      document: string,
+      revision: string,
+      mode: string,
+      base: string,
+      output: string,
+      renderer: string,
+      "office-timeout": string,
+      "libreoffice-path": string,
+    },
+    positionalsLabel: "export",
+  },
+  import: {
+    command: "import",
+    subcommand: null,
+    options: {
+      ...commonProject,
+      document: string,
+      output: string,
+      attachments: string,
+      "inspect-only": boolean,
+      author: string,
+      email: string,
+      message: string,
+    },
+    positionalsLabel: null,
+  },
+  "import-redline": {
+    command: "import-redline",
+    subcommand: null,
+    options: {
+      ...commonProject,
+      document: string,
+      input: string,
+      attachments: string,
+      author: string,
+      email: string,
+      message: string,
+    },
+    positionalsLabel: "import-redline",
+  },
+  "filing-set add": {
+    command: "filing-set",
+    subcommand: "add",
+    options: {
+      ...commonProject,
+      id: string,
+      label: string,
+      documents: string,
+      "page-cap": string,
+    },
+    positionalsLabel: "filing-set add",
+  },
+  "filing-set remove": {
+    command: "filing-set",
+    subcommand: "remove",
+    options: { ...commonProject, id: string },
+    positionalsLabel: "filing-set remove",
+  },
+  "filing-set get": {
+    command: "filing-set",
+    subcommand: "get",
+    options: { ...commonProject, id: string },
+    positionalsLabel: "filing-set get",
+  },
+  "filing-set validate": {
+    command: "filing-set",
+    subcommand: "validate",
+    options: { ...commonProject, id: string },
+    positionalsLabel: "filing-set validate",
+  },
+  agent: {
+    command: "agent",
+    subcommand: null,
+    options: {
+      project: string,
+      document: string,
+      "input-jsonl": boolean,
+      watch: boolean,
+      jsonl: boolean,
+    },
+    positionalsLabel: "agent",
+  },
+} satisfies Record<string, WorkflowOptionsEntry>;
 
 const inputFromProjectFlags = async (cwd: string, values: Values) => {
   const metadata = await readJson(
@@ -553,8 +834,12 @@ export const runWorkflowCommand = async (
   let parsed: Parsed;
   switch (command.command) {
     case "project": {
-      parsed = parse(rest, projectDocument);
-      noPositionals(parsed, `project ${subcommand}`);
+      const projectEntry =
+        subcommand === "init"
+          ? workflowOptions["project init"]
+          : workflowOptions["project add"];
+      parsed = parse(rest, projectEntry.options);
+      noPositionals(parsed, projectEntry.positionalsLabel as string);
       params = await inputFromProjectFlags(runtime.cwd, parsed.values);
       if (subcommand === "init" && parsed.values.default === true)
         throw new AgentDocxError(
@@ -567,16 +852,11 @@ export const runWorkflowCommand = async (
       break;
     }
     case "document": {
-      parsed = parse(rest, {
-        ...commonProject,
-        document: string,
-        base: string,
-        changes: string,
-        author: string,
-        email: string,
-        message: string,
-      });
-      noPositionals(parsed, "document configure");
+      parsed = parse(rest, workflowOptions["document configure"].options);
+      noPositionals(
+        parsed,
+        workflowOptions["document configure"].positionalsLabel as string,
+      );
       params = {
         documentId: await documentId(runtime.cwd, parsed.values),
         baseRevision: optional(parsed.values, "base") ?? null,
@@ -593,15 +873,11 @@ export const runWorkflowCommand = async (
     }
     case "revision": {
       if (subcommand === "checkpoint") {
-        parsed = parse(rest, {
-          ...commonProject,
-          document: string,
-          base: string,
-          author: string,
-          email: string,
-          message: string,
-        });
-        noPositionals(parsed, "revision checkpoint");
+        parsed = parse(rest, workflowOptions["revision checkpoint"].options);
+        noPositionals(
+          parsed,
+          workflowOptions["revision checkpoint"].positionalsLabel as string,
+        );
         params = {
           documentId: await documentId(runtime.cwd, parsed.values),
           baseRevision: optional(parsed.values, "base") ?? null,
@@ -610,13 +886,11 @@ export const runWorkflowCommand = async (
         };
         action = "revision.checkpoint";
       } else if (subcommand === "list") {
-        parsed = parse(rest, {
-          ...commonProject,
-          document: string,
-          limit: string,
-          cursor: string,
-        });
-        noPositionals(parsed, "revision list");
+        parsed = parse(rest, workflowOptions["revision list"].options);
+        noPositionals(
+          parsed,
+          workflowOptions["revision list"].positionalsLabel as string,
+        );
         const limit = optional(parsed.values, "limit");
         params = {
           documentId: await documentId(runtime.cwd, parsed.values),
@@ -627,11 +901,7 @@ export const runWorkflowCommand = async (
         };
         action = "revision.list";
       } else if (subcommand === "show") {
-        parsed = parse(rest, {
-          ...commonProject,
-          document: string,
-          revision: string,
-        });
+        parsed = parse(rest, workflowOptions["revision show"].options);
         if (parsed.positionals.length > 1)
           throw new AgentDocxError(
             "INVALID_ARGUMENT",
@@ -644,14 +914,7 @@ export const runWorkflowCommand = async (
         };
         action = "revision.get";
       } else if (subcommand === "restore") {
-        parsed = parse(rest, {
-          ...commonProject,
-          document: string,
-          base: string,
-          author: string,
-          email: string,
-          message: string,
-        });
+        parsed = parse(rest, workflowOptions["revision restore"].options);
         if (parsed.positionals.length !== 1)
           throw new AgentDocxError(
             "INVALID_ARGUMENT",
@@ -666,13 +929,7 @@ export const runWorkflowCommand = async (
         };
         action = "revision.restore";
       } else if (subcommand === "diff") {
-        parsed = parse(rest, {
-          ...commonProject,
-          document: string,
-          base: string,
-          head: string,
-          output: string,
-        });
+        parsed = parse(rest, workflowOptions["revision diff"].options);
         if (parsed.positionals.length > 2)
           throw new AgentDocxError(
             "INVALID_ARGUMENT",
@@ -690,16 +947,11 @@ export const runWorkflowCommand = async (
         };
         action = "revision.diff";
       } else {
-        parsed = parse(rest, {
-          ...commonProject,
-          document: string,
-          "change-set": string,
-          decisions: string,
-          author: string,
-          email: string,
-          message: string,
-        });
-        noPositionals(parsed, "revision resolve");
+        parsed = parse(rest, workflowOptions["revision resolve"].options);
+        noPositionals(
+          parsed,
+          workflowOptions["revision resolve"].positionalsLabel as string,
+        );
         params = {
           documentId: await documentId(runtime.cwd, parsed.values),
           changeSet: await readJson(
@@ -721,12 +973,11 @@ export const runWorkflowCommand = async (
     }
     case "draft": {
       if (subcommand === "guidance") {
-        parsed = parse(rest, {
-          ...commonProject,
-          document: string,
-          revision: string,
-        });
-        noPositionals(parsed, "draft guidance");
+        parsed = parse(rest, workflowOptions["draft guidance"].options);
+        noPositionals(
+          parsed,
+          workflowOptions["draft guidance"].positionalsLabel as string,
+        );
         params = {
           documentId: await documentId(runtime.cwd, parsed.values),
           ...(optional(parsed.values, "revision")
@@ -735,20 +986,12 @@ export const runWorkflowCommand = async (
         };
         action = "draft.guidance";
       } else {
-        parsed = parse(rest, {
-          ...commonProject,
-          document: string,
-          patch: string,
-          base: string,
-          edits: string,
-          renderer: string,
-          "patch-hash": string,
-          gate: string,
-          author: string,
-          email: string,
-          message: string,
-        });
-        noPositionals(parsed, `draft ${subcommand}`);
+        const draftEntry =
+          subcommand === "apply"
+            ? workflowOptions["draft apply"]
+            : workflowOptions["draft evaluate"];
+        parsed = parse(rest, draftEntry.options);
+        noPositionals(parsed, draftEntry.positionalsLabel as string);
         const targetDocument = await documentId(runtime.cwd, parsed.values);
         params = {
           patch: await parsePatchArgs(
@@ -774,18 +1017,11 @@ export const runWorkflowCommand = async (
     }
     case "review": {
       if (subcommand === "add") {
-        parsed = parse(rest, {
-          ...commonProject,
-          document: string,
-          revision: string,
-          block: string,
-          start: string,
-          end: string,
-          author: string,
-          email: string,
-          message: string,
-        });
-        noPositionals(parsed, "review add");
+        parsed = parse(rest, workflowOptions["review add"].options);
+        noPositionals(
+          parsed,
+          workflowOptions["review add"].positionalsLabel as string,
+        );
         const start = optional(parsed.values, "start");
         const end = optional(parsed.values, "end");
         if ((start === undefined) !== (end === undefined))
@@ -805,16 +1041,11 @@ export const runWorkflowCommand = async (
         };
         action = "review.add";
       } else {
-        parsed = parse(rest, {
-          ...commonProject,
-          document: string,
-          revision: string,
-          annotation: string,
-          author: string,
-          email: string,
-          message: string,
-        });
-        noPositionals(parsed, "review resolve");
+        parsed = parse(rest, workflowOptions["review resolve"].options);
+        noPositionals(
+          parsed,
+          workflowOptions["review resolve"].positionalsLabel as string,
+        );
         params = {
           documentId: await documentId(runtime.cwd, parsed.values),
           revision: required(parsed.values, "revision"),
@@ -827,12 +1058,11 @@ export const runWorkflowCommand = async (
       break;
     }
     case "validate": {
-      parsed = parse(command.args, {
-        ...commonProject,
-        document: string,
-        revision: string,
-      });
-      noPositionals(parsed, "validate");
+      parsed = parse(command.args, workflowOptions.validate.options);
+      noPositionals(
+        parsed,
+        workflowOptions.validate.positionalsLabel as string,
+      );
       params = {
         documentId: await documentId(runtime.cwd, parsed.values),
         ...(optional(parsed.values, "revision")
@@ -843,18 +1073,8 @@ export const runWorkflowCommand = async (
       break;
     }
     case "export": {
-      parsed = parse(command.args, {
-        ...commonProject,
-        document: string,
-        revision: string,
-        mode: string,
-        base: string,
-        output: string,
-        renderer: string,
-        "office-timeout": string,
-        "libreoffice-path": string,
-      });
-      noPositionals(parsed, "export");
+      parsed = parse(command.args, workflowOptions.export.options);
+      noPositionals(parsed, workflowOptions.export.positionalsLabel as string);
       const mode = required(parsed.values, "mode");
       const renderer = optional(parsed.values, "renderer");
       const officeTimeoutMs = optional(parsed.values, "office-timeout");
@@ -885,16 +1105,7 @@ export const runWorkflowCommand = async (
       break;
     }
     case "import": {
-      parsed = parse(command.args, {
-        ...commonProject,
-        document: string,
-        output: string,
-        attachments: string,
-        "inspect-only": boolean,
-        author: string,
-        email: string,
-        message: string,
-      });
+      parsed = parse(command.args, workflowOptions.import.options);
       if (parsed.positionals.length !== 1)
         throw new AgentDocxError(
           "INVALID_ARGUMENT",
@@ -934,16 +1145,11 @@ export const runWorkflowCommand = async (
       break;
     }
     case "import-redline": {
-      parsed = parse(command.args, {
-        ...commonProject,
-        document: string,
-        input: string,
-        attachments: string,
-        author: string,
-        email: string,
-        message: string,
-      });
-      noPositionals(parsed, "import-redline");
+      parsed = parse(command.args, workflowOptions["import-redline"].options);
+      noPositionals(
+        parsed,
+        workflowOptions["import-redline"].positionalsLabel as string,
+      );
       params = {
         documentId: await documentId(runtime.cwd, parsed.values),
         input: required(parsed.values, "input"),
@@ -958,14 +1164,11 @@ export const runWorkflowCommand = async (
     }
     case "filing-set": {
       if (subcommand === "add") {
-        parsed = parse(rest, {
-          ...commonProject,
-          id: string,
-          label: string,
-          documents: string,
-          "page-cap": string,
-        });
-        noPositionals(parsed, "filing-set add");
+        parsed = parse(rest, workflowOptions["filing-set add"].options);
+        noPositionals(
+          parsed,
+          workflowOptions["filing-set add"].positionalsLabel as string,
+        );
         const documents = required(parsed.values, "documents")
           .split(",")
           .map((entry) => entry.trim())
@@ -987,8 +1190,14 @@ export const runWorkflowCommand = async (
         };
         action = "filingSet.add";
       } else {
-        parsed = parse(rest, { ...commonProject, id: string });
-        noPositionals(parsed, `filing-set ${subcommand}`);
+        const filingSetEntry =
+          subcommand === "remove"
+            ? workflowOptions["filing-set remove"]
+            : subcommand === "get"
+              ? workflowOptions["filing-set get"]
+              : workflowOptions["filing-set validate"];
+        parsed = parse(rest, filingSetEntry.options);
+        noPositionals(parsed, filingSetEntry.positionalsLabel as string);
         params = { id: required(parsed.values, "id") };
         action =
           subcommand === "remove"
@@ -1000,14 +1209,8 @@ export const runWorkflowCommand = async (
       break;
     }
     case "agent": {
-      parsed = parse(command.args, {
-        project: string,
-        document: string,
-        "input-jsonl": boolean,
-        watch: boolean,
-        jsonl: boolean,
-      });
-      noPositionals(parsed, "agent");
+      parsed = parse(command.args, workflowOptions.agent.options);
+      noPositionals(parsed, workflowOptions.agent.positionalsLabel as string);
       if (parsed.values.watch === true)
         return runAgentWatch(runtime, parsed.values, sequence);
       if (parsed.values["input-jsonl"] !== true || parsed.values.jsonl === true)
